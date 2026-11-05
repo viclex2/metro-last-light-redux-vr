@@ -1,5 +1,5 @@
 /*
- * HITO E5g - d3d11.dll (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5h - d3d11.dll (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -182,7 +182,7 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5g)\r\n"
+    "# (marca de version: E5h)\r\n"
     "# cabeza_falsa=1: SIN visor (p.ej. para capturar con RenderDoc): las flechas hacen de cabeza y mueven la camara del juego\r\n"
     "cabeza_falsa=0\r\n"
     "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
@@ -295,7 +295,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5g")) {
+        if (!strstr(buf, "E5h")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -2780,6 +2780,25 @@ static void *real_export(HMODULE m, const char *name)
     return NULL;
 }
 
+/* tras crear el dispositivo: enganchar. Si quien llama no pidio el "contexto" (p.ej. RenderDoc), lo sacamos del dispositivo */
+static void hooks_after_create(HRESULT hr, ID3D11Device **ppDevice, ID3D11DeviceContext **ppContext, IDXGISwapChain **ppSwapChain)
+{
+    if (FAILED(hr)) return;
+    IDXGISwapChain *sc = ppSwapChain ? *ppSwapChain : NULL;
+    vr_log("enganchando: dispositivo=%p contexto=%p swapchain=%p", ppDevice ? (void *)*ppDevice : NULL,
+           ppContext ? (void *)*ppContext : NULL, (void *)sc);
+    if (ppContext && *ppContext) { install_hooks(*ppContext, sc); return; }
+    if (ppDevice && *ppDevice) {
+        ID3D11DeviceContext *ctx = NULL;
+        ID3D11Device_GetImmediateContext(*ppDevice, &ctx);
+        vr_log("Dispositivo creado sin pedir contexto: lo saco del dispositivo (%p)", (void *)ctx);
+        if (ctx) { install_hooks(ctx, sc); ID3D11DeviceContext_Release(ctx); }
+    } else {
+        vr_log("AVISO: dispositivo creado sin dispositivo ni contexto a la vista; no puedo engancharme aqui");
+        install_hooks(NULL, sc);    /* al menos arrancar las teclas y el resumen */
+    }
+}
+
 HRESULT WINAPI Proxy_D3D11CreateDevice(
     IDXGIAdapter *adapter, D3D_DRIVER_TYPE driverType, HMODULE software, UINT flags,
     const D3D_FEATURE_LEVEL *featureLevels, UINT numLevels, UINT sdkVersion,
@@ -2799,8 +2818,7 @@ HRESULT WINAPI Proxy_D3D11CreateDevice(
     t_create_depth--;
     vr_log("D3D11CreateDevice -> hr=0x%08lX, nivel=0x%X", (unsigned long)hr,
            pFeatureLevel ? (unsigned)*pFeatureLevel : 0);
-    if (SUCCEEDED(hr) && ppContext && *ppContext)
-        install_hooks(*ppContext, NULL);
+    hooks_after_create(hr, ppDevice, ppContext, NULL);
     return hr;
 }
 
@@ -2825,8 +2843,7 @@ HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(
                    swapDesc, ppSwapChain, ppDevice, pFeatureLevel, ppContext);
     t_create_depth--;
     vr_log("D3D11CreateDeviceAndSwapChain -> hr=0x%08lX", (unsigned long)hr);
-    if (SUCCEEDED(hr) && ppContext && *ppContext)
-        install_hooks(*ppContext, ppSwapChain ? *ppSwapChain : NULL);
+    hooks_after_create(hr, ppDevice, ppContext, ppSwapChain);
     return hr;
 }
 
@@ -2845,7 +2862,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5g: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5h: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);
