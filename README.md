@@ -15,7 +15,7 @@ Es una `d3d11.dll` "adaptadora" (proxy) que se pone en la carpeta del juego. Pas
 ## Hacia la versión estable
 Lo que falta para considerarlo jugable (detalle en [`docs/ESTADO.md`](docs/ESTADO.md)):
 - [x] Imagen en el visor, en estéreo y con el campo de visión del visor
-- [x] La cámara del juego sigue a la cabeza
+- [x] La cabeza mueve la vista (la cámara del juego se queda con el ratón; ver el cambio de rumbo en ESTADO)
 - [ ] Luces y sombras correctas al mirar a cualquier lado (sin "mundo marrón")
 - [ ] Sin paredes ni objetos que aparezcan y desaparezcan; sin imagen borrosa
 - [ ] HUD, mirilla y menús bien colocados en VR
