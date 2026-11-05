@@ -1,5 +1,5 @@
 /*
- * HITO E5b - d3d11.dll (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5c - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -181,7 +181,8 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5b)\r\n"
+    "# (marca de version: E5c)\r\n"
+    "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
     "luces_visor=1\r\n"
     "# camara_juego=1: con F9, la camara DE VERDAD del juego sigue tu cabeza (asi no desaparecen cosas al girarla). 0 = como antes\r\n"
@@ -289,7 +290,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5b")) {
+        if (!strstr(buf, "E5c")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -2440,6 +2441,29 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         }
         prev = down;
 
+        /* F5..F8: encender / apagar piezas en directo, para ver cual causa cada fallo */
+        {
+            static int prevf[4] = { 0, 0, 0, 0 };
+            static int saved_stereo = 2;
+            const int keys[4] = { VK_F5, VK_F6, VK_F7, VK_F8 };
+            for (int k = 0; k < 4; k++) {
+                int d = (GetAsyncKeyState(keys[k]) & 0x8000) != 0;
+                if (d && !prevf[k]) {
+                    int on = 0; const char *name = "";
+                    switch (k) {
+                    case 0: if (cfg_stereo) { saved_stereo = cfg_stereo; cfg_stereo = 0; } else cfg_stereo = saved_stereo ? saved_stereo : 2;
+                            on = cfg_stereo != 0; name = "F5 ESTEREO"; break;
+                    case 1: cfg_lights = !cfg_lights; on = cfg_lights; name = "F6 LUCES_VISOR"; break;
+                    case 2: cfg_fov = !cfg_fov; on = cfg_fov; name = "F7 FOV_VISOR (lente del visor)"; break;
+                    case 3: cfg_cj = !cfg_cj; on = cfg_cj; name = "F8 CAMARA_JUEGO (la cabeza mueve la camara del juego)"; break;
+                    }
+                    vr_log(">>> %s: %s", name, on ? "ENCENDIDO" : "APAGADO");
+                    if (on) { Beep(700, 70); Beep(1100, 70); } else { Beep(1100, 70); Beep(700, 70); }
+                    g_cj_dirty = 1;
+                }
+                prevf[k] = d;
+            }
+        }
         /* Shift + H: buscar la camara del juego en memoria */
         {
             static int prevh = 0;
@@ -2666,7 +2690,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5c: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);
