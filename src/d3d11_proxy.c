@@ -1,5 +1,5 @@
 /*
- * HITO E5d - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5e - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -181,7 +181,7 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5d)\r\n"
+    "# (marca de version: E5e)\r\n"
     "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
     "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
@@ -291,7 +291,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5d")) {
+        if (!strstr(buf, "E5e")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -823,7 +823,7 @@ static void cj_find(void)
         if (!rd_float((float *)cand[i], &pv) || !rd_float((float *)(cand[i] + 4), &yv)) continue;
         if (!isfinite(pv) || !isfinite(yv) || fabsf(pv) > 10.0f || fabsf(yv) > 1000.0f) continue;   /* basura */
         int nonzero = fabsf(yv) > 0.05f || fabsf(pv) > 0.05f;
-        if (!(fabsf(-pv - g_cam_pitch) < 0.02f && fabsf(wrap_pi(yv - g_cam_yaw)) < 0.02f && nonzero)) continue;
+        if (!(fabsf(-pv - g_cam_pitch) < 0.05f && fabsf(wrap_pi(yv - g_cam_yaw)) < 0.05f && nonzero)) continue;
         any = 1;
         /* para fiarnos: tiene que cuadrar en DOS direcciones distintas de la camara */
         if (cand_a != cand[i]) { if (!cand_a) { cand_a = cand[i]; cand_yaw = yv; seen_a = 1; } continue; }
@@ -834,7 +834,10 @@ static void cj_find(void)
         cand_a = 0; misses = 0;
         return;
     }
-    if (!seen_a) cand_a = 0;        /* la que teniamos apuntada ya no cuadra: se olvida */
+    /* la que teniamos apuntada no cuadra AHORA (p.ej. porque el raton se esta moviendo): se le dan ~5 s antes de olvidarla */
+    static int a_miss = 0;
+    if (seen_a) a_miss = 0;
+    else if (cand_a && ++a_miss > 20) { cand_a = 0; a_miss = 0; }
     if (!any) {
         /* tras ~10 s sin ninguna que cuadre, buscar por forma (como mucho una vez por minuto) */
         static ULONGLONG lastscan = 0;
@@ -2443,7 +2446,7 @@ static DWORD WINAPI fovscan_thread(LPVOID u)
                 for (SIZE_T i = 0; i < got / 4 && nc < 400; i++) {
                     float v = chunk[i];
                     for (int k = 0; k < 3; k++)
-                        if (isfinite(v) && fabsf(v - tgt[k]) <= 2e-3f * tgt[k]) { cand[nc] = (ULONG_PTR)mbi.BaseAddress + off + i * 4; ck[nc] = k; nc++; break; }
+                        if (isfinite(v) && fabsf(v - tgt[k]) <= 2e-5f * tgt[k]) { cand[nc] = (ULONG_PTR)mbi.BaseAddress + off + i * 4; ck[nc] = k; nc++; break; }
                 }
             }
         }
@@ -2451,13 +2454,14 @@ static DWORD WINAPI fovscan_thread(LPVOID u)
         a = next;
     }
     vr_log("FOV: %d candidatos. Pruebo uno a uno (la imagen del monitor puede dar saltitos)", nc);
+    Beep(800, 60);
     int found = 0;
     for (int i = 0; i < nc && !found; i++) {
         float old; if (!rd_float((float *)cand[i], &old)) continue;
         float before = g_orig_P11;
         float test = fov_value(ck[i], vdeg + 20.0f);
         if (!wr_float((float *)cand[i], test)) continue;
-        Sleep(120);
+        Sleep(90);
         float after = g_orig_P11;
         float nowv; rd_float((float *)cand[i], &nowv);
         wr_float((float *)cand[i], old);
@@ -2469,7 +2473,7 @@ static DWORD WINAPI fovscan_thread(LPVOID u)
         Sleep(30);
     }
     if (!found) vr_log("FOV: ninguno cambia la lente del juego :(");
-    else { vr_log("FOV: lo dejo en %.0f grados en vertical mientras F9 este activo", g_fov_target_deg); Beep(1200, 80); Beep(1500, 80); }
+    else { vr_log("FOV: lo dejo en %.0f grados en vertical mientras F9 este activo", g_fov_target_deg); Beep(800, 90); Beep(1100, 90); Beep(1500, 90); }
     g_fov_running = 0;
     return 0;
 }
@@ -2789,7 +2793,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5d: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5e: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);

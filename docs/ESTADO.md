@@ -2,7 +2,7 @@
 
 *Este archivo sustituye al antiguo `contexto_metro_vr.md`. Se actualiza con cada versión.*
 
-**Versión actual: E5d** (Shift+F8 formas de escribir la cámara, Shift+F7 buscador del FOV). Anteriores: E5c y E5b (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
+**Versión actual: E5e** (igual que la E5d pero encuentra mejor la cámara). Antes: **E5d** (Shift+F8 formas de escribir la cámara, Shift+F7 buscador del FOV). Anteriores: E5c y E5b (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
 
 **Meta del proyecto:** un mod VR **estable, jugable, bien hecho y gratuito**, no solo un experimento de aprendizaje. Las decisiones se toman pensando en que lo use cualquier jugador: que no se cierre, que se instale fácil y que se vea bien.
 
