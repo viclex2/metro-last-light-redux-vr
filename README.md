@@ -1,10 +1,27 @@
 # Metro Last Light Redux VR (mod hecho desde cero)
 
-Un mod de realidad virtual para **Metro Last Light Redux** (PC, DirectX 11), hecho desde cero para aprender cómo funciona un mod VR por dentro.
+Un mod de realidad virtual para **Metro Last Light Redux** (PC, DirectX 11), hecho desde cero.
 
-Funciona como una `d3d11.dll` "adaptadora" (proxy) que se pone en la carpeta del juego. Pasa todo a la `d3d11.dll` real de Windows y, por el camino, lee y cambia lo que hace falta: la cámara, la lente, la imagen final. Además habla con **SteamVR** (OpenVR) para leer el visor y mandarle la imagen.
+## Objetivo
+El proyecto empezó para aprender cómo funciona un mod VR por dentro, pero **la meta es llegar a un mod estable, jugable y bien hecho**, que se pueda disfrutar de principio a fin en VR, y no quedarse en un experimento.
 
-> Estado: **experimental**. Ver [`docs/ESTADO.md`](docs/ESTADO.md) para lo que funciona y lo que falta, y [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
+El mod es y será siempre **gratuito**. Solo necesitas tener el juego original.
+
+> ⚠️ **Estado actual: en desarrollo (versión temprana).** Ya funciona mucho (estéreo, la cámara siguiendo a la cabeza, la imagen en el visor), pero todavía hay fallos gráficos y cosas por hacer. Ver [`docs/ESTADO.md`](docs/ESTADO.md) para lo que funciona y lo que falta, y [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
+
+## Cómo funciona
+Es una `d3d11.dll` "adaptadora" (proxy) que se pone en la carpeta del juego. Pasa todo a la `d3d11.dll` real de Windows y, por el camino, lee y cambia lo que hace falta: la cámara, la lente, la imagen final. Además habla con **SteamVR** (OpenVR) para leer el visor y mandarle la imagen. No modifica ningún archivo del juego: para quitarlo basta con borrar la DLL.
+
+## Hacia la versión estable
+Lo que falta para considerarlo jugable (detalle en [`docs/ESTADO.md`](docs/ESTADO.md)):
+- [x] Imagen en el visor, en estéreo y con el campo de visión del visor
+- [x] La cámara del juego sigue a la cabeza
+- [ ] Luces y sombras correctas al mirar a cualquier lado (sin "mundo marrón")
+- [ ] Sin paredes ni objetos que aparezcan y desaparezcan; sin imagen borrosa
+- [ ] HUD, mirilla y menús bien colocados en VR
+- [ ] Manos y arma con los mandos
+- [ ] Poder cambiar las opciones gráficas sin que el juego se cierre
+- [ ] Instalación sencilla y configuración desde el juego
 
 ## Equipo de pruebas
 - Windows 11, Intel i5-7500, AMD RX 580.
