@@ -1,0 +1,42 @@
+# Cuando se sube una etiqueta de version (E5, E6, F1...), GitHub compila la DLL
+# desde el codigo y crea la Release con la DLL adjunta y las notas del CHANGELOG.
+name: Release
+
+on:
+  push:
+    tags:
+      - '[A-Z][0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar el compilador (mingw-w64)
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Compilar d3d11.dll
+        run: sh build.sh && ls -la d3d11.dll
+
+      - name: Sacar las notas de esta version del CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # el bloque que empieza por "## TAG " hasta el siguiente "## "
+          awk -v t="$TAG" '
+            /^## / { if (p) exit; if ($2 == t) p = 1 }
+            p { print }
+          ' CHANGELOG.md > notas.md
+          [ -s notas.md ] || echo "Version $TAG. Ver CHANGELOG.md y docs/ESTADO.md." > notas.md
+          printf '\n---\n**Instalar:** `d3d11.dll` + `openvr_api.dll` (64 bits, de Valve) junto a `metro.exe`. Ver README.\n' >> notas.md
+          cat notas.md
+
+      - name: Crear la Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notas.md
+          files: d3d11.dll
