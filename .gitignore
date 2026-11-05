@@ -1,3 +1,3 @@
-*.dll
+/d3d11.dll
 *.rdc
 *.log
