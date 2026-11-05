@@ -1,5 +1,5 @@
 /*
- * HITO E5f - d3d11.dll (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5g - d3d11.dll (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -162,6 +162,7 @@ static int cfg_novsync = 1;
 static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
 static int cfg_cj = 1;
+static int cfg_fakehead = 0;
 static int cfg_lights = 1;
 static volatile LONG g_l7 = 0, g_l3 = 0;
 static float cfg_ipdscale = 1.0f;      /* usar el campo de vision del visor */
@@ -181,7 +182,9 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5f)\r\n"
+    "# (marca de version: E5g)\r\n"
+    "# cabeza_falsa=1: SIN visor (p.ej. para capturar con RenderDoc): las flechas hacen de cabeza y mueven la camara del juego\r\n"
+    "cabeza_falsa=0\r\n"
     "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
     "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
@@ -260,6 +263,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ipd_escala"))      cfg_ipdscale = fv;
     else if (!strcmp(s, "reloj_hilos"))     cfg_clock_thread = v;
     else if (!strcmp(s, "camara_juego"))    cfg_cj = v;
+    else if (!strcmp(s, "cabeza_falsa"))    cfg_fakehead = v;
     else if (!strcmp(s, "luces_visor"))     cfg_lights = v;
 }
 
@@ -291,7 +295,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5f")) {
+        if (!strstr(buf, "E5g")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -535,7 +539,8 @@ static void publish_H(void)
     EnterCriticalSection(&g_hcs);
     LONG other = 1 - g_Hidx;
     float Hk[4][4], Hki[4][4];
-    build_H(g_yaw, g_pitch, g_roll, g_sx, g_sy, g_sz, Hk, Hki);
+    if (cfg_fakehead) build_H(0, 0, 0, 0, 0, 0, Hk, Hki);     /* con cabeza falsa, las teclas son la cabeza */
+    else build_H(g_yaw, g_pitch, g_roll, g_sx, g_sy, g_sz, Hk, Hki);
     mul4(g_headH, Hk, g_Hbuf[other][0]);
     mul4(Hki, g_headHi, g_Hbuf[other][1]);
     InterlockedExchange(&g_Hidx, other);
@@ -2008,6 +2013,18 @@ static void cj_update(void)
 /* SteamVR quiere que la "escena" le pida las posturas una vez por fotograma (tambien marca el ritmo) */
 static void vr_after_present(void)
 {
+    /* SIN visor: cabeza falsa con las teclas, para poder probar (y capturar con RenderDoc) la camara del juego */
+    if (cfg_fakehead && !(cfg_vrimg && g_head_state == 1 && p_WaitGetPoses)) {
+        OvrPose fp; memset(&fp, 0, sizeof(fp));
+        float y = -g_yaw * 0.01745329f, x = g_pitch * 0.01745329f;     /* OpenVR: girar a la derecha = -Y */
+        float cy = cosf(y), sy = sinf(y), cx = cosf(x), sx = sinf(x);
+        float R[3][3] = { { cy, sy * sx, sy * cx }, { 0, cx, -sx }, { -sy, cy * sx, cy * cx } };   /* Ry(y) * Rx(x) */
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) fp.mat.m[i][j] = R[i][j];
+        fp.valid = 1;
+        if (head_apply(&fp)) publish_H();
+        cj_update();
+        return;
+    }
     if (!cfg_vrimg || g_head_state != 1 || !p_WaitGetPoses) return;
     /* el siguiente fotograma es para el otro ojo */
     {
@@ -2828,7 +2845,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5f: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5g: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);
