@@ -1818,10 +1818,6 @@ static void vr_make_device(ID3D11Device *game_dev)
     log_adapter("SteamVR", (IDXGIAdapter *)va);
     HMODULE m = real_d3d11();
     PFN_D3D11_CREATE_DEVICE f = m ? (PFN_D3D11_CREATE_DEVICE)GetProcAddress(m, "D3D11CreateDevice") : NULL;
-    if (t_create_depth > 0) {   /* nos llama RenderDoc "creyendo" que somos la de Windows */
-        PFN_D3D11_CREATE_DEVICE rf = (PFN_D3D11_CREATE_DEVICE)real_export(m, "D3D11CreateDevice");
-        return rf ? rf(adapter, driverType, software, flags, featureLevels, numLevels, sdkVersion, ppDevice, pFeatureLevel, ppContext) : E_FAIL;
-    }
     HRESULT hr = f ? f((IDXGIAdapter *)va, D3D_DRIVER_TYPE_UNKNOWN, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &g_vr_dev, NULL, NULL) : E_FAIL;
     vr_log("VISOR: dispositivo propio para SteamVR: %s (hr=0x%08lX)", SUCCEEDED(hr) ? "OK" : "FALLO", (unsigned long)hr);
     IDXGIAdapter1_Release(va);
