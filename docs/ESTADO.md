@@ -2,7 +2,7 @@
 
 *Este archivo sustituye al antiguo `contexto_metro_vr.md`. Se actualiza con cada versión.*
 
-**Versión actual: E5b** (sin probar todavía)
+**Versión actual: E5b** (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
 
 **Meta del proyecto:** un mod VR **estable, jugable, bien hecho y gratuito**, no solo un experimento de aprendizaje. Las decisiones se toman pensando en que lo use cualquier jugador: que no se cierre, que se instale fácil y que se vea bien.
 
@@ -40,6 +40,10 @@
   - Mundo zurdo (+Z adelante, Y arriba).
 - **Punteros fijos** (más 0x650): metro.exe+0xD08E18, D08E28, D08E48, D092D8, D092E8, D09318, D09778, D09788, D097B8, D09C28, D09C38 y D09C88.
 - **user.cfg:** `r_base_fov 50.625` (FOV vertical; no tocar), `show_game_ui`, `r_blur_level`, `r_vsync`.
+
+## Notas de la última prueba (E5b)
+- Parejas leídas al encontrar la cámara: (-0.751, -0.370) (0.000, -0.370) (0.000, -0.370). Las copias +12/+24 tienen la **inclinación a 0**, así que podrían ser solo el giro del cuerpo. Habría que escribir solo el giro en ellas y no la inclinación.
+- La búsqueda por firma, más permisiva, da 16 candidatas en 0,6 s.
 
 ## Siguiente paso
 1. Probar la **E5**: F9, mirar a todos lados, comprobar si desaparece lo marrón (`luces7`/`luces3` > 0 en el log).
