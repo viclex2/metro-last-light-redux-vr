@@ -11,7 +11,7 @@ Funciona como una `d3d11.dll` "adaptadora" (proxy) que se pone en la carpeta del
 - Meta Quest 3S con **Steam Link** (también vale ALVR: lo único que importa es que pase por SteamVR).
 
 ## Instalación
-1. Descarga la última `d3d11.dll` de la carpeta [`releases/`](releases/) (la versión más alta).
+1. Descarga la `d3d11.dll` de la última versión en [**Releases**](https://github.com/viclex2/metro-ll-redux-vr/releases/latest).
 2. Descarga `openvr_api.dll` (64 bits) de Valve: https://github.com/ValveSoftware/openvr/blob/master/bin/win64/openvr_api.dll
 3. Copia las dos en la carpeta del juego, junto a `metro.exe`:
    `C:\Program Files (x86)\Steam\steamapps\common\Metro Last Light Redux\`
@@ -47,6 +47,9 @@ Con mingw-w64 (en Windows o en Linux):
 x86_64-w64-mingw32-gcc -shared -O2 -o d3d11.dll src/d3d11_proxy.c src/d3d11.def -static -static-libgcc -s -ldxguid -luuid -ldxgi
 ```
 También hay un `build.sh` que hace lo mismo.
+
+## Cómo se publica una versión
+Al cambiar el archivo `VERSION` (por ejemplo, de `E5` a `E6`) y subirlo, GitHub compila la DLL él solo desde el código y crea la **Release** con esa DLL y las notas de esa versión sacadas de `CHANGELOG.md` (archivo `.github/workflows/release.yml`).
 
 ## Consejos
 - Para saltar los vídeos de inicio, vacía los `.ogv` de logos y del aviso legal (guarda una copia `.bak`).

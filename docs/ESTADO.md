@@ -46,6 +46,6 @@
 
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.
-- Claude compila la DLL con mingw-w64 y la sube como Release.
+- Claude compila la DLL con mingw-w64 para probarla y, en cada versión, actualiza `CHANGELOG.md`, este archivo y `VERSION`. Al subirlo, GitHub Actions crea la Release con la DLL.
 - Mensajes cortos y explicaciones "en cristiano", con símiles de hardware.
 - Enlaces mejor que capturas.
