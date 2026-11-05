@@ -1,5 +1,5 @@
 /*
- * HITO E5e - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5f - d3d11.dll (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -181,7 +181,7 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5e)\r\n"
+    "# (marca de version: E5f)\r\n"
     "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
     "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
@@ -291,7 +291,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5e")) {
+        if (!strstr(buf, "E5f")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -1818,6 +1818,10 @@ static void vr_make_device(ID3D11Device *game_dev)
     log_adapter("SteamVR", (IDXGIAdapter *)va);
     HMODULE m = real_d3d11();
     PFN_D3D11_CREATE_DEVICE f = m ? (PFN_D3D11_CREATE_DEVICE)GetProcAddress(m, "D3D11CreateDevice") : NULL;
+    if (t_create_depth > 0) {   /* nos llama RenderDoc "creyendo" que somos la de Windows */
+        PFN_D3D11_CREATE_DEVICE rf = (PFN_D3D11_CREATE_DEVICE)real_export(m, "D3D11CreateDevice");
+        return rf ? rf(adapter, driverType, software, flags, featureLevels, numLevels, sdkVersion, ppDevice, pFeatureLevel, ppContext) : E_FAIL;
+    }
     HRESULT hr = f ? f((IDXGIAdapter *)va, D3D_DRIVER_TYPE_UNKNOWN, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &g_vr_dev, NULL, NULL) : E_FAIL;
     vr_log("VISOR: dispositivo propio para SteamVR: %s (hr=0x%08lX)", SUCCEEDED(hr) ? "OK" : "FALLO", (unsigned long)hr);
     IDXGIAdapter1_Release(va);
@@ -2741,6 +2745,28 @@ static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
 }
 
 /* ------------------------------------------- funciones que exporta la DLL */
+/* ---- compatibilidad con RenderDoc ----
+ * RenderDoc engancha "la" d3d11.dll... y como nosotros tambien nos llamamos d3d11.dll, cuando RenderDoc quiere
+ * llamar a la de verdad nos llama a NOSOTROS: bucle infinito. Si nos vuelven a llamar desde dentro (mismo hilo),
+ * vamos directos a la funcion de Windows, buscandola a mano en su tabla de exportaciones (sin GetProcAddress,
+ * que RenderDoc tambien engancha). */
+static __thread int t_create_depth = 0;
+static void *real_export(HMODULE m, const char *name)
+{
+    if (!m) return NULL;
+    unsigned char *b = (unsigned char *)m;
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)b;
+    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(b + dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY dd = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!dd.VirtualAddress) return NULL;
+    IMAGE_EXPORT_DIRECTORY *ed = (IMAGE_EXPORT_DIRECTORY *)(b + dd.VirtualAddress);
+    DWORD *names = (DWORD *)(b + ed->AddressOfNames), *funcs = (DWORD *)(b + ed->AddressOfFunctions);
+    WORD *ords = (WORD *)(b + ed->AddressOfNameOrdinals);
+    for (DWORD i = 0; i < ed->NumberOfNames; i++)
+        if (!strcmp((const char *)(b + names[i]), name)) return b + funcs[ords[i]];
+    return NULL;
+}
+
 HRESULT WINAPI Proxy_D3D11CreateDevice(
     IDXGIAdapter *adapter, D3D_DRIVER_TYPE driverType, HMODULE software, UINT flags,
     const D3D_FEATURE_LEVEL *featureLevels, UINT numLevels, UINT sdkVersion,
@@ -2749,9 +2775,15 @@ HRESULT WINAPI Proxy_D3D11CreateDevice(
     vr_log("El juego llama a D3D11CreateDevice (flags=0x%X)", flags);
     HMODULE m = real_d3d11();
     PFN_D3D11_CREATE_DEVICE f = m ? (PFN_D3D11_CREATE_DEVICE)GetProcAddress(m, "D3D11CreateDevice") : NULL;
+    if (t_create_depth > 0) {   /* nos llama RenderDoc "creyendo" que somos la de Windows */
+        PFN_D3D11_CREATE_DEVICE rf = (PFN_D3D11_CREATE_DEVICE)real_export(m, "D3D11CreateDevice");
+        return rf ? rf(adapter, driverType, software, flags, featureLevels, numLevels, sdkVersion, ppDevice, pFeatureLevel, ppContext) : E_FAIL;
+    }
     if (!f) { vr_log("No encuentro D3D11CreateDevice real"); return E_FAIL; }
+    t_create_depth++;
     HRESULT hr = f(adapter, driverType, software, flags, featureLevels, numLevels,
                    sdkVersion, ppDevice, pFeatureLevel, ppContext);
+    t_create_depth--;
     vr_log("D3D11CreateDevice -> hr=0x%08lX, nivel=0x%X", (unsigned long)hr,
            pFeatureLevel ? (unsigned)*pFeatureLevel : 0);
     if (SUCCEEDED(hr) && ppContext && *ppContext)
@@ -2769,9 +2801,16 @@ HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(
     HMODULE m = real_d3d11();
     PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN f =
         m ? (PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN)GetProcAddress(m, "D3D11CreateDeviceAndSwapChain") : NULL;
+    if (t_create_depth > 0) {   /* nos llama RenderDoc "creyendo" que somos la de Windows */
+        PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN rf = (PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN)real_export(m, "D3D11CreateDeviceAndSwapChain");
+        return rf ? rf(adapter, driverType, software, flags, featureLevels, numLevels, sdkVersion,
+                       swapDesc, ppSwapChain, ppDevice, pFeatureLevel, ppContext) : E_FAIL;
+    }
     if (!f) { vr_log("No encuentro D3D11CreateDeviceAndSwapChain real"); return E_FAIL; }
+    t_create_depth++;
     HRESULT hr = f(adapter, driverType, software, flags, featureLevels, numLevels, sdkVersion,
                    swapDesc, ppSwapChain, ppDevice, pFeatureLevel, ppContext);
+    t_create_depth--;
     vr_log("D3D11CreateDeviceAndSwapChain -> hr=0x%08lX", (unsigned long)hr);
     if (SUCCEEDED(hr) && ppContext && *ppContext)
         install_hooks(*ppContext, ppSwapChain ? *ppSwapChain : NULL);
@@ -2793,7 +2832,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5e: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5f: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);
