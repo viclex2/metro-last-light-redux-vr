@@ -1,5 +1,5 @@
 /*
- * HITO E5 - d3d11.dll (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5b - d3d11.dll (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -181,7 +181,7 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5)\r\n"
+    "# (marca de version: E5b)\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
     "luces_visor=1\r\n"
     "# camara_juego=1: con F9, la camara DE VERDAD del juego sigue tu cabeza (asi no desaparecen cosas al girarla). 0 = como antes\r\n"
@@ -289,7 +289,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5")) {
+        if (!strstr(buf, "E5b")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -767,7 +767,8 @@ static DWORD WINAPI cj_sig_thread(LPVOID u)
                     float pv = chunk[k], yv = chunk[k + 1];
                     if (fabsf(-pv - pitch) > 0.03f) continue;
                     if (fabsf(wrap_pi(yv - yaw)) > 0.03f) continue;
-                    if (chunk[k + 3] != pv || chunk[k + 4] != yv || chunk[k + 6] != pv || chunk[k + 7] != yv) continue;
+                    if (!(fabsf(chunk[k + 3] - pv) < 0.6f) || !(fabsf(wrap_pi(chunk[k + 4] - yv)) < 0.6f) ||
+                        !(fabsf(chunk[k + 6] - pv) < 0.6f) || !(fabsf(wrap_pi(chunk[k + 7] - yv)) < 0.6f)) continue;
                     if (fabsf(pv) < 0.01f && fabsf(yv) < 0.01f) continue;
                     g_cj_scan[n++] = (ULONG_PTR)mbi.BaseAddress + off + k * 4;
                 }
@@ -787,13 +788,14 @@ static void cj_accept(ULONG_PTR pitch_addr, const char *via)
     float pv, yv;
     rd_float((float *)pitch_addr, &pv); rd_float((float *)(pitch_addr + 4), &yv);
     g_cj_pitch = (float *)pitch_addr; g_cj_yaw = (float *)(pitch_addr + 4);
-    g_cj_copy = 0;
-    for (int c = 1; c <= 2; c++) {
-        float cp, cy;
-        if (rd_float(g_cj_pitch + 3 * c, &cp) && rd_float(g_cj_yaw + 3 * c, &cy) &&
-            fabsf(cp - pv) < 0.02f && fabsf(cy - yv) < 0.02f) g_cj_copy |= c;
+    /* las tres parejas (inclinacion, giro) seguidas son la camara: actual, objetivo y anterior. Se escriben
+     * SIEMPRE las tres; si solo escribiamos una, el juego la rehacia desde las otras al mover el raton */
+    g_cj_copy = 3;
+    {
+        float c1p = 0, c1y = 0, c2p = 0, c2y = 0;
+        rd_float(g_cj_pitch + 3, &c1p); rd_float(g_cj_yaw + 3, &c1y); rd_float(g_cj_pitch + 6, &c2p); rd_float(g_cj_yaw + 6, &c2y);
+        vr_log("CAMARA DEL JUEGO: parejas: (%.3f, %.3f) (%.3f, %.3f) (%.3f, %.3f)", pv, yv, c1p, c1y, c2p, c2y);
     }
-    vr_log("CAMARA DEL JUEGO: copias que se moveran a la vez: %s%s", (g_cj_copy & 1) ? "+12/+16 " : "", (g_cj_copy & 2) ? "+24/+28" : "(ninguna)");
     vr_log("CAMARA DEL JUEGO: encontrada (%s) en %p (inclinacion %.3f, giro %.3f)", via, (void *)pitch_addr, -pv, yv);
     Beep(1200, 80); Beep(1500, 80);     /* dos pitidos agudos: camara del juego encontrada */
 }
@@ -1950,8 +1952,8 @@ static void cj_update(void)
         static int bad = 0;
         float ey = fminf(fabsf(wrap_pi(y - g_cam_yaw)), fabsf(wrap_pi(y + g_dpsi - g_cam_yaw)));
         float ep = fminf(fabsf(-p - g_cam_pitch), fabsf(-p + g_dtheta - g_cam_pitch));
-        if (ey > 0.35f || ep > 0.35f) {
-            if (++bad > 10) {
+        if (ey > 0.6f || ep > 0.6f) {
+            if (++bad > 30) {
                 vr_log("CAMARA DEL JUEGO: ya no cuadra con la imagen (giro %.2f vs %.2f); la suelto y la vuelvo a buscar", y, g_cam_yaw);
                 g_cj_yaw = g_cj_pitch = NULL; g_cj_active = 0; g_dpsi = g_dtheta = 0; bad = 0;
                 return;
@@ -2664,7 +2666,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5b: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);

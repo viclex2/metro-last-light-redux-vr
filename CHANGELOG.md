@@ -2,7 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
-## E5 — Luces y sombras con la lente del visor *(sin probar)*
+## E5b — La cámara de la cabeza no se suelta
+- Probada la E5: los cajones de luces se corrigen (unos 216 por segundo del hueco 7 y 72 del hueco 3).
+- Problema: la cabeza dejaba de mover la cámara tras unos segundos, porque el juego rehacía el giro desde las otras copias al mover el ratón.
+- Ahora se escriben **siempre las tres parejas** (inclinación, giro) del objeto cámara: +0/+4, +12/+16 y +24/+28.
+- La búsqueda por firma admite copias que no sean idénticas (hasta unos 34°).
+- La vigilancia es más tolerante: suelta la cámara si no cuadra por más de 0,6 rad durante 30 fotogramas.
+
+## E5 — Luces y sombras con la lente del visor
 - Corrige dos cajones que usaban la lente original del juego (80°):
   - **Hueco 7 (144 bytes):** la lente completa más una matriz de reproyección. Se cambian por `lente del visor × H`.
   - **Hueco 3 (272 bytes), casillas 36–43:** la "receta" con la que cada píxel saca su dirección para iluminarse. Se rehace para la lente del visor, que está descentrada.
