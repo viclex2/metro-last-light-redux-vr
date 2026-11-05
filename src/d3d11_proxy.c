@@ -1,5 +1,5 @@
 /*
- * HITO E5c - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E5d - d3d11.dll (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -181,7 +181,8 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5c)\r\n"
+    "# (marca de version: E5d)\r\n"
+    "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
     "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
     "luces_visor=1\r\n"
@@ -290,7 +291,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5c")) {
+        if (!strstr(buf, "E5d")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -1920,12 +1921,21 @@ static void cj_add(float dyaw, float dpitch_stored)
     }
 }
 
+/* Formas de escribir la camara (Shift+F8), para averiguar cual provoca lo marron:
+ * 0 = giro e inclinacion en las 3 parejas | 1 = solo giro (3 parejas) | 2 = solo inclinacion (la principal)
+ * 3 = giro e inclinacion solo en la principal | 4 = giro en las 3, inclinacion solo en la principal */
+static volatile LONG g_cj_wmode = 0;
+static const char *g_cj_wname[5] = { "giro+inclinacion en las 3 parejas", "solo giro", "solo inclinacion",
+                                     "giro+inclinacion solo en la pareja principal", "giro en las 3, inclinacion solo en la principal" };
+static int cj_wyaw(void)   { return g_cj_wmode != 2; }
+static int cj_wpitch(void) { return g_cj_wmode != 1; }
 static void cj_set(float yaw, float pitch_stored)
 {
+    int m = g_cj_wmode;
     for (int c = 0; c <= 2; c++) {
         if (c && !(g_cj_copy & c)) continue;
-        wr_float(g_cj_yaw + 3 * c, yaw);
-        wr_float(g_cj_pitch + 3 * c, pitch_stored);
+        if (cj_wyaw() && (c == 0 || (m != 3)))          wr_float(g_cj_yaw + 3 * c, yaw);
+        if (cj_wpitch() && (c == 0 || (m != 3 && m != 4 && m != 2))) wr_float(g_cj_pitch + 3 * c, pitch_stored);
     }
 }
 
@@ -1982,6 +1992,8 @@ static void cj_update(void)
     if (th_d > 1.40f) th_d = 1.40f;
     if (th_d < -1.40f) th_d = -1.40f;
     float dps = wrap_pi(psi_d - psi_m), dth = th_d - th_m;
+    if (!cj_wyaw()) dps = 0;        /* lo que no se escribe en el juego, lo pone H (con la lente) */
+    if (!cj_wpitch()) dth = 0;
     memcpy(g_Cd, Cd, sizeof(Cd)); memcpy(g_Ym, Y, sizeof(Y));
     /* dejar el valor EXACTAMENTE en raton + cabeza, haya hecho el juego lo que haya hecho */
     cj_set(y + wrap_pi(psi_m + dps - y), -(th_m + dth));
@@ -2402,6 +2414,81 @@ static DWORD WINAPI scan_thread(LPVOID u)
     return 0;
 }
 
+/* ------------------------------------------------ buscador del FOV del juego (Shift+F7) */
+/* El juego decide que dibujar y que luces encender con su propio campo de vision (50.625 grados en vertical).
+ * El visor ve 98 grados: lo de arriba/abajo se "recorta". Buscamos ese numero en memoria y lo agrandamos. */
+static volatile LONG g_fov_running = 0;
+static float * volatile g_fov_addr = NULL; static volatile int g_fov_kind = 0;   /* 0 grados, 1 radianes, 2 media (rad) */
+static float g_fov_target_deg = 110.0f;
+static float fov_value(int kind, float deg) { return kind == 0 ? deg : (kind == 1 ? deg * 0.01745329f : deg * 0.00872665f); }
+
+static DWORD WINAPI fovscan_thread(LPVOID u)
+{
+    (void)u;
+    if (!g_cam_seq || g_orig_P11 <= 0) { vr_log("FOV: aun no he visto la camara; entra en partida y vuelve a probar"); g_fov_running = 0; return 0; }
+    float p11 = g_orig_P11;
+    float vdeg = 2.0f * atanf(1.0f / p11) * RAD2DEG;          /* FOV vertical actual del juego */
+    vr_log("FOV: el juego ve ahora %.3f grados en vertical (P11=%.5f). Busco ese numero en memoria...", vdeg, p11);
+    float tgt[3] = { vdeg, vdeg * 0.01745329f, vdeg * 0.00872665f };
+    static ULONG_PTR cand[400]; static int ck[400]; int nc = 0;
+    static float chunk[1 << 18];
+    MEMORY_BASIC_INFORMATION mbi; unsigned char *a = NULL;
+    while (nc < 400 && VirtualQuery(a, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+        unsigned char *next = (unsigned char *)mbi.BaseAddress + mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & PAGE_GUARD)) {
+            for (SIZE_T off = 0; off < mbi.RegionSize && nc < 400; off += sizeof(chunk)) {
+                SIZE_T want = mbi.RegionSize - off; if (want > sizeof(chunk)) want = sizeof(chunk);
+                SIZE_T got = 0;
+                if (!ReadProcessMemory(GetCurrentProcess(), (unsigned char *)mbi.BaseAddress + off, chunk, want, &got)) continue;
+                for (SIZE_T i = 0; i < got / 4 && nc < 400; i++) {
+                    float v = chunk[i];
+                    for (int k = 0; k < 3; k++)
+                        if (isfinite(v) && fabsf(v - tgt[k]) <= 2e-3f * tgt[k]) { cand[nc] = (ULONG_PTR)mbi.BaseAddress + off + i * 4; ck[nc] = k; nc++; break; }
+                }
+            }
+        }
+        if (next <= a) break;
+        a = next;
+    }
+    vr_log("FOV: %d candidatos. Pruebo uno a uno (la imagen del monitor puede dar saltitos)", nc);
+    int found = 0;
+    for (int i = 0; i < nc && !found; i++) {
+        float old; if (!rd_float((float *)cand[i], &old)) continue;
+        float before = g_orig_P11;
+        float test = fov_value(ck[i], vdeg + 20.0f);
+        if (!wr_float((float *)cand[i], test)) continue;
+        Sleep(120);
+        float after = g_orig_P11;
+        float nowv; rd_float((float *)cand[i], &nowv);
+        wr_float((float *)cand[i], old);
+        if (fabsf(after - before) > 0.05f && fabsf(nowv - test) < 1e-3f * fabsf(test) + 1e-6f) {
+            vr_log("FOV: CONFIRMADO %p (%s): al cambiarlo, la lente paso de P11=%.4f a %.4f", (void *)cand[i],
+                   ck[i] == 0 ? "grados" : (ck[i] == 1 ? "radianes" : "medio angulo en radianes"), before, after);
+            g_fov_kind = ck[i]; g_fov_addr = (float *)cand[i]; found = 1;
+        }
+        Sleep(30);
+    }
+    if (!found) vr_log("FOV: ninguno cambia la lente del juego :(");
+    else { vr_log("FOV: lo dejo en %.0f grados en vertical mientras F9 este activo", g_fov_target_deg); Beep(1200, 80); Beep(1500, 80); }
+    g_fov_running = 0;
+    return 0;
+}
+
+/* cada momento: con F9 y fov_visor, el FOV del juego grande; si no, el que habia */
+static void fov_keep(void)
+{
+    static float saved = 0; static int applied = 0;
+    if (!g_fov_addr) return;
+    float cur; if (!rd_float(g_fov_addr, &cur) || !isfinite(cur)) { g_fov_addr = NULL; applied = 0; return; }
+    float want = fov_value(g_fov_kind, g_fov_target_deg);
+    if (g_mode == 1 && cfg_fov) {
+        if (!applied) { saved = cur; applied = 1; vr_log("FOV: agrandado a %.0f grados (antes %.3f)", g_fov_target_deg, cur); }
+        if (fabsf(cur - want) > 1e-4f * fabsf(want)) wr_float(g_fov_addr, want);
+    } else if (applied) {
+        wr_float(g_fov_addr, saved); applied = 0; vr_log("FOV: devuelto a %.3f", saved);
+    }
+}
+
 /* ------------------------------------------------ hilo de teclas (F9 / Insert) */
 static const char *mode_text(LONG m)
 {
@@ -2448,7 +2535,18 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             const int keys[4] = { VK_F5, VK_F6, VK_F7, VK_F8 };
             for (int k = 0; k < 4; k++) {
                 int d = (GetAsyncKeyState(keys[k]) & 0x8000) != 0;
-                if (d && !prevf[k]) {
+                if (d && !prevf[k] && rsh && k == 3) {          /* Shift+F8: cambiar forma de escribir */
+                    g_cj_wmode = (g_cj_wmode + 1) % 5;
+                    vr_log(">>> Shift+F8 CAMARA: forma %ld = %s", (long)g_cj_wmode, g_cj_wname[g_cj_wmode]);
+                    for (int b = 0; b <= g_cj_wmode; b++) Beep(900, 60);
+                    g_cj_dirty = 1;
+                } else if (d && !prevf[k] && rsh && k == 2) {   /* Shift+F7: buscar el FOV del juego */
+                    if (InterlockedCompareExchange(&g_fov_running, 1, 0) == 0) {
+                        Beep(600, 150);
+                        HANDLE th = CreateThread(NULL, 0, fovscan_thread, NULL, 0, NULL);
+                        if (th) CloseHandle(th); else g_fov_running = 0;
+                    }
+                } else if (d && !prevf[k]) {
                     int on = 0; const char *name = "";
                     switch (k) {
                     case 0: if (cfg_stereo) { saved_stereo = cfg_stereo; cfg_stereo = 0; } else cfg_stereo = saved_stereo ? saved_stereo : 2;
@@ -2522,6 +2620,7 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         #undef KEYDOWN
         #undef SEEN
         if (head_update()) publish_H();
+        fov_keep();
         { static ULONGLONG lastr = 0; if (now - lastr > 5000) { lastr = now; LONG n = InterlockedExchange(&g_cj_resets, 0);
             if (n) vr_log("CAMARA DEL JUEGO: el juego borro lo nuestro %ld veces (al mover el raton); recolocado", (long)n); } }
         { static ULONGLONG lastfind = 0; if (cfg_cj && !g_cj_yaw && now - lastfind > 250) { lastfind = now; cj_find(); } }
@@ -2690,7 +2789,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E5d: d3d11 proxy cargada por: %s ===", exe);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);

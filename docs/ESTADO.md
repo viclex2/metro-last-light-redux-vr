@@ -2,7 +2,7 @@
 
 *Este archivo sustituye al antiguo `contexto_metro_vr.md`. Se actualiza con cada versión.*
 
-**Versión actual: E5c** (interruptores F5–F8). Anterior: **E5b** (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
+**Versión actual: E5d** (Shift+F8 formas de escribir la cámara, Shift+F7 buscador del FOV). Anteriores: E5c y E5b (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
 
 **Meta del proyecto:** un mod VR **estable, jugable, bien hecho y gratuito**, no solo un experimento de aprendizaje. Las decisiones se toman pensando en que lo use cualquier jugador: que no se cierre, que se instale fácil y que se vea bien.
 
@@ -47,7 +47,7 @@
 
 ## Hipótesis actual (5/11)
 - **Objetos que desaparecen y huecos negros:** el juego decide qué dibujar con **su** cono de visión (80° × 50° de la pantalla del PC), pero el visor enseña 104° × 98°. Lo que cae fuera del cono, sobre todo arriba y abajo, no se dibuja. La cámara siguiendo a la cabeza arregla la dirección, pero **no la apertura**. Solución: agrandar el FOV del juego (`r_base_fov`, o que lo haga la DLL directamente en memoria).
-- **Marrón:** solo aparece con camara_juego activo (confirmado por el usuario). Puede ser lo mismo (luces descartadas por el cono pequeño) u otra cosa. Para aislarlo: F5–F8.
+- **Marrón:** confirmado con F5–F8 que lo causa **camara_juego (F8)**. No es por las luces (F6) ni por la lente (F7). La E5d prueba qué parte de la escritura lo provoca (Shift+F8). Puede ser lo mismo (luces descartadas por el cono pequeño) u otra cosa. Para aislarlo: F5–F8.
 
 ## Siguiente paso
 1. Probar la **E5**: F9, mirar a todos lados, comprobar si desaparece lo marrón (`luces7`/`luces3` > 0 en el log).
