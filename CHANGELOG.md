@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8h — El "cuerpo" solo se calcula con la cámara principal
+- Probada la E8g: sigue igual. O fantasma o los objetos se mueven. **Pista nueva del usuario:** los objetos solo se mueven al mover **las gafas**, nunca al mover **el ratón**.
+- Causa probable: desde la E7g (`por_objeto`), cada cámara del hueco 1 (también la del **arma**, que se balancea al girar) recalculaba el "cuerpo" (la cámara sin nuestro ratón) con **su propia** orientación. Los dibujos que venían después usaban ese cuerpo equivocado, así que se colocaban un poco girados respecto al mundo, y ese giro cambiaba al mover la cabeza. En la E7d solo lo calculaba la cámara principal, y por eso no tenía fantasma.
+- Ahora el cuerpo se calcula **solo con la cámara principal**, al llegar en cada fotograma. Cada dibujo y cada cámara (también la del arma) llevan su H hecho con **su** vista y **ese** cuerpo.
+- Referencia: el mod VR de Metro 2033 Redux (D-Rey86, sobre 3DMigoto) encontró lo mismo: posición con m_WVP en el hueco 0, y objetos en grupo con `xform` (WV) más m_P. Allí acabaron escribiendo la cámara del juego con una función nativa en vez de mover el ratón.
+
 ## E8g — Lo que de verdad usa el juego (sacado de sus shaders) y el fantasma de los reflejos
 - He leído los shaders del juego desde la captura de RenderDoc (qué variables usa cada uno):
   - El G-buffer guarda las posiciones **en la vista del juego**, sin nuestra corrección. Los objetos sueltos las sacan de `m_WV` (hueco 0) y los objetos en grupo, de la lista de vértices. Así que cualquier pasada que lleve esas posiciones a la pantalla tiene que usar **lente del visor × H**, y la que va al revés, su inversa.
