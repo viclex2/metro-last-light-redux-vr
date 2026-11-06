@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8 — Volvemos a la base de la E7d
+- Probada la E7i: igual (los objetos bien, pero con fantasma). Se decide **quedarse con la E7d**, sin fantasma y con los objetos moviéndose un poco, y estudiar los objetos con **RenderDoc**.
+- `por_objeto=0` por defecto: funciona como la E7d. Con `por_objeto=1`, como la E7i, para comparar.
+- La última DLL compilada queda también en `bin/d3d11.dll`, por si la Release tarda.
+
 ## E7i — Las luces también con su propia cámara
 - Probada la E7h: igual que la E7g (los objetos bien, pero vuelve el fantasma). El iW del cajón sí era la inversa de W (`iW_raro=0`), y casi todos los dibujos usan su propia cámara (`fallan=0`).
 - Conclusión: el fantasma sale cuando la geometría y **las luces** (hueco 7) no se corrigen igual. En la E7d las dos iban mal "a la vez" y cuadraban entre sí. En la E7g la geometría pasó a ir bien, pero las luces no.

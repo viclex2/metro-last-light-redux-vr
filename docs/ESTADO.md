@@ -92,6 +92,13 @@ Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego si
   - suavizado o aceleración del ratón en el juego;
   - el tope de inclinación del juego.
 
+## E7d–E8 (6/11): fantasma resuelto, objetos pendientes
+- **El fantasma** era el fotograma anterior mal recolocado. Se resolvió fijando en Present el H de los dibujos (hueco 0 y luces), y dando a la cámara (hueco 1) un H hecho con su propia cámara.
+- **Objetos** (barandillas, raíles, carteles): se desplazan un poco al mover el visor y vuelven al pararte.
+  - Con el H propio de cada dibujo (V = WV·W⁻¹, E7g–E7i) los objetos quedan bien, pero vuelve el fantasma, también con las luces del hueco 7 corregidas con su cámara.
+  - Los huecos 8 y 13 son huesos: no tocar.
+- **Siguiente paso:** una captura de RenderDoc moviendo el ratón (sin F9, sin gafas), convertida a XML con `renderdoccmd convert`. Sirve para ver qué cámara lleva cada cajón en cada dibujo.
+
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.
 - Claude compila la DLL con mingw-w64 para probarla y, en cada versión, actualiza `CHANGELOG.md`, este archivo y `VERSION`. Al subirlo, GitHub Actions crea la Release con la DLL.
