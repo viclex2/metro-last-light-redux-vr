@@ -77,6 +77,11 @@ Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego si
 
 **Si algo falla:** puede que el juego también use el FOV para el detalle a distancia (LOD) y se vean cosas más simples de lejos; o que algún efecto (niebla, reflejos) dependa del FOV. Se puede bajar `linterna_grados` (p. ej. 120) para probar.
 
+## Resultado de la E6 (6/11, log del usuario)
+- El buscador encuentra entre 556 y 984 números que valen 50,625, pero **ninguno de los 300 probados cambia la lente** al escribirlo en directo. Lo más probable es que el juego lea el FOV solo al arrancar o al cargar.
+- Mientras prueba candidatos con F9 activo, los fps bajan a unos 24 durante unos 30 s.
+- **Siguiente prueba, sin DLL nueva:** poner `r_base_fov 90` en los **dos** user.cfg (el de la carpeta del juego y el de `%LOCALAPPDATA%\4A Games\...\<id>\`) y `linterna=0` en la config. Mirar en el log si `fov_juego=` pasa de 50.6 a 90. Si funciona, la linterna se agranda desde el arranque y no hace falta buscar nada en memoria.
+
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.
 - Claude compila la DLL con mingw-w64 para probarla y, en cada versión, actualiza `CHANGELOG.md`, este archivo y `VERSION`. Al subirlo, GitHub Actions crea la Release con la DLL.
