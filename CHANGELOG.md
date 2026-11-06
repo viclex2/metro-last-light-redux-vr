@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7e — Objetos que se mueven al mover la cabeza (F10)
+- Probada la E7d: **¡adiós al fantasma!** El arma sigue a la cabeza y apenas desaparece nada (alguna cosa muy lejana, unos milisegundos).
+- Nuevo fallo: los **objetos** (barandillas, raíles, carteles...) se desplazan un poco al mover el visor y vuelven a su sitio al pararte. El escenario no.
+- Sospecha: esos objetos se dibujan en grupo, con sus matrices en los huecos **8 (3856 bytes) y 13 (3888)**, 80 matrices de 3×4, que no corregíamos.
+- **F10** activa y desactiva la corrección (H) de esas matrices en directo: pitido subiendo = activada. El log apunta unas muestras de esos cajones y cuenta `objetos8_13=`.
+
 ## E7d — Intento contra el fantasma
 - Resultado de Shift+D: los dibujos (hueco 0) y las luces (hueco 7) que llegan **después de Present** usan la cámara que el juego preparó **antes de Present**. El juego prepara la cámara del siguiente fotograma antes de terminar el actual.
 - La E7 recalculaba H al llegar la cámara nueva, a mitad de fotograma. Los últimos dibujos del fotograma se corregían con la cámara del siguiente y, al moverte, salía el fantasma.

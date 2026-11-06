@@ -1,5 +1,5 @@
 /*
- * HITO E7d - d3d11.dll (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7e - d3d11.dll (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -591,6 +591,7 @@ static void get_H(float H[4][4], float Hi[4][4])
 }
 
 static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4]);
+static volatile LONG g_inst_fix = 0, g_inst_mod = 0, g_inst_dump = 0;   /* (E7e) huecos 8 y 13 */
 static volatile LONG g_ord_flag = 0, g_ord_before = 0, g_ord_after = 0, g_ord_cb1 = 0;   /* (E7d) orden de los cajones */
 /* (E7d) H para el cajon de la camara, hecho con ESA camara. El juego prepara la camara del siguiente
  * fotograma antes de terminar el actual, asi que los dibujos (hueco 0, luces) usan el H fijado en Present
@@ -1223,6 +1224,41 @@ static int fix_slot3(float *f)
     return 1;
 }
 
+
+/* (E7e) Huecos 8 (3856 bytes) y 13 (3888): una cabecera y luego 80 matrices de 3x4. Si son "objeto -> vista"
+ * (barandillas, carteles, objetos sueltos dibujados en grupo), el juego las calcula con SU camara y nosotros
+ * no las corregiamos: por eso esos objetos se movian un poco al mover la cabeza. Aqui se les aplica H. */
+static void inst_stuff(int slot, const Pending *p)
+{
+    UINT head = (p->bw == 3856) ? 4 : 8;              /* floats de cabecera */
+    UINT n = (p->bw / 4 - head) / 12;
+    static float f[1024]; SIZE_T got = 0;
+    if (p->bw > sizeof(f) || !ReadProcessMemory(GetCurrentProcess(), p->p, f, p->bw, &got) || got != p->bw) return;
+    if (g_inst_dump > 0 && InterlockedDecrement(&g_inst_dump) >= 0) {
+        char line[1200]; int L = 0;
+        for (UINT q = 0; q < head + 36 && q < p->bw / 4; q++) {
+            L += snprintf(line + L, sizeof(line) - L, "%s%.5g", (q % 12) ? " " : "", (double)f[q]);
+            if (q % 12 == 11 || q + 1 == head + 36) { vr_log("   hueco %d [%u..] %s", slot, q - (q % 12), line); L = 0; }
+        }
+        vr_log("   camara V: %.4g %.4g %.4g %.4g | %.4g %.4g %.4g %.4g | %.4g %.4g %.4g %.4g",
+               g_pv_cur[0], g_pv_cur[1], g_pv_cur[2], g_pv_cur[3], g_pv_cur[4], g_pv_cur[5], g_pv_cur[6], g_pv_cur[7],
+               g_pv_cur[8], g_pv_cur[9], g_pv_cur[10], g_pv_cur[11]);
+    }
+    if (!g_inst_fix || g_mode != 1) return;
+    float H[4][4], Hi[4][4];
+    get_H(H, Hi);
+    int any = 0;
+    for (UINT k = 0; k < n; k++) {
+        float *m = f + head + k * 12, o[12]; int ok = 1, nz = 0;
+        for (int q = 0; q < 12; q++) { if (!isfinite(m[q])) ok = 0; if (m[q] != 0.0f) nz = 1; }
+        if (!ok || !nz) continue;
+        for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++)
+            o[r * 4 + c] = H[r][0] * m[c] + H[r][1] * m[4 + c] + H[r][2] * m[8 + c] + (c == 3 ? H[r][3] : 0.0f);
+        memcpy(m, o, sizeof(o)); any = 1;
+    }
+    if (any) { memcpy((void *)p->p, f, p->bw); _mm_sfence(); InterlockedIncrement(&g_inst_mod); }
+}
+
 static void slot_stuff(void *res, const Pending *p)
 {
     int slot = slot_of(res);
@@ -1242,6 +1278,7 @@ static void slot_stuff(void *res, const Pending *p)
     }
     InterlockedIncrement(&g_slot_writes[slot]);
     g_slot_bw[slot] = (LONG)p->bw;
+    if ((slot == 8 && p->bw == 3856) || (slot == 13 && p->bw == 3888)) inst_stuff(slot, p);
     {
         LONG mode = g_mode;
         if (slot == 0 && p->bw == 208) InterlockedIncrement(g_ord_flag ? &g_ord_after : &g_ord_before);
@@ -2798,6 +2835,17 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             }
             prevh = hh;
         }
+        /* F10: (E7e) corregir los objetos de los huecos 8 y 13 */
+        {
+            static int prevf8 = 0;
+            int k8 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+            if (k8 && !prevf8) {
+                g_inst_fix = !g_inst_fix; g_inst_dump = 4;
+                vr_log(">>> F10: objetos de los huecos 8 y 13 %s", g_inst_fix ? "CORREGIDOS" : "sin corregir");
+                if (g_inst_fix) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+            }
+            prevf8 = k8;
+        }
         /* Shift + D: (E7c) 10 s buscando matrices del fotograma anterior (mueve el raton mientras) */
         {
             static int prevd = 0;
@@ -2907,8 +2955,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -3078,7 +3126,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E7d: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7e: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
