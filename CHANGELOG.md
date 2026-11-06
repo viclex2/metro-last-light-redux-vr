@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8e — Lo que se vio en RenderDoc con el píxel
+- Con Pixel History en la captura de RenderDoc:
+  - **La barandilla** (EID 224) es un `DrawIndexed` que usa `cb_main_matrices0` (hueco 0) y su posición sale de **m_WVP**.
+  - **El suelo** (EID 313) es un `DrawIndexedInstanced` que usa `cb_main_matrices1` (hueco 1): su posición respecto a la cámara (WV) va en la lista de vértices y la lente sale de m_P.
+- En la E7d, el hueco 1 llevaba el H de su propia cámara, pero el hueco 0 el de la cámara anterior. Por eso la barandilla se despegaba del suelo al moverte.
+- En la E7g el hueco 0 pasó a llevar su propio H: la barandilla quedó bien, pero la **cámara del arma** (otra cámara en el hueco 1) seguía con el H viejo. El arma se dibuja con piezas de los dos caminos, se partía en dos y salía **el arma fantasma**.
+- Ahora (`por_objeto=1`), los dibujos del hueco 0 **y todas las cámaras** del hueco 1 llevan su propio H. El hueco 7 queda como en la E7d.
+
 ## E8d — Otra vez la base de la E7d, para capturar con F9 en RenderDoc
 - La E8c sigue con fantasma. Se vuelve a la E7d (`modo_h=0`, por defecto) y se estudian los objetos con una captura de RenderDoc **con el modo VR activo**: cabeza falsa con las flechas, F9 y una flecha pulsada mientras se captura.
 - `modo_h=1` = como la E8c, por si hace falta comparar.
