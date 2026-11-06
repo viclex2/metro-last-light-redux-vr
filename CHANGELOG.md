@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7f — Rescate de los dibujos que no cuadran
+- Probada la E7e: con F10, los objetos se mueven **más**, y la mirilla y el silenciador del arma flotan. Los huecos 8 y 13 son los **huesos** de los modelos (en el espacio del propio modelo) y no se deben tocar. F10 se queda apagada.
+- La E7e leía esos cajones aunque F10 estuviera apagada, y el juego iba a unos 24 fps. Arreglado.
+- Nueva sospecha: un tercio de los dibujos del hueco 0 se **saltaban** (`cb0_salta`), porque su WV y su WVP no cuadran entre sí. Seguramente uno lleva la cámara de este fotograma y el otro la del anterior, y eso solo pasa con la cámara moviéndose. Esos objetos se quedaban sin corregir.
+- Ahora, si su lente se parece a la principal, se corrigen con la lente principal (`rescate=1`). El log cuenta `rescatados=`.
+
 ## E7e — Objetos que se mueven al mover la cabeza (F10)
 - Probada la E7d: **¡adiós al fantasma!** El arma sigue a la cabeza y apenas desaparece nada (alguna cosa muy lejana, unos milisegundos).
 - Nuevo fallo: los **objetos** (barandillas, raíles, carteles...) se desplazan un poco al mover el visor y vuelven a su sitio al pararte. El escenario no.
