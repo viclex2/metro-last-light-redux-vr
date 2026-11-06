@@ -28,7 +28,7 @@ Lo que falta para considerarlo jugable (detalle en [`docs/ESTADO.md`](docs/ESTAD
 - Meta Quest 3S con **Steam Link** (también vale ALVR: lo único que importa es que pase por SteamVR).
 
 ## Instalación
-1. Descarga la `d3d11.dll` de la última versión en [**Releases**](https://github.com/viclex2/metro-ll-redux-vr/releases/latest).
+1. Descarga la `d3d11.dll` de la última versión en [**Releases**](https://github.com/viclex2/metro-ll-redux-vr/releases/latest). Si la Release tarda, la última compilada está siempre en [`bin/d3d11.dll`](https://github.com/viclex2/metro-ll-redux-vr/raw/main/bin/d3d11.dll).
 2. Descarga `openvr_api.dll` (64 bits) de Valve: https://github.com/ValveSoftware/openvr/blob/master/bin/win64/openvr_api.dll
 3. Copia las dos en la carpeta del juego, junto a `metro.exe`:
    `C:\Program Files (x86)\Steam\steamapps\common\Metro Last Light Redux\`

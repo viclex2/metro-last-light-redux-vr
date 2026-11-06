@@ -18,7 +18,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Instalar el compilador (mingw-w64)
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+        timeout-minutes: 8
+        run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 gcc-mingw-w64-x86-64
 
       - name: Compilar d3d11.dll
         run: sh build.sh && ls -la d3d11.dll
