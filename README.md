@@ -33,8 +33,8 @@ Lo que falta para considerarlo jugable (detalle en [`docs/ESTADO.md`](docs/ESTAD
 3. Copia las dos en la carpeta del juego, junto a `metro.exe`:
    `C:\Program Files (x86)\Steam\steamapps\common\Metro Last Light Redux\`
 4. Abre **SteamVR** con el visor conectado y luego el juego.
-5. En partida, espera **tres pitidos subiendo** (a los pocos segundos): la DLL ha encontrado el FOV del juego. Un pitido grave = no lo encontró (lo reintenta solo; también con Shift+F7).
-6. Pulsa **F9** para activar el modo VR.
+5. Pon `r_base_fov 90` y `r_blur_level 0` en los dos `user.cfg`: el de la carpeta del juego y el de `%LOCALAPPDATA%\4A Games\Metro Last Light\<número>\`. Si la línea no está, añádela.
+6. En partida, pulsa **F9** para activar el modo VR. La primera vez, no toques el ratón 2 s mientras se calibra (dos pitidos subiendo = listo).
 
 Para quitar el mod, borra o renombra `d3d11.dll` (por ejemplo, a `d3d11.dll.off`).
 
@@ -42,10 +42,9 @@ Para quitar el mod, borra o renombra `d3d11.dll` (por ejemplo, a `d3d11.dll.off`
 | Tecla | Qué hace |
 |---|---|
 | F9 / Insert | Activar o desactivar el modo VR |
-| F8 | Linterna sí/no: con F9, el juego "mira" más ancho para que no desaparezcan cosas al girar la cabeza |
-| Shift + F7 | Buscar otra vez el FOV del juego |
 | F5 / F6 / F7 | Estéreo / luces del visor / lente del visor, sí o no (pruebas) |
 | Shift + B | Recentrar el visor (y poner a cero el giro del teclado) |
+| Shift + R | Calibrar otra vez el ratón de la cabeza (deja el ratón quieto 2 s) |
 | Shift + Y | Arma con el mundo / arma pegada a la pantalla |
 | Shift + H | Buscador automático de la cámara del juego (herramienta de desarrollo) |
 | Flechas, Shift + J/L/I/K/U/O/N/M | Girar o mover la vista a mano (pruebas) |

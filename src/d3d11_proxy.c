@@ -1,5 +1,5 @@
 /*
- * HITO E6 - d3d11.dll (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7 - d3d11.dll (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -161,8 +161,12 @@ static int cfg_fov = 1;
 static int cfg_novsync = 1;
 static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
-static int cfg_linterna = 1;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
+static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
+static int cfg_raton = 1;               /* (E7) la cabeza mueve el raton: el juego gira con tu cabeza */
+static int cfg_raton_pitch = 1;         /* tambien arriba/abajo */
+static int cfg_raton_lag = 0;           /* cuantos envios tarda el juego en notar el raton */
+static float cfg_raton_pmax = 70.0f;    /* hasta cuantos grados arriba/abajo se lleva al juego (el resto lo pone H) */
 static int cfg_fakehead = 0;
 static int cfg_lights = 1;
 static volatile LONG g_l7 = 0, g_l3 = 0;
@@ -183,7 +187,7 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E6)\r\n"
+    "# (marca de version: E7)\r\n"
     "# cabeza_falsa=1: SIN visor (p.ej. para capturar con RenderDoc): las flechas hacen de cabeza\r\n"
     "cabeza_falsa=0\r\n"
     "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = linterna | Shift+F7 = buscar otra vez el FOV del juego\r\n"
@@ -191,9 +195,18 @@ static const char CFG_DEFAULT[] =
     "luces_visor=1\r\n"
     "# linterna=1: con F9, el juego 'mira' mas ancho (su FOV sube a linterna_grados) solo para decidir QUE dibuja.\r\n"
     "#   La imagen se sigue haciendo con la lente del visor. Asi, al girar la cabeza, lo que miras ya esta dibujado. 0 = no tocar el FOV\r\n"
-    "linterna=1\r\n"
+    "linterna=0\r\n"
     "# linterna_grados: FOV vertical del juego con F9 (el normal es 50.6). Mas = mas margen para girar la cabeza, pero la grafica dibuja mas (60 a 160)\r\n"
     "linterna_grados=140\r\n"
+    "# raton_cabeza=1: (E7) con F9, la cabeza MUEVE EL RATON: el juego gira de verdad hacia donde miras (puedes mirar\r\n"
+    "#   detras de ti). Al pulsar F9 la primera vez se calibra solo: deja el raton quieto 2 s (dos pitidos subiendo = listo).\r\n"
+    "#   Shift+R = calibrar otra vez. 0 = como la E6 (el juego mira donde el raton y la cabeza solo mueve la imagen)\r\n"
+    "raton_cabeza=1\r\n"
+    "# raton_inclinacion=1: tambien arriba/abajo (hasta raton_max_grados; lo que pase lo pone la DLL)\r\n"
+    "raton_inclinacion=1\r\n"
+    "raton_max_grados=70\r\n"
+    "# raton_retraso: cuantos envios tarda el juego en notar el raton (0 o 1). Si al girar la cabeza el mundo 'patina', prueba el otro\r\n"
+    "raton_retraso=0\r\n"
     "# reloj_hilos=1: solo se para el reloj al hilo que dibuja (el resto, sonido etc., sigue normal). 0 = a todos\r\n"
     "reloj_hilos=1\r\n"
     "# estereo: con F9. 2 = sincronizado (el juego dibuja izq y der del MISMO instante: se para su reloj en el 2o ojo)\r\n"
@@ -266,6 +279,10 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ipd_escala"))      cfg_ipdscale = fv;
     else if (!strcmp(s, "reloj_hilos"))     cfg_clock_thread = v;
     else if (!strcmp(s, "linterna"))        cfg_linterna = v;
+    else if (!strcmp(s, "raton_cabeza"))     cfg_raton = v;
+    else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
+    else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
+    else if (!strcmp(s, "raton_max_grados")) cfg_raton_pmax = (fv < 0.0f) ? 0.0f : (fv > 85.0f ? 85.0f : fv);
     else if (!strcmp(s, "linterna_grados")) cfg_linterna_deg = (fv < 60.0f) ? 60.0f : (fv > 160.0f ? 160.0f : fv);
     else if (!strcmp(s, "cabeza_falsa"))    cfg_fakehead = v;
     else if (!strcmp(s, "luces_visor"))     cfg_lights = v;
@@ -299,7 +316,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "marca de version: E6)")) {
+        if (!strstr(buf, "marca de version: E7)")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -723,6 +740,23 @@ static float wrap_pi(float a);
 /* (E6) La camara del juego ya NO se toca: el raton la mueve como siempre y la cabeza solo mueve lo que se ve
  * en las gafas (H). Lo de E4-E5h (camara_juego) daba el "mundo marron" y se ha quitado. Ver docs/ESTADO.md */
 static void publish_H(void);
+/* (E7) la cabeza mueve el raton */
+#define RT_HIST 8
+static volatile LONG g_rt_cal = 0;          /* 0 sin calibrar, 1 calibrando, 2 listo, -1 fallo */
+static ULONGLONG g_rt_cal_retry = 0;
+static float g_rt_kx = 0, g_rt_ky = 0;      /* radianes que gira el juego por cada paso de raton (x = giro, y = inclinacion) */
+static LONG g_rt_cx = 0, g_rt_cy = 0;       /* pasos mandados por la cabeza (en total, desde el ultimo reinicio) */
+static LONG g_rt_hx[RT_HIST], g_rt_hy[RT_HIST];
+static volatile LONG g_rt_hi = 0;
+static volatile LONG g_rt_reset = 1;
+static float g_rt_Rg[3][3] = {{1,0,0},{0,1,0},{0,0,1}}, g_rt_dg[3] = {0,0,0};   /* cabeza respecto al cuerpo (ultima) */
+static float g_rt_lastcam[12];              /* filas de giro de la ultima camara principal (original) */
+static volatile LONG g_rt_havecam = 0;
+static float g_rt_unwrap = 0, g_rt_last = 0;
+static volatile LONG g_rt_resid = 0;        /* mayor desajuste del ultimo segundo, en decimas de grado */
+static volatile LONG g_rt_sent = 0;         /* pasos mandados en el ultimo segundo */
+static int raton_active(void);
+static void raton_make_H(const float *f);
 static int rd_float(const float *p, float *v) { SIZE_T g = 0; return ReadProcessMemory(GetCurrentProcess(), p, v, 4, &g) && g == 4; }
 static int wr_float(float *p, float v) { SIZE_T g = 0; return WriteProcessMemory(GetCurrentProcess(), p, &v, 4, &g) && g == 4; }
 
@@ -743,7 +777,9 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         g_cam_fx = f[8]; g_cam_fy = f[9]; g_cam_fz = f[10];
         g_cam_pitch = asinf(fy);
         g_orig_P00 = f[24]; g_orig_P11 = f[29]; g_orig_P22 = f[34]; g_orig_P23 = f[35];
+        memcpy(g_rt_lastcam, f, sizeof(g_rt_lastcam)); g_rt_havecam = 1;
         InterlockedIncrement(&g_cam_seq);
+        if (g_mode == 1 && raton_active()) { raton_make_H(f); publish_H(); }
     }
 
     InterlockedIncrement(&g_cams);
@@ -1505,6 +1541,7 @@ static PFN_Submit       p_Submit = NULL;
 typedef unsigned char (*PFN_PollEvent)(void *ev, uint32_t size);
 static PFN_PollEvent    p_PollEvent = NULL;
 static int head_apply(const OvrPose *pz);
+static void raton_step(void);
 static OvrMat34 g_frame_pose;              /* postura con la que se esta dibujando este fotograma */
 static OvrMat34 g_eye_pose[2];             /* postura con la que se dibujo la ultima imagen de cada ojo */
 static volatile LONG g_have_frame_pose = 0;
@@ -1778,6 +1815,7 @@ static void vr_after_present(void)
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) fp.mat.m[i][j] = R[i][j];
         fp.valid = 1;
         if (head_apply(&fp)) publish_H();
+        raton_step();
         return;
     }
     if (!cfg_vrimg || g_head_state != 1 || !p_WaitGetPoses) return;
@@ -1820,6 +1858,7 @@ static void vr_after_present(void)
     /* esta postura es la que SteamVR espera para el proximo fotograma: la usamos para dibujarlo */
     if (rp[0].valid) { g_frame_pose = rp[0].mat; g_have_frame_pose = 1; }
     if (cfg_head && head_apply(&rp[0])) publish_H();
+    raton_step();
 }
 
 /* Lee el visor y deja preparada g_headH. Devuelve 1 si ha cambiado algo. */
@@ -1852,6 +1891,7 @@ static int head_apply(const OvrPose *pz)
         memcpy(g_refR, Ry, sizeof(Ry));
         memcpy(g_refP, P, sizeof(P));
         g_head_recenter = 0;
+        g_rt_reset = 1;
         vr_log("VISOR: centrado");
     }
     /* giro y desplazamiento de la cabeza respecto a la referencia (coordenadas de OpenVR) */
@@ -1879,14 +1919,187 @@ static int head_apply(const OvrPose *pz)
         H[i][3] = -(Rg[0][i]*dg[0] + Rg[1][i]*dg[1] + Rg[2][i]*dg[2]);
         Hi[i][3] = dg[i];
     }
-    memcpy(g_headH, H, sizeof(H));
-    memcpy(g_headHi, Hi, sizeof(Hi));
+    memcpy(g_rt_Rg, Rg, sizeof(Rg)); memcpy(g_rt_dg, dg, sizeof(dg));
+    if (raton_active() && g_rt_havecam) raton_make_H(g_rt_lastcam);
+    else { memcpy(g_headH, H, sizeof(H)); memcpy(g_headHi, Hi, sizeof(Hi)); }
     /* para el log: hacia donde mira (columna "adelante") e inclinacion */
     g_head_yaw   = atan2f(Rg[0][2], Rg[2][2]) * RAD2DEG;
     g_head_pitch = asinf(clampf(Rg[1][2], -1.0f, 1.0f)) * RAD2DEG;
     g_head_roll  = atan2f(-Rg[1][0], Rg[1][1]) * RAD2DEG;
     g_head_dx = dg[0]; g_head_dy = dg[1]; g_head_dz = dg[2];
     return 1;
+}
+
+/* ------------------------------------------------ (E7) la cabeza mueve el raton */
+/* En vez de escribir en la memoria de la camara (E4-E5h, daba el "mundo marron"), la DLL mueve el raton por ti,
+ * como si lo movieras tu. Asi es el PROPIO juego el que gira hacia donde miras: decide bien que dibujar (tambien
+ * detras de ti), las luces cuadran y el arma apunta donde miras. Lo que falte (el juego va un pelin por detras,
+ * inclinar la cabeza de lado, moverla, cada ojo) lo pone H, calculado con la camara REAL de cada fotograma:
+ *   cuerpo  = camara del juego menos lo que ha girado por nuestro raton  (Rb)
+ *   deseado = cuerpo * cabeza                                            (Rd = Rb * Rg)
+ *   H       = [ Rd^T * Rcam | -Rg^T * dg ]                                                                       */
+static int raton_active(void) { return cfg_raton && g_rt_cal == 2 && g_mode == 1 && (g_head_ok || cfg_fakehead); }
+
+/* camara (a mundo) a partir de giro e inclinacion, como la del juego: columnas derecha, arriba, adelante */
+static void euler_cam(float yaw, float pitch, float M[3][3])
+{
+    float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+    M[0][0] = cy;  M[0][1] = -sy * sp; M[0][2] = sy * cp;
+    M[1][0] = 0;   M[1][1] = cp;       M[1][2] = sp;
+    M[2][0] = -sy; M[2][1] = -cy * sp; M[2][2] = cy * cp;
+}
+
+static LONG rt_applied(const LONG *h)
+{
+    int lag = cfg_raton_lag; if (lag >= RT_HIST) lag = RT_HIST - 1;
+    return h[(g_rt_hi - lag + RT_HIST * 4) % RT_HIST];
+}
+
+static void raton_make_H(const float *f)
+{
+    float Rc[3][3], Rb[3][3], Rd[3][3], A[3][3];
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Rc[i][j] = f[j * 4 + i];   /* camara del juego -> mundo */
+    float G = atan2f(f[8], f[10]), fy = f[9]; if (fy > 1) fy = 1; if (fy < -1) fy = -1;
+    float Pg = asinf(fy);
+    float yb = G - g_rt_kx * (float)rt_applied(g_rt_hx);
+    float pb = Pg - g_rt_ky * (float)rt_applied(g_rt_hy);
+    euler_cam(yb, pb, Rb);
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+        float a = 0; for (int k = 0; k < 3; k++) a += Rb[i][k] * g_rt_Rg[k][j]; Rd[i][j] = a;
+    }
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+        float a = 0; for (int k = 0; k < 3; k++) a += Rd[k][i] * Rc[k][j]; A[i][j] = a;
+    }
+    float H[4][4], Hi[4][4], t[3];
+    memset(H, 0, sizeof(H)); memset(Hi, 0, sizeof(Hi)); H[3][3] = Hi[3][3] = 1.0f;
+    for (int i = 0; i < 3; i++) t[i] = -(g_rt_Rg[0][i] * g_rt_dg[0] + g_rt_Rg[1][i] * g_rt_dg[1] + g_rt_Rg[2][i] * g_rt_dg[2]);
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) { H[i][j] = A[i][j]; Hi[i][j] = A[j][i]; }
+        H[i][3] = t[i];
+        Hi[i][3] = -(A[0][i] * t[0] + A[1][i] * t[1] + A[2][i] * t[2]);
+    }
+    memcpy(g_headH, H, sizeof(H));
+    memcpy(g_headHi, Hi, sizeof(Hi));
+    /* desajuste = lo que H tiene que girar (sin contar inclinar la cabeza de lado): adelante de A */
+    float c = clampf(A[2][2], -1.0f, 1.0f);
+    LONG r = (LONG)(acosf(c) * RAD2DEG * 10.0f);
+    if (r > g_rt_resid) g_rt_resid = r;
+}
+
+static void rt_send(LONG dx, LONG dy)
+{
+    if (!dx && !dy) return;
+    INPUT in; memset(&in, 0, sizeof(in));
+    in.type = INPUT_MOUSE; in.mi.dx = dx; in.mi.dy = dy; in.mi.dwFlags = MOUSEEVENTF_MOVE;
+    SendInput(1, &in, sizeof(in));
+}
+
+static int game_has_focus(void)
+{
+    HWND w = GetForegroundWindow(); DWORD pid = 0;
+    if (!w) return 0;
+    GetWindowThreadProcessId(w, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+/* espera a que la camara del juego deje de moverse; devuelve 0 si no llegan camaras */
+static int rt_wait_still(int ms)
+{
+    float py = g_cam_yaw, pp = g_cam_pitch; int still = 0; LONG s0 = g_cam_seq;
+    for (int t = 0; t < ms; t += 40) {
+        Sleep(40);
+        if (fabsf(wrap_pi(g_cam_yaw - py)) < 0.0005f && fabsf(g_cam_pitch - pp) < 0.0005f) still++; else still = 0;
+        py = g_cam_yaw; pp = g_cam_pitch;
+        if (still >= 5 && g_cam_seq != s0) return 1;
+    }
+    return g_cam_seq != s0;
+}
+
+static DWORD WINAPI raton_cal_thread(LPVOID u)
+{
+    (void)u;
+    vr_log("RATON: calibrando (no muevas el raton 2 s)...");
+    const LONG N = 400, NP = 200;
+    if (!rt_wait_still(1500)) { vr_log("RATON: no veo la camara del juego; entra en partida"); goto fail; }
+    float y0 = g_cam_yaw, p0 = g_cam_pitch;
+    for (int k = 0; k < 10; k++) { rt_send(N / 10, 0); Sleep(15); }
+    rt_wait_still(2500);
+    float y1 = g_cam_yaw;
+    for (int k = 0; k < 10; k++) { rt_send(-N / 10, 0); Sleep(15); }
+    rt_wait_still(2500);
+    float y2 = g_cam_yaw;
+    LONG dir = (p0 > 0) ? 1 : -1;                       /* inclinacion: hacia el centro, para no chocar con el tope */
+    for (int k = 0; k < 10; k++) { rt_send(0, dir * NP / 10); Sleep(15); }
+    rt_wait_still(2500);
+    float p1 = g_cam_pitch;
+    for (int k = 0; k < 10; k++) { rt_send(0, -dir * NP / 10); Sleep(15); }
+    rt_wait_still(2500);
+    float kx = wrap_pi(y1 - y0) / (float)N, ky = (p1 - p0) / (float)(dir * NP);
+    vr_log("RATON: giro %.4f -> %.4f -> %.4f rad | inclinacion %.4f -> %.4f rad (vuelve a %.4f)",
+           (double)y0, (double)y1, (double)y2, (double)p0, (double)p1, (double)g_cam_pitch);
+    if (fabsf(kx) < 1e-5f || fabsf(kx) > 0.05f || fabsf(wrap_pi(y2 - y0)) > 0.25f * fabsf(kx * N)) {
+        vr_log("RATON: el giro no responde bien al raton (%.6f rad por paso); sin raton_cabeza", (double)kx); goto fail;
+    }
+    if (fabsf(ky) < 1e-5f || fabsf(ky) > 0.05f) {
+        vr_log("RATON: la inclinacion no responde (%.6f); solo giro", (double)ky); ky = 0;
+    }
+    g_rt_kx = kx; g_rt_ky = ky; g_rt_reset = 1;
+    InterlockedExchange(&g_rt_cal, 2);
+    vr_log("RATON: LISTO. %.5f grados por paso (giro), %.5f (inclinacion). La cabeza ya mueve el juego",
+           (double)(kx * RAD2DEG), (double)(ky * RAD2DEG));
+    Beep(1000, 90); Beep(1400, 120);
+    return 0;
+fail:
+    g_rt_cal_retry = GetTickCount64() + 15000;
+    InterlockedExchange(&g_rt_cal, -1);
+    Beep(400, 300);
+    return 0;
+}
+
+static void raton_calibrate(void)
+{
+    LONG c = g_rt_cal;
+    if (c == 1) return;
+    if (InterlockedCompareExchange(&g_rt_cal, 1, c) != c) return;
+    HANDLE th = CreateThread(NULL, 0, raton_cal_thread, NULL, 0, NULL);
+    if (th) CloseHandle(th); else g_rt_cal = -1;
+}
+
+/* despues de cada Present (en estereo sincronizado, una vez por pareja): mandar el raton que toca */
+static void raton_step(void)
+{
+    if (!cfg_raton || g_mode != 1 || !(g_head_ok || cfg_fakehead)) { g_rt_reset = 1; return; }
+    LONG c = g_rt_cal;
+    if (c == 0 || (c == -1 && GetTickCount64() > g_rt_cal_retry && g_rt_cal_retry)) {
+        if (g_rt_havecam && game_has_focus()) { g_rt_cal_retry = 0; raton_calibrate(); }
+        return;
+    }
+    if (c != 2) return;
+    float yh = atan2f(g_rt_Rg[0][2], g_rt_Rg[2][2]);
+    float ph = asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f));
+    if (g_rt_reset) {
+        g_rt_reset = 0; g_rt_cx = g_rt_cy = 0;
+        for (int i = 0; i < RT_HIST; i++) g_rt_hx[i] = g_rt_hy[i] = 0;
+        g_rt_unwrap = yh; g_rt_last = yh;
+        vr_log("RATON: empiezo (cuerpo = donde mira ahora el juego)");
+    }
+    g_rt_unwrap += wrap_pi(yh - g_rt_last); g_rt_last = yh;
+    if (!game_has_focus()) return;                       /* sin el juego delante no se mueve el raton de Windows */
+    LONG nx = (LONG)lroundf(g_rt_unwrap / g_rt_kx) - g_rt_cx, ny = 0;
+    if (cfg_raton_pitch && g_rt_ky != 0) {
+        float pm = g_cam_pitch - g_rt_ky * (float)rt_applied(g_rt_hy);   /* lo que has inclinado tu con el raton */
+        float lim = cfg_raton_pmax / RAD2DEG;
+        float tp = clampf(pm + ph, -lim, lim);
+        ny = (LONG)lroundf((tp - pm) / g_rt_ky) - g_rt_cy;
+    }
+    if (nx > 3000) nx = 3000; if (nx < -3000) nx = -3000;
+    if (ny > 3000) ny = 3000; if (ny < -3000) ny = -3000;
+    rt_send(nx, ny);
+    g_rt_cx += nx; g_rt_cy += ny;
+    LONG hi = (g_rt_hi + 1) % RT_HIST;
+    g_rt_hx[hi] = g_rt_cx; g_rt_hy[hi] = g_rt_cy;
+    g_rt_hi = hi;
+    InterlockedExchangeAdd(&g_rt_sent, labs(nx) + labs(ny));
 }
 
 /* ------------------------------------------------ buscador de la camara en memoria (Shift+H) */
@@ -2476,6 +2689,13 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             }
             prevh = hh;
         }
+        /* Shift + R: calibrar otra vez el raton de la cabeza */
+        {
+            static int prevr = 0;
+            int r = rsh && (GetAsyncKeyState('R') & 0x8000) != 0;
+            if (r && !prevr) { vr_log(">>> Shift+R: calibrar el raton otra vez"); g_rt_cal = 0; Beep(600, 150); }
+            prevr = r;
+        }
         /* Shift + Y: arma pegada a la pantalla <-> arma girando con el mundo */
         {
             static int prevg = 0;
@@ -2571,8 +2791,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -2742,7 +2962,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E6: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

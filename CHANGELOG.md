@@ -2,6 +2,17 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7 — La cabeza mueve el ratón: el juego gira de verdad con tu cabeza
+- Probada la E6: el FOV del juego **no cambia en directo** (ninguno de los números probados cambia la lente). En cambio, **`r_base_fov 90` en los dos user.cfg sí funciona** (el log pasa de 50.6 a 90). El 100 que había lo ignoraba: 90 parece el máximo. Ahora `linterna=0` por defecto.
+- En VR, con el FOV a 90: no hay marrón, 72 fps y de frente se ve bien. Pero, girando mucho la cabeza (más de 120°, mirar atrás) con el ratón quieto, salen **zonas grises sin dibujar**: la linterna no llega detrás.
+- **Nuevo `raton_cabeza=1`:** con F9, la DLL **mueve el ratón por ti** según giras la cabeza, como si lo movieras tú. Así es el propio juego el que gira hacia donde miras, por la puerta de delante, sin escribir en su memoria: dibuja lo que miras de verdad y no debería salir marrón. Lo que el juego va por detrás, inclinar la cabeza de lado, moverla y la posición de cada ojo los pone H, calculado con la cámara real de cada fotograma.
+  - La primera vez que pulsas F9 se **calibra solo**: gira y vuelve un poco, así que no muevas el ratón 2 s. **Dos pitidos subiendo = listo**; uno grave = no pudo (lo reintenta en 15 s). **Shift+R** = calibrar otra vez.
+  - Arriba/abajo, el juego se lleva hasta `raton_max_grados=70`; lo que pase lo pone la DLL.
+  - Solo mueve el ratón si el juego está en primer plano.
+  - Tu ratón real sigue funcionando: gira el "cuerpo".
+- El log, cada segundo: `raton=1` (activo), `desajuste=` (grados que corrige la DLL; poco = bien) y `pasos=` (ratón mandado).
+- Desenfoque de movimiento quitado (`r_blur_level 0` en los dos user.cfg).
+
 ## E6 — La linterna: el juego mira más ancho (sin tocar su cámara)
 - **Fuera `camara_juego` / F8 del todo.** La cámara del juego vuelve a ser solo del ratón. La cabeza solo mueve lo que se ve en las gafas (lo que ya iba bien y no da marrón).
 - **Buscador automático del FOV del juego.** Al entrar en partida (tras unos 5 s viendo la cámara) busca solo el número del FOV en memoria y lo comprueba subiéndolo 20° un instante. **Tres pitidos subiendo = encontrado.** Un pitido grave = no lo encontró (lo reintenta solo, hasta 4 veces).

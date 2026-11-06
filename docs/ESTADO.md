@@ -82,6 +82,16 @@ Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego si
 - Mientras prueba candidatos con F9 activo, los fps bajan a unos 24 durante unos 30 s.
 - **Siguiente prueba, sin DLL nueva:** poner `r_base_fov 90` en los **dos** user.cfg (el de la carpeta del juego y el de `%LOCALAPPDATA%\4A Games\...\<id>\`) y `linterna=0` en la config. Mirar en el log si `fov_juego=` pasa de 50.6 a 90. Si funciona, la linterna se agranda desde el arranque y no hace falta buscar nada en memoria.
 
+## E7: la cabeza mueve el ratón (6/11)
+- **FOV del juego:** `r_base_fov 90` en los **dos** user.cfg funciona (más de 90 lo ignora). El de AppData es `%LOCALAPPDATA%\4A Games\Metro Last Light\<id>\user.cfg`; la carpeta se llama "Metro Last Light", sin "Redux". Desenfoque: `r_blur_level 0`.
+- La linterna sola no basta: al mirar atrás con el ratón quieto, el juego no dibuja nada (zonas grises).
+- **Solución en prueba (E7):** la DLL manda movimientos de ratón (SendInput) para que **el juego gire con la cabeza**, por la puerta de delante. Lo que sobra lo corrige H = [Rd^T·Rcam | −Rg^T·dg], con Rd = cuerpo·cabeza, y cuerpo = cámara del juego menos lo girado por nuestro ratón.
+  - Se calibra sola: radianes por paso de ratón, en giro e inclinación.
+  - Si el mundo "patina" al girar, probar `raton_retraso=1`.
+- Pendiente: probar en VR y ver `desajuste=` en el log. Riesgos:
+  - suavizado o aceleración del ratón en el juego;
+  - el tope de inclinación del juego.
+
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.
 - Claude compila la DLL con mingw-w64 para probarla y, en cada versión, actualiza `CHANGELOG.md`, este archivo y `VERSION`. Al subirlo, GitHub Actions crea la Release con la DLL.
