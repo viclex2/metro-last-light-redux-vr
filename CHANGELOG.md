@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7c — Detective del fotograma anterior (Shift+D)
+- Prueba de la E7b: el "marrón" es en realidad **un fantasma**, un trozo de imagen (el arma, el escenario) repetido en otro sitio y sin luz. **Sale en cuanto el visor se mueve lo más mínimo**, también sin estéreo (F5), y **desaparece con el visor totalmente quieto**.
+- Eso apunta a que el juego **mezcla el fotograma anterior**, una especie de "estela", con unas matrices de cámara que nosotros no corregimos.
+- **Shift+D:** durante 10 s busca en todos los cajones las matrices de la cámara **del fotograma anterior** y apunta en el log dónde están (`ANTERIOR: ...`). Se usa sin F9, moviendo el ratón.
+
 ## E7b — Arreglo: el juego daba giros locos al perderse el visor un instante
 - Probada la E7: **se calibra bien** (0,09° por paso) y **el juego gira con la cabeza**. En el vídeo, las luces se ven bien y el arma sale delante al mirar a cualquier lado.
 - Fallo: si SteamVR perdía el visor un instante, la DLL "volvía a empezar" y mandaba otra vez todo el giro de la cabeza, de modo que el juego daba un giro de más. Pasó docenas de veces seguidas (`RATON: empiezo...`).

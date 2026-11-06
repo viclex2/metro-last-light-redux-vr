@@ -1,5 +1,5 @@
 /*
- * HITO E7b - d3d11.dll (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7c - d3d11.dll (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -757,6 +757,10 @@ static volatile LONG g_rt_resid = 0;        /* mayor desajuste del ultimo segund
 static volatile LONG g_rt_sent = 0;         /* pasos mandados en el ultimo segundo */
 static int raton_active(void);
 static void raton_make_H(const float *f);
+/* (E7c) detective del fotograma ANTERIOR: busca en los cajones las matrices de la camara de hace un fotograma */
+static float g_pv_cur[88], g_pv_prev[88];   /* camara principal ORIGINAL: actual y la del fotograma anterior */
+static volatile LONG g_pv_have = 0;         /* 2 = hay actual y anterior distintas */
+static volatile ULONGLONG g_pv_until = 0;   /* buscar hasta esta hora (Shift+D) */
 static int rd_float(const float *p, float *v) { SIZE_T g = 0; return ReadProcessMemory(GetCurrentProcess(), p, v, 4, &g) && g == 4; }
 static int wr_float(float *p, float v) { SIZE_T g = 0; return WriteProcessMemory(GetCurrentProcess(), p, &v, 4, &g) && g == 4; }
 
@@ -778,6 +782,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         g_cam_pitch = asinf(fy);
         g_orig_P00 = f[24]; g_orig_P11 = f[29]; g_orig_P22 = f[34]; g_orig_P23 = f[35];
         memcpy(g_rt_lastcam, f, sizeof(g_rt_lastcam)); g_rt_havecam = 1;
+        memcpy(g_pv_cur, f, sizeof(g_pv_cur));   /* (E7c) la camara principal de este fotograma */
         InterlockedIncrement(&g_cam_seq);
         if (g_mode == 1 && raton_active()) { raton_make_H(f); publish_H(); }
     }
@@ -1056,6 +1061,70 @@ static PFN_Unmap     g_orig_Unmap = NULL;
 static PFN_UpdateSub g_orig_UpdateSub = NULL;
 static PFN_Present   g_orig_Present = NULL;
 
+
+/* (E7c) Con la camara moviendose, busca en el cajon trozos (4 numeros seguidos) de la camara del fotograma
+ * ANTERIOR que ya no coinciden con la actual. Si el juego guarda eso, lo usa para mezclar con el fotograma
+ * anterior (la "estela"/fantasma), y habra que corregirlo tambien. */
+static void prev_detective(void *res, const void *data, UINT bw)
+{
+    static struct { UINT bw; int idx; int what; } seen[48]; static int nseen = 0;
+    if (g_pv_have < 2 || bw < 16 || bw > 8192 || GetTickCount64() > g_pv_until || nseen >= 46 || res == g_cam_buf) return;
+    /* objetivos: filas y columnas de V (0..11), iV (12..23), VP (56..71) e iVP (72..87) del fotograma anterior */
+    static const int base[4] = { 0, 12, 56, 72 }; static const char *bn[4] = { "V", "iV", "VP", "iVP" };
+    float tg[24][4]; int tw[24], nt = 0;
+    for (int m = 0; m < 4; m++) {
+        int rows = (m < 2) ? 3 : 4;
+        for (int r = 0; r < 4; r++) {
+            float row[4], col[4], crow[4], ccol[4]; int ok = 1;
+            for (int c = 0; c < 4; c++) {
+                row[c]  = g_pv_prev[base[m] + r * 4 + c];   crow[c] = g_pv_cur[base[m] + r * 4 + c];
+                col[c]  = (c < rows) ? g_pv_prev[base[m] + c * 4 + r] : 0; ccol[c] = (c < rows) ? g_pv_cur[base[m] + c * 4 + r] : 0;
+            }
+            if (r < rows) {
+                memcpy(tg[nt], row, sizeof(row)); tw[nt++] = m * 16 + r; (void)crow;
+            }
+            if (rows == 4) {
+                memcpy(tg[nt], col, sizeof(col)); tw[nt++] = m * 16 + 8 + r; (void)ccol;
+            }
+            (void)ok;
+        }
+    }
+    if (!nt) return;
+    static float buf[2048]; SIZE_T got = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), data, buf, bw, &got) || got != bw) return;
+    for (UINT i = 0; i + 4 <= bw / 4; i++) {
+        if (!isfinite(buf[i]) || fabsf(buf[i]) < 1e-3f) continue;
+        for (int t = 0; t < nt; t++) {
+            int hit = 1;
+            for (int c = 0; c < 4 && hit; c++) if (!(fabsf(buf[i + c] - tg[t][c]) <= 1e-4f + 1e-4f * fabsf(tg[t][c]))) hit = 0;
+            if (!hit) continue;
+            int dup = 0;
+            for (int k = 0; k < nseen; k++) if (seen[k].bw == bw && seen[k].idx == (int)i) dup = 1;
+            if (dup) continue;
+            seen[nseen].bw = bw; seen[nseen].idx = i; seen[nseen].what = tw[t]; nseen++;
+            int m = tw[t] / 16, rr = tw[t] % 16;
+            vr_log("ANTERIOR: cajon ancho=%u (VS hueco %d, PS hueco %d, CS hueco %d) casilla %u = %s %s %d del fotograma ANTERIOR",
+                   bw, slot_of(res), slot_in(g_ps_bound, res), slot_in(g_cs_bound, res), i, bn[m], rr < 8 ? "fila" : "columna", rr % 8);
+            static UINT dumped[12]; static int nd = 0; int was = 0;
+            for (int k = 0; k < nd; k++) if (dumped[k] == bw) was = 1;
+            if (!was && nd < 12) {
+                dumped[nd++] = bw;
+                char line[1200]; int L = 0;
+                for (UINT q = 0; q < bw / 4 && q < 96; q++) {
+                    L += snprintf(line + L, sizeof(line) - L, "%s%.5g", (q % 16) ? " " : "", (double)buf[q]);
+                    if (q % 16 == 15 || q + 1 == bw / 4 || q == 95) { vr_log("   [%u..] %s", q - (q % 16), line); L = 0; }
+                }
+                char l2[1200]; L = 0;
+                for (int q = 0; q < 88; q++) {
+                    L += snprintf(l2 + L, sizeof(l2) - L, "%s%.5g", (q % 16) ? " " : "", (double)g_pv_prev[q]);
+                    if (q % 16 == 15 || q == 87) { vr_log("   camara ANTERIOR [%d..] %s", q - (q % 16), l2); L = 0; }
+                }
+            }
+            break;
+        }
+    }
+}
+
 static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub,
                                         D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE *m)
 {
@@ -1181,6 +1250,7 @@ static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext *c, ID3D11Resource *r
             check_camera(p.p, (void *)p.p, r, p.bw, p.type, "Map");   /* leer/cambiar ANTES de soltar */
         slot_stuff(r, &p);
         if (g_mode == 1) lens_detective(r, p.p, p.bw);
+        prev_detective(r, p.p, p.bw);
     }
     g_orig_Unmap(c, r, sub);
 }
@@ -1194,6 +1264,7 @@ static void STDMETHODCALLTYPE hk_UpdateSub(ID3D11DeviceContext *c, ID3D11Resourc
         if (!box && bw >= CAM_BYTES)
             check_camera(src, NULL, r, bw, 0, "UpdateSubresource");
         if (!box && g_mode == 1) lens_detective(r, src, bw);
+        if (!box) prev_detective(r, src, bw);
         int slot = slot_of(r);
         if (slot >= 0) {
             InterlockedIncrement(&g_slot_upd[slot]);
@@ -1373,7 +1444,14 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     if (cfg_novsync && vr_active()) sync = 0;   /* SteamVR marca el ritmo */
     if (real_frame) { InterlockedIncrement(&g_real_frames); vr_submit_frame(sc); }
     HRESULT hr = next(sc, sync, flags);
-    if (real_frame) vr_after_present();
+    if (real_frame) {
+        /* (E7c) foto de la camara de este fotograma: en el siguiente, es "la anterior" */
+        static float last[88]; float dd = 0;
+        for (int q = 56; q < 72; q++) dd += fabsf(g_pv_cur[q] - last[q]);
+        memcpy(g_pv_prev, g_pv_cur, sizeof(g_pv_prev)); memcpy(last, g_pv_cur, sizeof(last));
+        g_pv_have = (dd > 1e-3f) ? 2 : 0;      /* solo si la camara se ha movido de un fotograma a otro */
+        vr_after_present();
+    }
     t_in_present = 0;
     return hr;
 }
@@ -2696,6 +2774,13 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             }
             prevh = hh;
         }
+        /* Shift + D: (E7c) 10 s buscando matrices del fotograma anterior (mueve el raton mientras) */
+        {
+            static int prevd = 0;
+            int dd = rsh && (GetAsyncKeyState('D') & 0x8000) != 0;
+            if (dd && !prevd) { g_pv_until = GetTickCount64() + 10000; vr_log(">>> Shift+D: busco 10 s la camara del fotograma ANTERIOR (mueve el raton)"); Beep(800, 100); Beep(800, 100); }
+            prevd = dd;
+        }
         /* Shift + R: calibrar otra vez el raton de la cabeza */
         {
             static int prevr = 0;
@@ -2969,7 +3054,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E7b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
