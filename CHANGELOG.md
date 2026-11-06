@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7h — Cada dibujo con su cámara, calculada con W
+- Probada la E7g: **los objetos dejan de moverse**, pero **vuelve el fantasma**. Sospecha: un mismo objeto se dibuja en varias pasadas y no todas recibían el mismo H (unas el propio y otras el general), así que las pasadas no coincidían.
+- Posible causa: el "iW" del cajón no siempre es la inversa de W; podría ser la de las normales. Ahora la inversa la calcula la DLL con W.
+- El log cuenta `propios=` (con su cámara), `fallan=` (con el H general) e `iW_raro=` (veces que el iW del cajón no era la inversa de W).
+
 ## E7g — Cada dibujo con su propia cámara
 - Probada la E7f: los objetos siguen moviéndose (`rescatados=0`: no era eso).
 - Nueva idea: cada dibujo del hueco 0 trae, además de WV, la inversa de su posición en el mundo (iW). Así se puede saber **qué cámara usó exactamente ese dibujo**: V = WV·iW.

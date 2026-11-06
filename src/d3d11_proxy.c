@@ -1,5 +1,5 @@
 /*
- * HITO E7g - d3d11.dll (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7h - d3d11.dll (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -619,7 +619,7 @@ static volatile LONG g_ord_flag = 0, g_ord_before = 0, g_ord_after = 0, g_ord_cb
  * fotograma antes de terminar el actual, asi que los dibujos (hueco 0, luces) usan el H fijado en Present
  * con la camara de entonces, y la camara nueva el suyo propio: asi cuadran entre si aunque te muevas */
 static float g_rt_Rb[3][3]; static volatile LONG g_rt_haveRb = 0;   /* (E7g) el "cuerpo" (camara sin nuestro raton) */
-static volatile LONG g_cb0_own = 0;
+static volatile LONG g_cb0_own = 0, g_iw_bad = 0, g_own_fail = 0;
 static void finish_H(float A[4][4], float Ai[4][4], float H[4][4], float Hi[4][4]);
 static void cam_own_H(const float *f, float H[4][4], float Hi[4][4])
 {
@@ -758,12 +758,21 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
     }
     float Hown[4][4], Hiown[4][4];
     if (cfg_porobjeto && raton_active()) {
-        /* (E7g) la camara que uso este dibujo: V = WV * iW (iW esta en el propio cajon) */
-        float iW4[4][4], Vu[4][4]; int ok = 1;
-        memset(iW4, 0, sizeof(iW4)); iW4[3][3] = 1.0f;
-        for (int i = 0; i < 12; i++) if (!isfinite(f[12 + i])) ok = 0;
+        /* (E7h) la camara que uso este dibujo: V = WV * W^-1. La inversa la calculamos nosotros con W
+         * (en la E7g se usaba el iW del cajon, que en algunos dibujos no es la inversa de W) */
+        float W4[4][4], iW4[4][4], Vu[4][4]; int ok = 1;
+        memset(W4, 0, sizeof(W4)); W4[3][3] = 1.0f;
+        for (int i = 0; i < 12; i++) if (!isfinite(f[i])) ok = 0;
         if (ok) {
-            for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) iW4[i][j] = f[12 + i * 4 + j];
+            for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) W4[i][j] = f[i * 4 + j];
+            if (!inv4(W4, iW4)) ok = 0;
+        }
+        if (ok) {
+            {   /* diagnostico: el iW del cajon, es la inversa de W? */
+                float dmax = 0;
+                for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) { float d = fabsf(iW4[i][j] - f[12 + i * 4 + j]); if (d > dmax) dmax = d; }
+                if (dmax > 1e-3f) InterlockedIncrement(&g_iw_bad);
+            }
             mul4(WV4, iW4, Vu);
             for (int r = 0; r < 3 && ok; r++) {
                 float l = Vu[r][0] * Vu[r][0] + Vu[r][1] * Vu[r][1] + Vu[r][2] * Vu[r][2];
@@ -772,6 +781,7 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
             float Vr[12];
             for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) Vr[i * 4 + j] = Vu[i][j];
             if (ok && view_H(Vr, Hown, Hiown)) { H = (const float (*)[4])Hown; InterlockedIncrement(&g_cb0_own); }
+            else InterlockedIncrement(&g_own_fail);
         }
     }
     mul4(WVP, iWV4, Pe);                                   /* la lente de este dibujo */
@@ -3026,8 +3036,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: propios=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)InterlockedExchange(&g_cb0_own, 0), (long)InterlockedExchange(&g_cb0_resc, 0), (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)InterlockedExchange(&g_cb0_own, 0), (long)InterlockedExchange(&g_own_fail, 0), (long)InterlockedExchange(&g_iw_bad, 0), (long)InterlockedExchange(&g_cb0_resc, 0), (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -3197,7 +3207,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E7g: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7h: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
