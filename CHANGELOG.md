@@ -2,6 +2,17 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8b — Lo que enseñó RenderDoc: un H por fotograma, y el hueco 7 con el del fotograma anterior
+- Captura de RenderDoc (sin F9, moviendo el ratón), analizada dibujo a dibujo:
+  - Dentro de un fotograma **todos** los dibujos usan la misma cámara (la del hueco 1).
+  - En la E7d, el H de los dibujos se fijaba en Present con la cámara del fotograma **anterior**. Por eso los objetos se desplazaban al moverte.
+  - Los objetos que se dibujan en grupo llevan su posición respecto a la cámara (WV) en un cajón de vértices, y la lente la toman del hueco 1.
+  - El hueco 7 guarda la cámara **del fotograma anterior** (para reaprovechar su imagen). Por eso, cuando le dábamos el H de ahora, salía el fantasma.
+- Ahora:
+  - **Un solo H por fotograma**, hecho con la cámara de ese fotograma (la primera que llega después de Present), para todos: hueco 0, hueco 1 y luces.
+  - En el hueco 7, la lente actual lleva el H actual, y la cámara anterior lleva **el H y la lente que se usaron en el fotograma anterior** (en estéreo, los del otro ojo).
+- El log cuenta `fotogramas_H=` y `luces7_anterior=`.
+
 ## E8 — Volvemos a la base de la E7d
 - Probada la E7i: igual (los objetos bien, pero con fantasma). Se decide **quedarse con la E7d**, sin fantasma y con los objetos moviéndose un poco, y estudiar los objetos con **RenderDoc**.
 - `por_objeto=0` por defecto: funciona como la E7d. Con `por_objeto=1`, como la E7i, para comparar.
