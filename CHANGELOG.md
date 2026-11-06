@@ -2,6 +2,17 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E6 — La linterna: el juego mira más ancho (sin tocar su cámara)
+- **Fuera `camara_juego` / F8 del todo.** La cámara del juego vuelve a ser solo del ratón. La cabeza solo mueve lo que se ve en las gafas (lo que ya iba bien y no da marrón).
+- **Buscador automático del FOV del juego.** Al entrar en partida (tras unos 5 s viendo la cámara) busca solo el número del FOV en memoria y lo comprueba subiéndolo 20° un instante. **Tres pitidos subiendo = encontrado.** Un pitido grave = no lo encontró (lo reintenta solo, hasta 4 veces).
+  - Busca 6 formas del número: grados, radianes, medio ángulo o tangente (vertical) y grados o radianes (horizontal). Prueba primero los grados.
+  - Ya no mira dentro de nuestra propia DLL (antes se encontraba a sí mismo).
+- **Con F9, el FOV del juego sube a 140° en vertical** (`linterna_grados`). Al quitar F9 vuelve a su valor. La imagen se sigue haciendo con la lente del visor: solo cambia **qué** se dibuja, no **cómo** se ve.
+- **F8 = linterna sí/no** (para comparar al momento). **Shift+F7 = buscar otra vez** el FOV.
+- **Seguridad:** si el número deja de cuadrar con la lente del juego durante 8 s (cambio de nivel, etc.), se suelta y se busca de nuevo.
+- La DLL ya admite lentes muy anchas (antes descartaba todo lo que pasara de ~120°).
+- El log dice el margen para girar la cabeza y, cada segundo, `fov_juego=` y `linterna=`.
+
 ## E5h — Se engancha también bajo RenderDoc
 - Con RenderDoc el juego arrancaba pero la DLL no se enganchaba: ni pitidos, ni F9, ni resumen en el log. Bajo RenderDoc la creación del dispositivo llega distinta (con D3D11CreateDeviceAndSwapChain y quizá sin pedir el contexto).
 - Ahora, si no viene el contexto, se saca del dispositivo. El log apunta qué llega ("enganchando: dispositivo=... contexto=... swapchain=...").

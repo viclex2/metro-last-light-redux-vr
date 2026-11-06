@@ -7,7 +7,7 @@ El proyecto empezó para aprender cómo funciona un mod VR por dentro, pero **la
 
 El mod es y será siempre **gratuito**. Solo necesitas tener el juego original.
 
-> ⚠️ **Estado actual: en desarrollo (versión temprana).** Ya funciona mucho (estéreo, la cámara siguiendo a la cabeza, la imagen en el visor), pero todavía hay fallos gráficos y cosas por hacer. Ver [`docs/ESTADO.md`](docs/ESTADO.md) para lo que funciona y lo que falta, y [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
+> ⚠️ **Estado actual: en desarrollo (versión temprana).** Ya funciona mucho (estéreo, la cabeza moviendo la vista, la imagen en el visor), pero todavía hay fallos gráficos y cosas por hacer. Ver [`docs/ESTADO.md`](docs/ESTADO.md) para lo que funciona y lo que falta, y [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
 
 ## Cómo funciona
 Es una `d3d11.dll` "adaptadora" (proxy) que se pone en la carpeta del juego. Pasa todo a la `d3d11.dll` real de Windows y, por el camino, lee y cambia lo que hace falta: la cámara, la lente, la imagen final. Además habla con **SteamVR** (OpenVR) para leer el visor y mandarle la imagen. No modifica ningún archivo del juego: para quitarlo basta con borrar la DLL.
@@ -33,7 +33,7 @@ Lo que falta para considerarlo jugable (detalle en [`docs/ESTADO.md`](docs/ESTAD
 3. Copia las dos en la carpeta del juego, junto a `metro.exe`:
    `C:\Program Files (x86)\Steam\steamapps\common\Metro Last Light Redux\`
 4. Abre **SteamVR** con el visor conectado y luego el juego.
-5. En partida, espera **dos pitidos agudos**: la DLL ha encontrado la cámara del juego.
+5. En partida, espera **tres pitidos subiendo** (a los pocos segundos): la DLL ha encontrado el FOV del juego. Un pitido grave = no lo encontró (lo reintenta solo; también con Shift+F7).
 6. Pulsa **F9** para activar el modo VR.
 
 Para quitar el mod, borra o renombra `d3d11.dll` (por ejemplo, a `d3d11.dll.off`).
@@ -42,6 +42,9 @@ Para quitar el mod, borra o renombra `d3d11.dll` (por ejemplo, a `d3d11.dll.off`
 | Tecla | Qué hace |
 |---|---|
 | F9 / Insert | Activar o desactivar el modo VR |
+| F8 | Linterna sí/no: con F9, el juego "mira" más ancho para que no desaparezcan cosas al girar la cabeza |
+| Shift + F7 | Buscar otra vez el FOV del juego |
+| F5 / F6 / F7 | Estéreo / luces del visor / lente del visor, sí o no (pruebas) |
 | Shift + B | Recentrar el visor (y poner a cero el giro del teclado) |
 | Shift + Y | Arma con el mundo / arma pegada a la pantalla |
 | Shift + H | Buscador automático de la cámara del juego (herramienta de desarrollo) |
@@ -51,7 +54,7 @@ Para quitar el mod, borra o renombra `d3d11.dll` (por ejemplo, a `d3d11.dll.off`
 - `%TEMP%\metro_vr_log.txt`: el registro de todo lo que hace. Pásalo cuando algo falle.
 - `%TEMP%\metro_vr_config.txt`: los interruptores. Se renueva solo al cambiar de versión; los más útiles:
   - `estereo=2` sincronizado, `1` fotogramas alternos, `0` mono.
-  - `camara_juego=1`: la cámara de verdad del juego sigue a la cabeza.
+  - `linterna=1`: con F9, el FOV del juego sube a `linterna_grados` (140, en vertical) solo para decidir qué se dibuja; la imagen sigue con la lente del visor.
   - `luces_visor=1`: corrige los cajones de luces y sombras.
   - `fov_visor=1`: el juego dibuja con el campo de visión del visor.
   - `visor_imagen=1`: manda la imagen al visor.

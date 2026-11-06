@@ -2,7 +2,7 @@
 
 *Este archivo sustituye al antiguo `contexto_metro_vr.md`. Se actualiza con cada versión.*
 
-**Versión actual: E5h** (se engancha bajo RenderDoc). **Próxima: E6, con el nuevo plan; ver "Cambio de rumbo".** Antes: **E5g** (cabeza falsa con las flechas para capturar con RenderDoc sin visor). Antes: E5f (RenderDoc sin bucle) y E5e (igual que la E5d pero encuentra mejor la cámara). Antes: **E5d** (Shift+F8 formas de escribir la cámara, Shift+F7 buscador del FOV). Anteriores: E5c y E5b (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
+**Versión actual: E6** (la linterna: FOV del juego agrandado; **pendiente de probar**). Antes: **E5h** (se engancha bajo RenderDoc). Antes: **E5g** (cabeza falsa con las flechas para capturar con RenderDoc sin visor). Antes: E5f (RenderDoc sin bucle) y E5e (igual que la E5d pero encuentra mejor la cámara). Antes: **E5d** (Shift+F8 formas de escribir la cámara, Shift+F7 buscador del FOV). Anteriores: E5c y E5b (probada el 5/11: la cámara sigue a la cabeza sin soltarse; en el vídeo las luces se ven normales; pendiente de que el usuario lo confirme)
 
 **Meta del proyecto:** un mod VR **estable, jugable, bien hecho y gratuito**, no solo un experimento de aprendizaje. Las decisiones se toman pensando en que lo use cualquier jugador: que no se cierre, que se instale fácil y que se vea bien.
 
@@ -17,13 +17,13 @@
 - **Lente del visor** (Quest 3S, 104 × 98 grados, una por ojo); ojos a 58 mm.
 - **Estéreo sincronizado** (`estereo=2`), a 72 fps, que son 36 parejas por segundo.
 - **Arma:** reconocida por la lente estrecha (P00 = 1,83) y girando con el mundo.
-- ~~La cámara del juego sigue a la cabeza (`camara_juego=1`)~~: funciona, pero da el mundo marrón y **se abandona** (ver "Cambio de rumbo").
+- ~~La cámara del juego sigue a la cabeza (`camara_juego=1`)~~: funcionaba, pero daba el mundo marrón. **Quitada en la E6** (ver "Cambio de rumbo").
 
 ## ❌ Problemas conocidos
 | # | Problema | Pistas / qué se sabe |
 |---|---|---|
 | 1 | **Mundo marrón, sin luces ni sombras**, con la cámara siguiendo a la cabeza | La pasada de luces usa los huecos 7 (lente) y 3 (receta de rayos, casillas 36–43) con la lente original. **La E5 los corrige; falta probarla.** Puede haber más: el hueco 12 (256 bytes) también tiene 1/P11 y otra matriz. |
-| 2 | Paredes y cosas que aparecen y desaparecen; imagen borrosa | Posibles causas: oclusión con el fotograma anterior, desenfoque de movimiento (`r_blur_level`) o AA temporal. Pendiente probar `r_blur_level 0` y `estereo=0`. |
+| 2 | Paredes y cosas que aparecen y desaparecen; imagen borrosa | **La E6 ataca lo de desaparecer con la linterna (falta probar).** Otras posibles causas: oclusión con el fotograma anterior, desenfoque de movimiento (`r_blur_level`) o AA temporal. Pendiente probar `r_blur_level 0` y `estereo=0`. |
 | 3 | HUD, mirilla y punto rojo dobles | El 2D se pinta igual en los dos ojos. Hay que identificar los dibujos del HUD y desplazarlos en cada ojo. |
 | 4 | Cambiar las opciones gráficas con el mod puesto cierra el juego | Peta en la d3d11 de Windows (+0x17206B) tras SetFullscreenState(0), aunque esté `visor_imagen=0`. Sin el mod no pasa. Mientras tanto: renombrar la DLL a `.off`. |
 | 5 | A veces el panel de SteamVR no se quita | Sin diagnosticar. |
@@ -39,6 +39,7 @@
   - Giro = atan2(f.x, f.z); inclinación = asin(f.y) de la fila "adelante" de m_V.
   - Mundo zurdo (+Z adelante, Y arriba).
 - **Punteros fijos** (más 0x650): metro.exe+0xD08E18, D08E28, D08E48, D092D8, D092E8, D09318, D09778, D09788, D097B8, D09C28, D09C38 y D09C88.
+- **FOV del juego en memoria (E6):** se busca solo al entrar en partida, en 6 formas (grados/radianes/medio ángulo/tangente en vertical, grados/radianes en horizontal). Se confirma si al subirlo 20° la lente (P11) cambia justo lo esperado. Con F9 se pone a `linterna_grados` (140). Con 140° en vertical: P11 ≈ 0,36 y P00 ≈ 0,20.
 - **user.cfg:** `r_base_fov 50.625` (FOV vertical; no tocar), `show_game_ui`, `r_blur_level`, `r_vsync`.
 
 ## Notas de la última prueba (E5b)
@@ -63,11 +64,18 @@ Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego si
 - **Geo-11 y el arreglo 3D Vision de Helifax para Metro Redux:** para comparar cómo deberían verse las luces en estéreo.
 - **Rehacer el mod sobre 3DMigoto:** más sólido, pero es casi empezar de cero.
 
-## Siguiente paso: versión E6
-1. Quitar F8 / `camara_juego` del todo y dejar el juego en paz.
-2. Buscador automático del FOV del juego (lo que hacía Shift+F7 en la E5d/E5e) al entrar en partida, con pitido al encontrarlo. Con F9 lo sube a unos 140°; al quitar F9, lo devuelve.
-3. Prueba del usuario: F9, ratón quieto, mirar con la cabeza arriba, abajo y a los lados. ¿Siguen desapareciendo cosas? Pasar el log.
-4. Después: el HUD (problema 3) y luego los mandos (manos y arma).
+## Hecho en la E6
+1. ✅ Quitado F8 / `camara_juego` del todo.
+2. ✅ Buscador automático del FOV al entrar en partida (tres pitidos subiendo al encontrarlo). Con F9 lo sube a 140°; al quitar F9, lo devuelve. F8 = linterna sí/no; Shift+F7 = buscar otra vez.
+
+## Siguiente paso: probar la E6
+1. Entrar en partida y esperar los **tres pitidos subiendo** (FOV encontrado). Si suena un pitido grave, no lo encontró: pasar el log.
+2. F9, ratón quieto, mirar con la cabeza arriba, abajo y a los lados. ¿Siguen desapareciendo cosas? ¿Sigue el mundo marrón?
+3. Comparar con **F8** (linterna sí/no) mirando a un lado: con ella deberían dejar de salir huecos.
+4. Pasar el log (`fov_juego=` debería pasar de 50,6 a 140 con F9).
+5. Después: el HUD (problema 3) y luego los mandos (manos y arma).
+
+**Si algo falla:** puede que el juego también use el FOV para el detalle a distancia (LOD) y se vean cosas más simples de lejos; o que algún efecto (niebla, reflejos) dependa del FOV. Se puede bajar `linterna_grados` (p. ej. 120) para probar.
 
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.

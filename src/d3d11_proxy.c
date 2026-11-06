@@ -1,5 +1,5 @@
 /*
- * HITO E5h - d3d11.dll (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (la camara del juego sigue la cabeza) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E6 - d3d11.dll (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -161,7 +161,8 @@ static int cfg_fov = 1;
 static int cfg_novsync = 1;
 static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
-static int cfg_cj = 1;
+static int cfg_linterna = 1;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
+static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
 static int cfg_fakehead = 0;
 static int cfg_lights = 1;
 static volatile LONG g_l7 = 0, g_l3 = 0;
@@ -182,15 +183,17 @@ static const char CFG_DEFAULT[] =
     "# FLECHAS = girar izq/der y mirar arriba/abajo (no hace falta modificador)\r\n"
     "# Con cualquier SHIFT pulsado (o Bloq Mayus activado): J/L = girar | I/K = arriba/abajo | U/O = inclinar | N/M = mover | B = reset\r\n"
     "# Con numerico (Bloq Num): 4/6 giro | 8/2 arriba/abajo | 7/9 inclinar | 1/3 mover | 5 = reset\r\n"
-    "# (marca de version: E5h)\r\n"
-    "# cabeza_falsa=1: SIN visor (p.ej. para capturar con RenderDoc): las flechas hacen de cabeza y mueven la camara del juego\r\n"
+    "# (marca de version: E6)\r\n"
+    "# cabeza_falsa=1: SIN visor (p.ej. para capturar con RenderDoc): las flechas hacen de cabeza\r\n"
     "cabeza_falsa=0\r\n"
-    "# Shift+F8 = cambiar como se escribe la camara del juego (para cazar lo marron) | Shift+F7 = buscar y agrandar el FOV del juego\r\n"
-    "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = camara_juego\r\n"
+    "# En el juego (para probar sin reiniciar): F5 = estereo | F6 = luces_visor | F7 = fov_visor | F8 = linterna | Shift+F7 = buscar otra vez el FOV del juego\r\n"
     "# luces_visor=1: corrige tambien los cajones de luces y sombras (hueco 7 = lente, hueco 3 = rayos de reconstruccion)\r\n"
     "luces_visor=1\r\n"
-    "# camara_juego=1: con F9, la camara DE VERDAD del juego sigue tu cabeza (asi no desaparecen cosas al girarla). 0 = como antes\r\n"
-    "camara_juego=1\r\n"
+    "# linterna=1: con F9, el juego 'mira' mas ancho (su FOV sube a linterna_grados) solo para decidir QUE dibuja.\r\n"
+    "#   La imagen se sigue haciendo con la lente del visor. Asi, al girar la cabeza, lo que miras ya esta dibujado. 0 = no tocar el FOV\r\n"
+    "linterna=1\r\n"
+    "# linterna_grados: FOV vertical del juego con F9 (el normal es 50.6). Mas = mas margen para girar la cabeza, pero la grafica dibuja mas (60 a 160)\r\n"
+    "linterna_grados=140\r\n"
     "# reloj_hilos=1: solo se para el reloj al hilo que dibuja (el resto, sonido etc., sigue normal). 0 = a todos\r\n"
     "reloj_hilos=1\r\n"
     "# estereo: con F9. 2 = sincronizado (el juego dibuja izq y der del MISMO instante: se para su reloj en el 2o ojo)\r\n"
@@ -262,7 +265,8 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "estereo"))         cfg_stereo = (iv < 0 || iv > 2) ? 2 : iv;
     else if (!strcmp(s, "ipd_escala"))      cfg_ipdscale = fv;
     else if (!strcmp(s, "reloj_hilos"))     cfg_clock_thread = v;
-    else if (!strcmp(s, "camara_juego"))    cfg_cj = v;
+    else if (!strcmp(s, "linterna"))        cfg_linterna = v;
+    else if (!strcmp(s, "linterna_grados")) cfg_linterna_deg = (fv < 60.0f) ? 60.0f : (fv > 160.0f ? 160.0f : fv);
     else if (!strcmp(s, "cabeza_falsa"))    cfg_fakehead = v;
     else if (!strcmp(s, "luces_visor"))     cfg_lights = v;
 }
@@ -295,7 +299,7 @@ static void load_config(const char *tmp)
     static char buf[8192]; DWORD got = 0;
     if (ReadFile(h, buf, sizeof(buf) - 1, &got, NULL)) {
         buf[got] = 0;
-        if (!strstr(buf, "E5h")) {
+        if (!strstr(buf, "marca de version: E6)")) {
             /* archivo de una version anterior: lo renovamos con los valores nuevos */
             CloseHandle(h);
             h = CreateFileA(g_cfgpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -435,7 +439,7 @@ static int is_real_cam(const float *f)
     if (!is_camera(f)) return 0;
     for (int i = 30; i < 56; i++)
         if (!isfinite(f[i])) return 0;
-    if (f[24] < 0.3f || f[29] < 0.3f || f[24] > 40.0f || f[29] > 40.0f) return 0;   /* P00, P11 */
+    if (f[24] < 0.05f || f[29] < 0.05f || f[24] > 40.0f || f[29] > 40.0f) return 0;   /* P00, P11 (0.05: con la linterna la lente es muy ancha) */
     if (fabsf(f[36] - 0.0f) > 1e-4f || fabsf(f[37] - 0.0f) > 1e-4f) return 0;       /* P30, P31 */
     if (fabsf(f[38] - 1.0f) > 1e-4f || fabsf(f[39]) > 1e-4f) return 0;              /* P32=1, P33=0 */
     return 1;
@@ -571,6 +575,7 @@ static void get_H(float H[4][4], float Hi[4][4])
 
 /* ---- lente del visor ---- filas 0 y 1 de la proyeccion (x e y); la profundidad (filas 2 y 3) es la del juego */
 static float g_fovrow[2][4];
+static float g_vis_L = 0, g_vis_R = 0, g_vis_UP = 0, g_vis_DN = 0;   /* bordes del visor (tangentes): para el margen de la linterna */
 static volatile LONG g_fov_ok = 0;
 static float g_eyeb[2][4];   /* trozo de la imagen para cada ojo: uMin vMin uMax vMax */
 
@@ -662,7 +667,7 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
     mul4(WVP, iWV4, Pe);                                   /* la lente de este dibujo */
     if (fabsf(Pe[3][2] - 1.0f) > 1e-3f || fabsf(Pe[3][3]) > 1e-3f ||
         fabsf(Pe[3][0]) > 1e-3f || fabsf(Pe[3][1]) > 1e-3f) return 0;
-    if (Pe[0][0] < 0.3f || Pe[1][1] < 0.3f) return 0;       /* no parece una lente en perspectiva */
+    if (Pe[0][0] < 0.05f || Pe[1][1] < 0.05f) return 0;     /* no parece una lente en perspectiva (0.05: linterna) */
     if (Pe[0][0] >= 1.428f && !g_arma) return 0;             /* lente estrecha (~57 grados): es el arma */
     if (cfg_fov && g_fov_ok) {
         fov_xy(Pe);                    /* WVP' = Plente_visor * H * WV */
@@ -715,147 +720,11 @@ static volatile LONG g_cam_seq = 0;
 static volatile float g_orig_P00 = 0, g_orig_P11 = 0, g_orig_P22 = 0, g_orig_P23 = 0;   /* lente ORIGINAL del juego */
 static float wrap_pi(float a);
 
-/* ---- camara DE VERDAD del juego (encontrada con el buscador): giro e inclinacion del raton ----
- * Objeto apuntado desde metro.exe+0xD08E18 (y otros); en +0x650 = -inclinacion, +0x654 = giro (radianes). */
-static const unsigned g_cj_offs[] = { 0xD08E18, 0xD08E28, 0xD08E48, 0xD092D8, 0xD092E8, 0xD09318,
-                                      0xD09778, 0xD09788, 0xD097B8, 0xD09C28, 0xD09C38, 0xD09C88 };
-static float * volatile g_cj_pitch = NULL, * volatile g_cj_yaw = NULL;
-static int g_cj_copy = 0;       /* bits: 1 = hay copia en +12/+16, 2 = hay copia en +24/+28 (se mueven igual) */
-static volatile LONG g_cj_active = 0;
-static volatile LONG g_cj_dirty = 0;
-static float g_dpsi = 0, g_dtheta = 0;     /* lo que le hemos sumado nosotros al giro / inclinacion */
-static float g_psi_prev = 0, g_th_prev = 0; /* lo ultimo que puso el raton (para saber si el juego borro lo nuestro) */
-static volatile LONG g_cj_resets = 0;
-static float g_Cd[3][3];                   /* orientacion que queremos para la camara (mundo) */
-static float g_Ym[3][3];                   /* giro del cuerpo (raton), para mover la cabeza de lado */
-static float g_head_Rg[3][3] = {{1,0,0},{0,1,0},{0,0,1}}, g_head_dg[3];
-static float g_lastV[9];
-
+/* (E6) La camara del juego ya NO se toca: el raton la mueve como siempre y la cabeza solo mueve lo que se ve
+ * en las gafas (H). Lo de E4-E5h (camara_juego) daba el "mundo marron" y se ha quitado. Ver docs/ESTADO.md */
 static void publish_H(void);
 static int rd_float(const float *p, float *v) { SIZE_T g = 0; return ReadProcessMemory(GetCurrentProcess(), p, v, 4, &g) && g == 4; }
 static int wr_float(float *p, float v) { SIZE_T g = 0; return WriteProcessMemory(GetCurrentProcess(), p, &v, 4, &g) && g == 4; }
-
-static void m3mul(const float A[3][3], const float B[3][3], float C[3][3])
-{
-    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { float a = 0; for (int k = 0; k < 3; k++) a += A[i][k] * B[k][j]; C[i][j] = a; }
-}
-static void yawm(float a, float R[3][3])
-{
-    float c = cosf(a), s_ = sinf(a);
-    float T[3][3] = {{c,0,s_},{0,1,0},{-s_,0,c}}; memcpy(R, T, sizeof(T));
-}
-static void pitchm(float a, float R[3][3])
-{
-    float c = cosf(a), s_ = sinf(a);
-    float T[3][3] = {{1,0,0},{0,c,s_},{0,-s_,c}}; memcpy(R, T, sizeof(T));
-}
-
-/* direcciones posibles de la "inclinacion" (la del giro va justo detras, +4) */
-static ULONG_PTR g_cj_scan[16]; static volatile LONG g_cj_nscan = 0; static volatile LONG g_cj_scanning = 0;
-
-/* Busqueda de emergencia por la "firma": inclinacion, giro, ?, inclinacion, giro, ?, inclinacion, giro
- * (tres copias seguidas). Solo si los punteros fijos no sirven en esta partida. */
-static DWORD WINAPI cj_sig_thread(LPVOID u)
-{
-    (void)u;
-    float yaw = g_cam_yaw, pitch = g_cam_pitch;
-    vr_log("CAMARA DEL JUEGO: los punteros fijos no sirven ahora; la busco por su forma en la memoria (unos segundos)...");
-    static float chunk[1 << 18];
-    MEMORY_BASIC_INFORMATION mbi; unsigned char *a = NULL; int n = 0;
-    while (n < 16 && VirtualQuery(a, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-        unsigned char *next = (unsigned char *)mbi.BaseAddress + mbi.RegionSize;
-        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && (mbi.Protect & PAGE_READWRITE) && !(mbi.Protect & PAGE_GUARD)) {
-            for (SIZE_T off = 0; off < mbi.RegionSize && n < 16; off += sizeof(chunk) - 64) {
-                SIZE_T want = mbi.RegionSize - off; if (want > sizeof(chunk)) want = sizeof(chunk);
-                SIZE_T got = 0;
-                if (!ReadProcessMemory(GetCurrentProcess(), (unsigned char *)mbi.BaseAddress + off, chunk, want, &got)) continue;
-                SIZE_T cnt = got / 4;
-                for (SIZE_T k = 0; k + 8 < cnt && n < 16; k++) {
-                    float pv = chunk[k], yv = chunk[k + 1];
-                    if (fabsf(-pv - pitch) > 0.03f) continue;
-                    if (fabsf(wrap_pi(yv - yaw)) > 0.03f) continue;
-                    if (!(fabsf(chunk[k + 3] - pv) < 0.6f) || !(fabsf(wrap_pi(chunk[k + 4] - yv)) < 0.6f) ||
-                        !(fabsf(chunk[k + 6] - pv) < 0.6f) || !(fabsf(wrap_pi(chunk[k + 7] - yv)) < 0.6f)) continue;
-                    if (fabsf(pv) < 0.01f && fabsf(yv) < 0.01f) continue;
-                    g_cj_scan[n++] = (ULONG_PTR)mbi.BaseAddress + off + k * 4;
-                }
-            }
-        }
-        if (next <= a) break;
-        a = next;
-    }
-    vr_log("CAMARA DEL JUEGO: busqueda por forma: %d candidatas", n);
-    g_cj_nscan = n;
-    g_cj_scanning = 0;
-    return 0;
-}
-
-static void cj_accept(ULONG_PTR pitch_addr, const char *via)
-{
-    float pv, yv;
-    rd_float((float *)pitch_addr, &pv); rd_float((float *)(pitch_addr + 4), &yv);
-    g_cj_pitch = (float *)pitch_addr; g_cj_yaw = (float *)(pitch_addr + 4);
-    /* las tres parejas (inclinacion, giro) seguidas son la camara: actual, objetivo y anterior. Se escriben
-     * SIEMPRE las tres; si solo escribiamos una, el juego la rehacia desde las otras al mover el raton */
-    g_cj_copy = 3;
-    {
-        float c1p = 0, c1y = 0, c2p = 0, c2y = 0;
-        rd_float(g_cj_pitch + 3, &c1p); rd_float(g_cj_yaw + 3, &c1y); rd_float(g_cj_pitch + 6, &c2p); rd_float(g_cj_yaw + 6, &c2y);
-        vr_log("CAMARA DEL JUEGO: parejas: (%.3f, %.3f) (%.3f, %.3f) (%.3f, %.3f)", pv, yv, c1p, c1y, c2p, c2y);
-    }
-    vr_log("CAMARA DEL JUEGO: encontrada (%s) en %p (inclinacion %.3f, giro %.3f)", via, (void *)pitch_addr, -pv, yv);
-    Beep(1200, 80); Beep(1500, 80);     /* dos pitidos agudos: camara del juego encontrada */
-}
-
-static void cj_find(void)
-{
-    if (g_cj_yaw || !g_cam_seq || g_cj_active) return;
-    ULONG_PTR exe = (ULONG_PTR)GetModuleHandleA(NULL);
-    /* lista de candidatas: primero los punteros fijos, luego lo que haya encontrado la busqueda por forma */
-    ULONG_PTR cand[32]; const char *src[32]; int nc = 0;
-    for (unsigned i = 0; i < sizeof(g_cj_offs) / sizeof(g_cj_offs[0]); i++) {
-        ULONG_PTR base = 0; SIZE_T g = 0;
-        if (!ReadProcessMemory(GetCurrentProcess(), (void *)(exe + g_cj_offs[i]), &base, 8, &g) || g != 8 || !base) continue;
-        cand[nc] = base + 0x650; src[nc] = "puntero fijo"; nc++;
-    }
-    for (int i = 0; i < g_cj_nscan && nc < 32; i++) { cand[nc] = g_cj_scan[i]; src[nc] = "busqueda por forma"; nc++; }
-
-    static ULONG_PTR cand_a = 0; static float cand_yaw = 0;
-    static int misses = 0;
-    int any = 0, seen_a = 0;
-    for (int i = 0; i < nc; i++) {
-        float pv, yv;
-        if (!rd_float((float *)cand[i], &pv) || !rd_float((float *)(cand[i] + 4), &yv)) continue;
-        if (!isfinite(pv) || !isfinite(yv) || fabsf(pv) > 10.0f || fabsf(yv) > 1000.0f) continue;   /* basura */
-        int nonzero = fabsf(yv) > 0.05f || fabsf(pv) > 0.05f;
-        if (!(fabsf(-pv - g_cam_pitch) < 0.05f && fabsf(wrap_pi(yv - g_cam_yaw)) < 0.05f && nonzero)) continue;
-        any = 1;
-        /* para fiarnos: tiene que cuadrar en DOS direcciones distintas de la camara */
-        if (cand_a != cand[i]) { if (!cand_a) { cand_a = cand[i]; cand_yaw = yv; seen_a = 1; } continue; }
-        seen_a = 1;
-        if (fabsf(wrap_pi(yv - cand_yaw)) < 0.15f) continue;
-        vr_log("CAMARA DEL JUEGO: comprobada en dos direcciones (%.2f y %.2f)", cand_yaw, yv);
-        cj_accept(cand[i], src[i]);
-        cand_a = 0; misses = 0;
-        return;
-    }
-    /* la que teniamos apuntada no cuadra AHORA (p.ej. porque el raton se esta moviendo): se le dan ~5 s antes de olvidarla */
-    static int a_miss = 0;
-    if (seen_a) a_miss = 0;
-    else if (cand_a && ++a_miss > 20) { cand_a = 0; a_miss = 0; }
-    if (!any) {
-        /* tras ~10 s sin ninguna que cuadre, buscar por forma (como mucho una vez por minuto) */
-        static ULONGLONG lastscan = 0;
-        ULONGLONG now = GetTickCount64();
-        if (++misses > 40 && now - lastscan > 60000 && InterlockedCompareExchange(&g_cj_scanning, 1, 0) == 0) {
-            lastscan = now; misses = 0;
-            HANDLE th = CreateThread(NULL, 0, cj_sig_thread, NULL, 0, NULL);
-            if (th) CloseHandle(th); else g_cj_scanning = 0;
-        }
-    }
-    static int warned = 0;
-    if (!warned++) vr_log("CAMARA DEL JUEGO: aun no la tengo confirmada; mueve el raton a los lados un poco (lo compruebo cada momento)");
-}
 
 static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT mapType, const char *via)
 {
@@ -868,36 +737,13 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
     }
     if (!is_real_cam(f)) return;
     /* solo la camara PRINCIPAL: forma de pantalla 16:9 (las camaras de reflejos/cubos son cuadradas) */
-    if (f[24] < 1.428f && f[24] > 0.3f && fabsf(f[29] / f[24] - g_aspect) < 0.03f) {
+    if (f[24] < 1.428f && f[24] > 0.05f && fabsf(f[29] / f[24] - g_aspect) < 0.03f) {
         float fy = f[9]; if (fy > 1) fy = 1; if (fy < -1) fy = -1;
         g_cam_yaw = atan2f(f[8], f[10]);
         g_cam_fx = f[8]; g_cam_fy = f[9]; g_cam_fz = f[10];
         g_cam_pitch = asinf(fy);
         g_orig_P00 = f[24]; g_orig_P11 = f[29]; g_orig_P22 = f[34]; g_orig_P23 = f[35];
         InterlockedIncrement(&g_cam_seq);
-        /* camara del juego girada con la cabeza: lo que falte se pone aqui:  H = [Cd^T*Cg | -Cd^T*Ym*dg] */
-        if (g_cj_active) {
-            float Vn[9] = { f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10] };
-            if (g_cj_dirty || memcmp(Vn, g_lastV, sizeof(Vn)) != 0) {
-                memcpy(g_lastV, Vn, sizeof(Vn));
-                g_cj_dirty = 0;
-                float Cg[3][3], CdT[3][3], Rot[3][3], t[3], ymd[3];
-                for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { Cg[i][j] = f[j * 4 + i]; CdT[i][j] = g_Cd[j][i]; }
-                m3mul(CdT, Cg, Rot);
-                for (int i = 0; i < 3; i++) ymd[i] = g_Ym[i][0] * g_head_dg[0] + g_Ym[i][1] * g_head_dg[1] + g_Ym[i][2] * g_head_dg[2];
-                for (int i = 0; i < 3; i++) t[i] = -(CdT[i][0] * ymd[0] + CdT[i][1] * ymd[1] + CdT[i][2] * ymd[2]);
-                float H[4][4], Hi[4][4];
-                memset(H, 0, sizeof(H)); memset(Hi, 0, sizeof(Hi)); H[3][3] = Hi[3][3] = 1.0f;
-                for (int i = 0; i < 3; i++) {
-                    for (int j = 0; j < 3; j++) { H[i][j] = Rot[i][j]; Hi[i][j] = Rot[j][i]; }
-                    H[i][3] = t[i];
-                    Hi[i][3] = -(Rot[0][i] * t[0] + Rot[1][i] * t[1] + Rot[2][i] * t[2]);
-                }
-                memcpy(g_headH, H, sizeof(H));
-                memcpy(g_headHi, Hi, sizeof(Hi));
-                publish_H();
-            }
-        }
     }
 
     InterlockedIncrement(&g_cams);
@@ -1728,6 +1574,7 @@ static void head_try_init(void)
                 float UP = fmaxf(e[0][3], e[1][3]), DN = fminf(e[0][2], e[1][2]);
                 vr_log("VISOR: lente ojo izq: %.3f %.3f %.3f %.3f | der: %.3f %.3f %.3f %.3f",
                        e[0][0], e[0][1], e[0][2], e[0][3], e[1][0], e[1][1], e[1][2], e[1][3]);
+                g_vis_L = L; g_vis_R = R; g_vis_UP = UP; g_vis_DN = DN;
                 if (R - L > 0.1f && UP - DN > 0.1f) {
                     float cx = (L + R) * 0.5f, hw = (R - L) * 0.5f, cy = (UP + DN) * 0.5f, hh = (UP - DN) * 0.5f;
                     float r0[4] = { 1.0f / hw, 0, -cx / hw, 0 }, r1[4] = { 0, 1.0f / hh, -cy / hh, 0 };
@@ -1919,101 +1766,10 @@ done_submit:
     ID3D11Texture2D_Release(bb);
 }
 
-static void cj_add(float dyaw, float dpitch_stored)
-{
-    for (int c = 0; c <= 2; c++) {
-        if (c && !(g_cj_copy & c)) continue;
-        float v;
-        if (dyaw != 0 && rd_float(g_cj_yaw + 3 * c, &v)) wr_float(g_cj_yaw + 3 * c, v + dyaw);
-        if (dpitch_stored != 0 && rd_float(g_cj_pitch + 3 * c, &v)) wr_float(g_cj_pitch + 3 * c, v + dpitch_stored);
-    }
-}
-
-/* Formas de escribir la camara (Shift+F8), para averiguar cual provoca lo marron:
- * 0 = giro e inclinacion en las 3 parejas | 1 = solo giro (3 parejas) | 2 = solo inclinacion (la principal)
- * 3 = giro e inclinacion solo en la principal | 4 = giro en las 3, inclinacion solo en la principal */
-static volatile LONG g_cj_wmode = 0;
-static const char *g_cj_wname[5] = { "giro+inclinacion en las 3 parejas", "solo giro", "solo inclinacion",
-                                     "giro+inclinacion solo en la pareja principal", "giro en las 3, inclinacion solo en la principal" };
-static int cj_wyaw(void)   { return g_cj_wmode != 2; }
-static int cj_wpitch(void) { return g_cj_wmode != 1; }
-static void cj_set(float yaw, float pitch_stored)
-{
-    int m = g_cj_wmode;
-    for (int c = 0; c <= 2; c++) {
-        if (c && !(g_cj_copy & c)) continue;
-        if (cj_wyaw() && (c == 0 || (m != 3)))          wr_float(g_cj_yaw + 3 * c, yaw);
-        if (cj_wpitch() && (c == 0 || (m != 3 && m != 4 && m != 2))) wr_float(g_cj_pitch + 3 * c, pitch_stored);
-    }
-}
-
-/* Mueve la camara de verdad del juego: raton + cabeza. Una vez por fotograma (o pareja de ojos). */
-static void cj_update(void)
-{
-    int want = cfg_cj && g_mode == 1 && g_cj_yaw && g_head_ok;
-    if (!want) {
-        if (g_cj_active) {
-            cj_set(g_psi_prev, -g_th_prev);     /* dejar solo lo que puso el raton */
-            g_dpsi = g_dtheta = 0;
-            g_cj_active = 0;
-            vr_log("CAMARA DEL JUEGO: suelto (vuelve a ser solo el raton)");
-        }
-        return;
-    }
-    float y, p;
-    if (!rd_float(g_cj_yaw, &y) || !rd_float(g_cj_pitch, &p) || !isfinite(y) || !isfinite(p)) {
-        vr_log("CAMARA DEL JUEGO: ya no se puede leer (cambio de nivel?); la busco otra vez");
-        g_cj_yaw = g_cj_pitch = NULL; g_cj_active = 0; g_dpsi = g_dtheta = 0;
-        return;
-    }
-    /* seguridad: lo que hay en esa memoria tiene que seguir cuadrando con la camara que vemos; si no, la soltamos */
-    {
-        static int bad = 0;
-        float ey = fminf(fabsf(wrap_pi(y - g_cam_yaw)), fabsf(wrap_pi(y + g_dpsi - g_cam_yaw)));
-        float ep = fminf(fabsf(-p - g_cam_pitch), fabsf(-p + g_dtheta - g_cam_pitch));
-        if (ey > 0.6f || ep > 0.6f) {
-            if (++bad > 30) {
-                vr_log("CAMARA DEL JUEGO: ya no cuadra con la imagen (giro %.2f vs %.2f); la suelto y la vuelvo a buscar", y, g_cam_yaw);
-                g_cj_yaw = g_cj_pitch = NULL; g_cj_active = 0; g_dpsi = g_dtheta = 0; bad = 0;
-                return;
-            }
-        } else bad = 0;
-    }
-    /* Lo que puso el raton: o el valor menos lo nuestro (el juego lo respeto) o el valor tal cual (el juego lo
-     * recalculo al mover el raton y borro lo nuestro). Nos quedamos con la opcion mas cercana a la de antes. */
-    float psi_m, th_m;
-    if (!g_cj_active) { psi_m = y; th_m = -p; }
-    else {
-        float a1 = y - g_dpsi, a2 = y;
-        psi_m = fabsf(wrap_pi(a1 - g_psi_prev)) <= fabsf(wrap_pi(a2 - g_psi_prev)) ? a1 : a2;
-        float b1 = -p - g_dtheta, b2 = -p;
-        th_m = fabsf(b1 - g_th_prev) <= fabsf(b2 - g_th_prev) ? b1 : b2;
-        if ((psi_m == a2 && fabsf(g_dpsi) > 0.01f) || (th_m == b2 && fabsf(g_dtheta) > 0.01f)) InterlockedIncrement(&g_cj_resets);
-    }
-    g_psi_prev = psi_m; g_th_prev = th_m;
-    float Y[3][3], X[3][3], B[3][3], Cd[3][3];
-    yawm(psi_m, Y); pitchm(th_m, X);
-    m3mul(Y, X, B);
-    m3mul(B, g_head_Rg, Cd);
-    float fx = Cd[0][2], fy = Cd[1][2], fz = Cd[2][2];
-    float psi_d = atan2f(fx, fz), th_d = asinf(clampf(fy, -1.0f, 1.0f));
-    if (th_d > 1.40f) th_d = 1.40f;
-    if (th_d < -1.40f) th_d = -1.40f;
-    float dps = wrap_pi(psi_d - psi_m), dth = th_d - th_m;
-    if (!cj_wyaw()) dps = 0;        /* lo que no se escribe en el juego, lo pone H (con la lente) */
-    if (!cj_wpitch()) dth = 0;
-    memcpy(g_Cd, Cd, sizeof(Cd)); memcpy(g_Ym, Y, sizeof(Y));
-    /* dejar el valor EXACTAMENTE en raton + cabeza, haya hecho el juego lo que haya hecho */
-    cj_set(y + wrap_pi(psi_m + dps - y), -(th_m + dth));
-    g_dpsi = dps; g_dtheta = dth;
-    g_cj_dirty = 1;
-    if (!g_cj_active) { g_cj_active = 1; vr_log("CAMARA DEL JUEGO: ahora sigue tu cabeza"); }
-}
-
 /* SteamVR quiere que la "escena" le pida las posturas una vez por fotograma (tambien marca el ritmo) */
 static void vr_after_present(void)
 {
-    /* SIN visor: cabeza falsa con las teclas, para poder probar (y capturar con RenderDoc) la camara del juego */
+    /* SIN visor: cabeza falsa con las teclas, para poder probar (y capturar con RenderDoc) sin el visor */
     if (cfg_fakehead && !(cfg_vrimg && g_head_state == 1 && p_WaitGetPoses)) {
         OvrPose fp; memset(&fp, 0, sizeof(fp));
         float y = -g_yaw * 0.01745329f, x = g_pitch * 0.01745329f;     /* OpenVR: girar a la derecha = -Y */
@@ -2022,7 +1778,6 @@ static void vr_after_present(void)
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) fp.mat.m[i][j] = R[i][j];
         fp.valid = 1;
         if (head_apply(&fp)) publish_H();
-        cj_update();
         return;
     }
     if (!cfg_vrimg || g_head_state != 1 || !p_WaitGetPoses) return;
@@ -2065,7 +1820,6 @@ static void vr_after_present(void)
     /* esta postura es la que SteamVR espera para el proximo fotograma: la usamos para dibujarlo */
     if (rp[0].valid) { g_frame_pose = rp[0].mat; g_have_frame_pose = 1; }
     if (cfg_head && head_apply(&rp[0])) publish_H();
-    cj_update();
 }
 
 /* Lee el visor y deja preparada g_headH. Devuelve 1 si ha cambiado algo. */
@@ -2125,13 +1879,8 @@ static int head_apply(const OvrPose *pz)
         H[i][3] = -(Rg[0][i]*dg[0] + Rg[1][i]*dg[1] + Rg[2][i]*dg[2]);
         Hi[i][3] = dg[i];
     }
-    memcpy(g_head_Rg, Rg, sizeof(Rg));
-    memcpy(g_head_dg, dg, sizeof(dg));
-    if (!g_cj_active) {
-        memcpy(g_headH, H, sizeof(H));
-        memcpy(g_headHi, Hi, sizeof(Hi));
-    }
-    g_cj_dirty = 1;
+    memcpy(g_headH, H, sizeof(H));
+    memcpy(g_headHi, Hi, sizeof(Hi));
     /* para el log: hacia donde mira (columna "adelante") e inclinacion */
     g_head_yaw   = atan2f(Rg[0][2], Rg[2][2]) * RAD2DEG;
     g_head_pitch = asinf(clampf(Rg[1][2], -1.0f, 1.0f)) * RAD2DEG;
@@ -2434,79 +2183,218 @@ static DWORD WINAPI scan_thread(LPVOID u)
     return 0;
 }
 
-/* ------------------------------------------------ buscador del FOV del juego (Shift+F7) */
-/* El juego decide que dibujar y que luces encender con su propio campo de vision (50.625 grados en vertical).
- * El visor ve 98 grados: lo de arriba/abajo se "recorta". Buscamos ese numero en memoria y lo agrandamos. */
+/* ------------------------------------------------ la linterna: FOV del juego agrandado (E6) */
+/* El juego solo dibuja lo que cae dentro de su "linterna": su campo de vision (50.6 grados en vertical, unos 80
+ * en horizontal), centrado donde apunta el raton. Las gafas ven 104 x 98: lo de fuera no se dibuja y salen huecos.
+ * Buscamos en memoria el numero del FOV del juego y, con F9, lo subimos a linterna_grados (en vertical).
+ * La imagen se sigue haciendo con la lente del visor (fov_xy): solo cambia QUE se dibuja, no COMO se ve. */
+#define FOV_KINDS 6
+#define FOV_MAXC 1000
 static volatile LONG g_fov_running = 0;
-static float * volatile g_fov_addr = NULL; static volatile int g_fov_kind = 0;   /* 0 grados, 1 radianes, 2 media (rad) */
-static float g_fov_target_deg = 110.0f;
-static float fov_value(int kind, float deg) { return kind == 0 ? deg : (kind == 1 ? deg * 0.01745329f : deg * 0.00872665f); }
+static float * volatile g_fov_addr = NULL;
+static volatile int g_fov_kind = 0;
+static float g_fov_aspect = 16.0f / 9.0f;     /* ancho/alto de la lente del juego (P11/P00) al encontrarlo */
+static volatile LONG g_fov_tries = 0;         /* busquedas automaticas seguidas sin exito */
+static volatile ULONGLONG g_fov_next_auto = 0;/* no buscar solo antes de esta hora */
+static float g_fov_saved = 0;                 /* lo que habia antes de agrandarlo */
+static volatile LONG g_fov_applied = 0;       /* 1 = ahora mismo esta agrandado */
+static const char *g_fov_kname[FOV_KINDS] = { "grados (vertical)", "radianes (vertical)", "medio angulo en radianes (vertical)",
+                                              "tangente del medio angulo (vertical)", "grados (horizontal)", "radianes (horizontal)" };
+
+/* el numero tal como lo guardaria el juego, para un FOV vertical de vdeg grados */
+static float fov_value(int kind, float vdeg)
+{
+    float hv = vdeg * 0.00872665f;                       /* medio angulo vertical (radianes) */
+    float hh = atanf(tanf(hv) * g_fov_aspect);           /* medio angulo horizontal */
+    switch (kind) {
+    case 0: return vdeg;
+    case 1: return hv * 2.0f;
+    case 2: return hv;
+    case 3: return tanf(hv);
+    case 4: return hh * 2.0f * RAD2DEG;
+    default: return hh * 2.0f;
+    }
+}
+
+/* FOV vertical con el que el juego decide que dibujar AHORA (sale de su lente original, antes de tocarla) */
+static float fov_game_vdeg(void) { float p = g_orig_P11; return p > 0 ? 2.0f * atanf(1.0f / p) * RAD2DEG : 0; }
+
+/* cuanto puedes girar la cabeza (respecto al raton) antes de que se vea el borde de la linterna */
+static void fov_log_margin(void)
+{
+    if (!(g_vis_R > g_vis_L) || !(g_vis_UP > g_vis_DN)) return;
+    float hv = cfg_linterna_deg * 0.00872665f;
+    float hh = atanf(tanf(hv) * g_fov_aspect);
+    float vh = fmaxf(atanf(g_vis_R), -atanf(g_vis_L)), vv = fmaxf(atanf(g_vis_UP), -atanf(g_vis_DN));
+    vr_log("FOV: margen para girar la cabeza sin ver bordes: unos %.0f grados a los lados y %.0f arriba/abajo",
+           (double)((hh - vh) * RAD2DEG), (double)((hv - vv) * RAD2DEG));
+}
+
+/* dejar de tocarlo (devolviendo lo que habia si estaba agrandado) */
+static void fov_release(const char *why)
+{
+    float *addr = g_fov_addr;
+    if (!addr) return;
+    if (g_fov_applied) wr_float(addr, g_fov_saved);
+    g_fov_applied = 0;
+    g_fov_addr = NULL;
+    vr_log("FOV: lo suelto (%s)", why);
+}
+
+/* espera a que el juego mande n camaras nuevas (como mucho ms milisegundos) */
+static int fov_wait_frames(LONG n, int ms)
+{
+    LONG s0 = g_cam_seq;
+    for (int t = 0; t < ms; t += 10) { if (g_cam_seq - s0 >= n) return 1; Sleep(10); }
+    return 0;
+}
 
 static DWORD WINAPI fovscan_thread(LPVOID u)
 {
-    (void)u;
-    if (!g_cam_seq || g_orig_P11 <= 0) { vr_log("FOV: aun no he visto la camara; entra en partida y vuelve a probar"); g_fov_running = 0; return 0; }
-    float p11 = g_orig_P11;
-    float vdeg = 2.0f * atanf(1.0f / p11) * RAD2DEG;          /* FOV vertical actual del juego */
-    vr_log("FOV: el juego ve ahora %.3f grados en vertical (P11=%.5f). Busco ese numero en memoria...", vdeg, p11);
-    float tgt[3] = { vdeg, vdeg * 0.01745329f, vdeg * 0.00872665f };
-    static ULONG_PTR cand[400]; static int ck[400]; int nc = 0;
+    int manual = (int)(INT_PTR)u;
+    Sleep(300);                                   /* por si se acaba de soltar: que la lente vuelva a la del juego */
+    if (!g_cam_seq || g_orig_P11 <= 0 || g_orig_P00 <= 0 || !fov_wait_frames(3, 1000)) {
+        vr_log("FOV: no veo la camara del juego ahora mismo; entra en partida");
+        g_fov_running = 0; return 0;
+    }
+    float vdeg = fov_game_vdeg();
+    g_fov_aspect = g_orig_P11 / g_orig_P00;
+    vr_log("FOV: busqueda %s. El juego ve %.3f grados en vertical (P11=%.5f, ancho/alto=%.3f). Busco ese numero en memoria...",
+           manual ? "a mano (Shift+F7)" : "automatica", (double)vdeg, (double)g_orig_P11, (double)g_fov_aspect);
+    float tgt[FOV_KINDS];
+    for (int k = 0; k < FOV_KINDS; k++) tgt[k] = fov_value(k, vdeg);
+
+    /* lo que NO hay que mirar: nuestra propia DLL y la pila de este hilo (ahi estan nuestras copias del numero) */
+    HMODULE me = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)fovscan_thread, &me);
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    ULONG_PTR st_lo = (ULONG_PTR)tib->StackLimit, st_hi = (ULONG_PTR)tib->StackBase;
+
+    static ULONG_PTR cand[FOV_MAXC]; static unsigned char ck[FOV_MAXC]; int nc = 0;
     static float chunk[1 << 18];
+    ULONGLONG t0 = GetTickCount64();
     MEMORY_BASIC_INFORMATION mbi; unsigned char *a = NULL;
-    while (nc < 400 && VirtualQuery(a, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+    while (nc < FOV_MAXC && VirtualQuery(a, &mbi, sizeof(mbi)) == sizeof(mbi)) {
         unsigned char *next = (unsigned char *)mbi.BaseAddress + mbi.RegionSize;
-        if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & PAGE_GUARD)) {
-            for (SIZE_T off = 0; off < mbi.RegionSize && nc < 400; off += sizeof(chunk)) {
+        ULONG_PTR rb = (ULONG_PTR)mbi.BaseAddress;
+        int skip = (me && mbi.AllocationBase == (void *)me) || (rb < st_hi && rb + mbi.RegionSize > st_lo);
+        if (!skip && mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & PAGE_GUARD)) {
+            for (SIZE_T off = 0; off < mbi.RegionSize && nc < FOV_MAXC; off += sizeof(chunk)) {
                 SIZE_T want = mbi.RegionSize - off; if (want > sizeof(chunk)) want = sizeof(chunk);
                 SIZE_T got = 0;
                 if (!ReadProcessMemory(GetCurrentProcess(), (unsigned char *)mbi.BaseAddress + off, chunk, want, &got)) continue;
-                for (SIZE_T i = 0; i < got / 4 && nc < 400; i++) {
+                for (SIZE_T i = 0; i < got / 4 && nc < FOV_MAXC; i++) {
                     float v = chunk[i];
-                    for (int k = 0; k < 3; k++)
-                        if (isfinite(v) && fabsf(v - tgt[k]) <= 2e-5f * tgt[k]) { cand[nc] = (ULONG_PTR)mbi.BaseAddress + off + i * 4; ck[nc] = k; nc++; break; }
+                    if (!isfinite(v) || v <= 0) continue;
+                    for (int k = 0; k < FOV_KINDS; k++)
+                        if (fabsf(v - tgt[k]) <= 1e-4f * tgt[k]) { cand[nc] = rb + off + i * 4; ck[nc] = (unsigned char)k; nc++; break; }
                 }
             }
         }
         if (next <= a) break;
         a = next;
     }
-    vr_log("FOV: %d candidatos. Pruebo uno a uno (la imagen del monitor puede dar saltitos)", nc);
-    Beep(800, 60);
-    int found = 0;
-    for (int i = 0; i < nc && !found; i++) {
-        float old; if (!rd_float((float *)cand[i], &old)) continue;
+    vr_log("FOV: %d candidatos en %.1f s. Los pruebo uno a uno (en el monitor la imagen puede dar saltitos)",
+           nc, (double)(GetTickCount64() - t0) / 1000.0);
+
+    /* prueba: le sumo 20 grados y miro si la lente del juego cambia JUSTO lo esperado. Primero los "grados" */
+    static const int order[FOV_KINDS] = { 0, 4, 1, 2, 3, 5 };
+    float expect = 1.0f / tanf((vdeg + 20.0f) * 0.00872665f);   /* P11 que deberia salir */
+    int found = 0, tested = 0;
+    for (int o = 0; o < FOV_KINDS && !found; o++)
+    for (int i = 0; i < nc && !found && tested < 300; i++) {
+        if (ck[i] != order[o]) continue;
+        float old; if (!rd_float((float *)cand[i], &old) || fabsf(old - tgt[ck[i]]) > 1e-4f * tgt[ck[i]]) continue;
+        tested++;
         float before = g_orig_P11;
         float test = fov_value(ck[i], vdeg + 20.0f);
         if (!wr_float((float *)cand[i], test)) continue;
-        Sleep(90);
+        fov_wait_frames(3, 300);
         float after = g_orig_P11;
-        float nowv; rd_float((float *)cand[i], &nowv);
-        wr_float((float *)cand[i], old);
-        if (fabsf(after - before) > 0.05f && fabsf(nowv - test) < 1e-3f * fabsf(test) + 1e-6f) {
-            vr_log("FOV: CONFIRMADO %p (%s): al cambiarlo, la lente paso de P11=%.4f a %.4f", (void *)cand[i],
-                   ck[i] == 0 ? "grados" : (ck[i] == 1 ? "radianes" : "medio angulo en radianes"), before, after);
+        float nowv = old; rd_float((float *)cand[i], &nowv);
+        wr_float((float *)cand[i], old);           /* deshacer */
+        if (fabsf(after - before) > 0.05f && fabsf(after - expect) < 0.03f * expect &&
+            fabsf(nowv - test) < 1e-3f * fabsf(test) + 1e-6f) {
+            vr_log("FOV: CONFIRMADO %p (%s): al subirlo 20 grados, la lente paso de P11=%.4f a %.4f (esperado %.4f)",
+                   (void *)cand[i], g_fov_kname[ck[i]], (double)before, (double)after, (double)expect);
             g_fov_kind = ck[i]; g_fov_addr = (float *)cand[i]; found = 1;
         }
-        Sleep(30);
+        fov_wait_frames(2, 200);                   /* que la lente vuelva a la normal antes del siguiente */
     }
-    if (!found) vr_log("FOV: ninguno cambia la lente del juego :(");
-    else { vr_log("FOV: lo dejo en %.0f grados en vertical mientras F9 este activo", g_fov_target_deg); Beep(800, 90); Beep(1100, 90); Beep(1500, 90); }
+    if (found) {
+        g_fov_tries = 0;
+        vr_log("FOV: ENCONTRADO tras probar %d. Con F9 (y F8 linterna encendida) sube a %.0f grados en vertical", tested, (double)cfg_linterna_deg);
+        Beep(800, 90); Beep(1100, 90); Beep(1500, 90);    /* tres pitidos subiendo: FOV encontrado */
+    } else {
+        LONG n = manual ? g_fov_tries : InterlockedIncrement(&g_fov_tries);
+        g_fov_next_auto = GetTickCount64() + 20000ULL * (ULONGLONG)(n > 0 ? n : 1);
+        vr_log("FOV: ninguno de los %d probados cambia la lente del juego :(%s", tested,
+               n >= 4 ? " Dejo de buscar solo; pulsa Shift+F7 para probar otra vez" : " Lo vuelvo a intentar en un rato");
+        Beep(400, 300);
+    }
     g_fov_running = 0;
     return 0;
 }
 
-/* cada momento: con F9 y fov_visor, el FOV del juego grande; si no, el que habia */
-static void fov_keep(void)
+static void fov_search_start(int manual)
 {
-    static float saved = 0; static int applied = 0;
-    if (!g_fov_addr) return;
-    float cur; if (!rd_float(g_fov_addr, &cur) || !isfinite(cur)) { g_fov_addr = NULL; applied = 0; return; }
-    float want = fov_value(g_fov_kind, g_fov_target_deg);
-    if (g_mode == 1 && cfg_fov) {
-        if (!applied) { saved = cur; applied = 1; vr_log("FOV: agrandado a %.0f grados (antes %.3f)", g_fov_target_deg, cur); }
-        if (fabsf(cur - want) > 1e-4f * fabsf(want)) wr_float(g_fov_addr, want);
-    } else if (applied) {
-        wr_float(g_fov_addr, saved); applied = 0; vr_log("FOV: devuelto a %.3f", saved);
+    if (InterlockedCompareExchange(&g_fov_running, 1, 0) != 0) return;
+    if (manual) Beep(600, 150);
+    HANDLE th = CreateThread(NULL, 0, fovscan_thread, (LPVOID)(INT_PTR)manual, 0, NULL);
+    if (th) CloseHandle(th); else g_fov_running = 0;
+}
+
+/* buscarlo solo: cuando lleva unos segundos viendo la camara del juego (en partida) */
+static void fov_auto(ULONGLONG now)
+{
+    static LONG lastseq = 0; static ULONGLONG seen_since = 0, last_seen = 0;
+    LONG seq = g_cam_seq;
+    if (seq != lastseq) { lastseq = seq; if (!seen_since || now - last_seen > 1000) seen_since = now; last_seen = now; }
+    if (!cfg_linterna || g_fov_addr || g_fov_running) return;
+    if (!seen_since || now - last_seen > 300 || now - seen_since < 5000) return;
+    if (now < g_fov_next_auto || g_fov_tries >= 4) return;
+    fov_search_start(0);
+}
+
+/* cada momento: con F9 (y linterna y lente del visor), el FOV del juego grande; si no, el que habia */
+static void fov_keep(ULONGLONG now)
+{
+    static LONG lastseq = 0; static ULONGLONG badsince = 0;
+    float *addr = g_fov_addr;
+    if (!addr) { badsince = 0; return; }
+    float cur;
+    if (!rd_float(addr, &cur) || !isfinite(cur)) {
+        vr_log("FOV: ya no puedo leerlo (cambio de nivel?); lo busco otra vez");
+        g_fov_addr = NULL; g_fov_applied = 0; badsince = 0; g_fov_tries = 0; g_fov_next_auto = now + 5000;
+        return;
+    }
+    /* seguridad: ese numero tiene que seguir cuadrando con la lente que usa el juego. Si deja de cuadrar
+     * durante 8 s (cambio de nivel, memoria reutilizada...), se deja de tocar y se busca otra vez */
+    LONG seq = g_cam_seq;
+    if (seq != lastseq) {
+        lastseq = seq;
+        float should = fov_value(g_fov_kind, fov_game_vdeg());
+        if (fabsf(cur - should) > 0.01f * fabsf(should) + 1e-4f) { if (!badsince) badsince = now; }
+        else badsince = 0;
+    }
+    if (badsince && now - badsince > 8000) {
+        vr_log("FOV: el numero (%.4f) ya no cuadra con la lente del juego (FOV %.1f)", (double)cur, (double)fov_game_vdeg());
+        fov_release("no cuadra");
+        badsince = 0; g_fov_tries = 0; g_fov_next_auto = now + 10000;
+        return;
+    }
+    int want_on = g_mode == 1 && cfg_linterna && cfg_fov && g_fov_ok;
+    if (want_on) {
+        float want = fov_value(g_fov_kind, cfg_linterna_deg);
+        if (!g_fov_applied) {
+            g_fov_saved = cur; g_fov_applied = 1;
+            vr_log("FOV: linterna ENCENDIDA: %.0f grados en vertical (antes %.3f)", (double)cfg_linterna_deg, (double)cur);
+            fov_log_margin();
+        }
+        if (fabsf(cur - want) > 1e-4f * fabsf(want) + 1e-7f) wr_float(addr, want);
+    } else if (g_fov_applied) {
+        wr_float(addr, g_fov_saved); g_fov_applied = 0;
+        vr_log("FOV: linterna apagada: devuelto a %.3f", (double)g_fov_saved);
     }
 }
 
@@ -2556,17 +2444,10 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             const int keys[4] = { VK_F5, VK_F6, VK_F7, VK_F8 };
             for (int k = 0; k < 4; k++) {
                 int d = (GetAsyncKeyState(keys[k]) & 0x8000) != 0;
-                if (d && !prevf[k] && rsh && k == 3) {          /* Shift+F8: cambiar forma de escribir */
-                    g_cj_wmode = (g_cj_wmode + 1) % 5;
-                    vr_log(">>> Shift+F8 CAMARA: forma %ld = %s", (long)g_cj_wmode, g_cj_wname[g_cj_wmode]);
-                    for (int b = 0; b <= g_cj_wmode; b++) Beep(900, 60);
-                    g_cj_dirty = 1;
-                } else if (d && !prevf[k] && rsh && k == 2) {   /* Shift+F7: buscar el FOV del juego */
-                    if (InterlockedCompareExchange(&g_fov_running, 1, 0) == 0) {
-                        Beep(600, 150);
-                        HANDLE th = CreateThread(NULL, 0, fovscan_thread, NULL, 0, NULL);
-                        if (th) CloseHandle(th); else g_fov_running = 0;
-                    }
+                if (d && !prevf[k] && rsh && k == 2) {          /* Shift+F7: buscar otra vez el FOV del juego */
+                    fov_release("Shift+F7");
+                    g_fov_tries = 0;
+                    fov_search_start(1);
                 } else if (d && !prevf[k]) {
                     int on = 0; const char *name = "";
                     switch (k) {
@@ -2574,11 +2455,12 @@ static DWORD WINAPI keys_thread(LPVOID unused)
                             on = cfg_stereo != 0; name = "F5 ESTEREO"; break;
                     case 1: cfg_lights = !cfg_lights; on = cfg_lights; name = "F6 LUCES_VISOR"; break;
                     case 2: cfg_fov = !cfg_fov; on = cfg_fov; name = "F7 FOV_VISOR (lente del visor)"; break;
-                    case 3: cfg_cj = !cfg_cj; on = cfg_cj; name = "F8 CAMARA_JUEGO (la cabeza mueve la camara del juego)"; break;
+                    case 3: cfg_linterna = !cfg_linterna; on = cfg_linterna; name = "F8 LINTERNA (FOV del juego agrandado con F9)";
+                            if (on) g_fov_tries = 0;
+                            break;
                     }
                     vr_log(">>> %s: %s", name, on ? "ENCENDIDO" : "APAGADO");
                     if (on) { Beep(700, 70); Beep(1100, 70); } else { Beep(1100, 70); Beep(700, 70); }
-                    g_cj_dirty = 1;
                 }
                 prevf[k] = d;
             }
@@ -2641,10 +2523,8 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         #undef KEYDOWN
         #undef SEEN
         if (head_update()) publish_H();
-        fov_keep();
-        { static ULONGLONG lastr = 0; if (now - lastr > 5000) { lastr = now; LONG n = InterlockedExchange(&g_cj_resets, 0);
-            if (n) vr_log("CAMARA DEL JUEGO: el juego borro lo nuestro %ld veces (al mover el raton); recolocado", (long)n); } }
-        { static ULONGLONG lastfind = 0; if (cfg_cj && !g_cj_yaw && now - lastfind > 250) { lastfind = now; cj_find(); } }
+        fov_keep(now);
+        fov_auto(now);
         /* leer los avisos de SteamVR (si nadie los lee, puede creer que el juego no responde) */
         if (g_head_state == 1 && p_PollEvent) {
             struct { uint32_t type; uint32_t dev; float age; uint32_t pad; unsigned char data[48]; } ev;
@@ -2691,8 +2571,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -2862,7 +2742,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E5h: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E6: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
                    cfg_map, cfg_updsub, cfg_present, cfg_thread, cfg_read);
