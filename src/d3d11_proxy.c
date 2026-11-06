@@ -1,5 +1,5 @@
 /*
- * HITO E7c - d3d11.dll (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7d - d3d11.dll (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -590,6 +590,27 @@ static void get_H(float H[4][4], float Hi[4][4])
     }
 }
 
+static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4]);
+static volatile LONG g_ord_flag = 0, g_ord_before = 0, g_ord_after = 0, g_ord_cb1 = 0;   /* (E7d) orden de los cajones */
+/* (E7d) H para el cajon de la camara, hecho con ESA camara. El juego prepara la camara del siguiente
+ * fotograma antes de terminar el actual, asi que los dibujos (hueco 0, luces) usan el H fijado en Present
+ * con la camara de entonces, y la camara nueva el suyo propio: asi cuadran entre si aunque te muevas */
+static void cam_own_H(const float *f, float H[4][4], float Hi[4][4])
+{
+    float A[4][4], Ai[4][4], Hk[4][4], Hki[4][4];
+    raton_make_H(f, A, Ai);
+    build_H(g_yaw, g_pitch, g_roll, g_sx, g_sy, g_sz, Hk, Hki);
+    mul4(A, Hk, H); mul4(Hki, Ai, Hi);
+    if (g_stereo_on) {
+        LONG e = g_eye;
+        float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
+        for (int r = 0; r < 3; r++) {
+            H[r][3] -= t[r];
+            Hi[r][3] += Hi[r][0] * t[0] + Hi[r][1] * t[1] + Hi[r][2] * t[2];
+        }
+    }
+}
+
 /* ---- lente del visor ---- filas 0 y 1 de la proyeccion (x e y); la profundidad (filas 2 y 3) es la del juego */
 static float g_fovrow[2][4];
 static float g_vis_L = 0, g_vis_R = 0, g_vis_UP = 0, g_vis_DN = 0;   /* bordes del visor (tangentes): para el margen de la linterna */
@@ -756,7 +777,7 @@ static float g_rt_unwrap = 0, g_rt_last = 0;
 static volatile LONG g_rt_resid = 0;        /* mayor desajuste del ultimo segundo, en decimas de grado */
 static volatile LONG g_rt_sent = 0;         /* pasos mandados en el ultimo segundo */
 static int raton_active(void);
-static void raton_make_H(const float *f);
+static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4]);
 /* (E7c) detective del fotograma ANTERIOR: busca en los cajones las matrices de la camara de hace un fotograma */
 static float g_pv_cur[88], g_pv_prev[88];   /* camara principal ORIGINAL: actual y la del fotograma anterior */
 static volatile LONG g_pv_have = 0;         /* 2 = hay actual y anterior distintas */
@@ -783,8 +804,8 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         g_orig_P00 = f[24]; g_orig_P11 = f[29]; g_orig_P22 = f[34]; g_orig_P23 = f[35];
         memcpy(g_rt_lastcam, f, sizeof(g_rt_lastcam)); g_rt_havecam = 1;
         memcpy(g_pv_cur, f, sizeof(g_pv_cur));   /* (E7c) la camara principal de este fotograma */
+        g_ord_flag = 1; InterlockedIncrement(&g_ord_cb1);
         InterlockedIncrement(&g_cam_seq);
-        if (g_mode == 1 && raton_active()) { raton_make_H(f); publish_H(); }
     }
 
     InterlockedIncrement(&g_cams);
@@ -811,6 +832,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         float g[CAM_BYTES / 4], Hc[4][4], Hic[4][4];
         memcpy(g, f, sizeof(g));
         get_H(Hc, Hic);
+        if (raton_active() && p00 < 1.428f && fabsf(f[29] / f[24] - g_aspect) < 0.03f) cam_own_H(f, Hc, Hic);
         if (apply_view_yaw_cam(g, Hc, Hic)) {
             memcpy(dst, g, CAM_BYTES);
             _mm_sfence();
@@ -1222,6 +1244,7 @@ static void slot_stuff(void *res, const Pending *p)
     g_slot_bw[slot] = (LONG)p->bw;
     {
         LONG mode = g_mode;
+        if (slot == 0 && p->bw == 208) InterlockedIncrement(g_ord_flag ? &g_ord_after : &g_ord_before);
         if (mode == 1 && slot == 0 && p->bw == 208) {
             float f[52], Hc[4][4], Hic[4][4]; SIZE_T got = 0;
             get_H(Hc, Hic);
@@ -1450,6 +1473,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         for (int q = 56; q < 72; q++) dd += fabsf(g_pv_cur[q] - last[q]);
         memcpy(g_pv_prev, g_pv_cur, sizeof(g_pv_prev)); memcpy(last, g_pv_cur, sizeof(last));
         g_pv_have = (dd > 1e-3f) ? 2 : 0;      /* solo si la camara se ha movido de un fotograma a otro */
+        g_ord_flag = 0;
         vr_after_present();
     }
     t_in_present = 0;
@@ -1998,7 +2022,7 @@ static int head_apply(const OvrPose *pz)
         Hi[i][3] = dg[i];
     }
     memcpy(g_rt_Rg, Rg, sizeof(Rg)); memcpy(g_rt_dg, dg, sizeof(dg));
-    if (raton_active() && g_rt_havecam) raton_make_H(g_rt_lastcam);
+    if (raton_active() && g_rt_havecam) raton_make_H(g_rt_lastcam, g_headH, g_headHi);
     else { memcpy(g_headH, H, sizeof(H)); memcpy(g_headHi, Hi, sizeof(Hi)); }
     /* para el log: hacia donde mira (columna "adelante") e inclinacion */
     g_head_yaw   = atan2f(Rg[0][2], Rg[2][2]) * RAD2DEG;
@@ -2033,7 +2057,7 @@ static LONG rt_applied(const LONG *h)
     return h[(g_rt_hi - lag + RT_HIST * 4) % RT_HIST];
 }
 
-static void raton_make_H(const float *f)
+static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4])
 {
     float Rc[3][3], Rb[3][3], Rd[3][3], A[3][3];
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Rc[i][j] = f[j * 4 + i];   /* camara del juego -> mundo */
@@ -2056,8 +2080,8 @@ static void raton_make_H(const float *f)
         H[i][3] = t[i];
         Hi[i][3] = -(A[0][i] * t[0] + A[1][i] * t[1] + A[2][i] * t[2]);
     }
-    memcpy(g_headH, H, sizeof(H));
-    memcpy(g_headHi, Hi, sizeof(Hi));
+    memcpy(Ho, H, sizeof(H));
+    memcpy(Hio, Hi, sizeof(Hi));
     /* desajuste = lo que H tiene que girar (sin contar inclinar la cabeza de lado): adelante de A */
     float c = clampf(A[2][2], -1.0f, 1.0f);
     LONG r = (LONG)(acosf(c) * RAD2DEG * 10.0f);
@@ -2883,8 +2907,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -3054,7 +3078,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E7c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7d: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

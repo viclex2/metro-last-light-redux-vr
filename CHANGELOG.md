@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7d — Intento contra el fantasma
+- Resultado de Shift+D: los dibujos (hueco 0) y las luces (hueco 7) que llegan **después de Present** usan la cámara que el juego preparó **antes de Present**. El juego prepara la cámara del siguiente fotograma antes de terminar el actual.
+- La E7 recalculaba H al llegar la cámara nueva, a mitad de fotograma. Los últimos dibujos del fotograma se corregían con la cámara del siguiente y, al moverte, salía el fantasma.
+- Ahora el H de los dibujos se fija en Present, y el cajón de la cámara lleva un H hecho con su propia cámara.
+- El log cuenta el orden: cuántos dibujos llegan antes y después de la cámara en cada fotograma (`orden=`).
+
 ## E7c — Detective del fotograma anterior (Shift+D)
 - Prueba de la E7b: el "marrón" es en realidad **un fantasma**, un trozo de imagen (el arma, el escenario) repetido en otro sitio y sin luz. **Sale en cuanto el visor se mueve lo más mínimo**, también sin estéreo (F5), y **desaparece con el visor totalmente quieto**.
 - Eso apunta a que el juego **mezcla el fotograma anterior**, una especie de "estela", con unas matrices de cámara que nosotros no corregimos.
