@@ -1,5 +1,5 @@
 /*
- * HITO E8c - d3d11.dll (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E8d - d3d11.dll (base E7d otra vez, para RenderDoc con F9) (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -163,6 +163,7 @@ static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
 static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
+static int cfg_modoh = 0;               /* 0 = como la E7d (sin fantasma); 1 = como la E8c */
 static int cfg_porobjeto = 0;           /* (E7g) cada dibujo con su propia camara */
 static int cfg_rescate = 1;             /* (E7f) corregir tambien los dibujos con WV/WVP de fotogramas distintos */
 static int cfg_raton = 1;               /* (E7) la cabeza mueve el raton: el juego gira con tu cabeza */
@@ -284,6 +285,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "raton_cabeza"))     cfg_raton = v;
     else if (!strcmp(s, "rescate"))          cfg_rescate = v;
     else if (!strcmp(s, "por_objeto"))       cfg_porobjeto = v;
+    else if (!strcmp(s, "modo_h"))           cfg_modoh = v;
     else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
     else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
     else if (!strcmp(s, "raton_max_grados")) cfg_raton_pmax = (fv < 0.0f) ? 0.0f : (fv > 85.0f ? 85.0f : fv);
@@ -916,7 +918,8 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
     if (mode == 1 && dst && (p00 < 1.428f || g_arma)) {      /* solo la camara ancha: el arma (57 grados) se queda quieta */
         float g[CAM_BYTES / 4], Hc[4][4], Hic[4][4];
         memcpy(g, f, sizeof(g));
-        if (raton_active() && p00 < 1.428f && fabsf(f[29] / f[24] - g_aspect) < 0.03f && g_fs_need) {
+        int main_cam = raton_active() && p00 < 1.428f && fabsf(f[29] / f[24] - g_aspect) < 0.03f;
+        if (main_cam && cfg_modoh == 1 && g_fs_need) {
             g_fs_need = 0;
             if (g_fs_have) { memcpy(g_fs_prevH, g_fs_curH, sizeof(g_fs_curH)); memcpy(g_fs_prevL, g_fs_curL, sizeof(g_fs_curL)); }
             raton_make_H(f, g_headH, g_headHi);
@@ -929,6 +932,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
             InterlockedIncrement(&g_fs_frames);
         }
         get_H(Hc, Hic);
+        if (main_cam && cfg_modoh == 0) cam_own_H(f, Hc, Hic);     /* como la E7d */
         if (apply_view_yaw_cam(g, Hc, Hic)) {
             memcpy(dst, g, CAM_BYTES);
             _mm_sfence();
@@ -1307,7 +1311,7 @@ static int fix_slot7(float *f)
         if (ok && view_H(Vr, H, Hi)) InterlockedIncrement(&g_l7own);
     }
     mul4(Pv, H, P2);
-    if (!cfg_porobjeto && raton_active() && g_fs_have) {
+    if (cfg_modoh == 1 && !cfg_porobjeto && raton_active() && g_fs_have) {
         float Pp[4][4], P3[4][4];
         memcpy(Pp, P, sizeof(Pp));
         for (int j = 0; j < 4; j++) { Pp[0][j] = g_fs_prevL[0][j]; Pp[1][j] = g_fs_prevL[1][j]; }
@@ -2178,7 +2182,7 @@ static int head_apply(const OvrPose *pz)
         Hi[i][3] = dg[i];
     }
     memcpy(g_rt_Rg, Rg, sizeof(Rg)); memcpy(g_rt_dg, dg, sizeof(dg));
-    if (raton_active() && g_rt_havecam) { /* (E8b) el H se hace al llegar la camara del siguiente fotograma */ }
+    if (raton_active() && g_rt_havecam) { if (cfg_modoh == 0) raton_make_H(g_rt_lastcam, g_headH, g_headHi); /* modo 1: al llegar la camara */ }
     else { memcpy(g_headH, H, sizeof(H)); memcpy(g_headHi, Hi, sizeof(Hi)); }
     /* para el log: hacia donde mira (columna "adelante") e inclinacion */
     g_head_yaw   = atan2f(Rg[0][2], Rg[2][2]) * RAD2DEG;
@@ -3246,7 +3250,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E8c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E8d: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8d — Otra vez la base de la E7d, para capturar con F9 en RenderDoc
+- La E8c sigue con fantasma. Se vuelve a la E7d (`modo_h=0`, por defecto) y se estudian los objetos con una captura de RenderDoc **con el modo VR activo**: cabeza falsa con las flechas, F9 y una flecha pulsada mientras se captura.
+- `modo_h=1` = como la E8c, por si hace falta comparar.
+
 ## E8c — La fórmula buena para el hueco 7
 - Probada la E8b: vuelve el fantasma.
 - Mirando en la captura qué hay exactamente en el hueco 7: no es la cámara anterior tal cual, sino el **paso de "vista de ahora" a "vista de antes"**, T = V_ant·V_act⁻¹. Con el ratón girando, es un giro pequeño (unos 3°) y sin desplazamiento.
