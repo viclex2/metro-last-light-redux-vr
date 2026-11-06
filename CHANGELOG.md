@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7i — Las luces también con su propia cámara
+- Probada la E7h: igual que la E7g (los objetos bien, pero vuelve el fantasma). El iW del cajón sí era la inversa de W (`iW_raro=0`), y casi todos los dibujos usan su propia cámara (`fallan=0`).
+- Conclusión: el fantasma sale cuando la geometría y **las luces** (hueco 7) no se corrigen igual. En la E7d las dos iban mal "a la vez" y cuadraban entre sí. En la E7g la geometría pasó a ir bien, pero las luces no.
+- Ahora el hueco 7 también usa un H hecho con su propia cámara (V = P⁻¹·VP). El log cuenta `luces7_propias=`.
+
 ## E7h — Cada dibujo con su cámara, calculada con W
 - Probada la E7g: **los objetos dejan de moverse**, pero **vuelve el fantasma**. Sospecha: un mismo objeto se dibuja en varias pasadas y no todas recibían el mismo H (unas el propio y otras el general), así que las pasadas no coincidían.
 - Posible causa: el "iW" del cajón no siempre es la inversa de W; podría ser la de las normales. Ahora la inversa la calcula la DLL con W.
