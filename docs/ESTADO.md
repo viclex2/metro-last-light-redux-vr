@@ -99,6 +99,19 @@ Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego si
   - Los huecos 8 y 13 son huesos: no tocar.
 - **Siguiente paso:** una captura de RenderDoc moviendo el ratón (sin F9, sin gafas), convertida a XML con `renderdoccmd convert`. Sirve para ver qué cámara lleva cada cajón en cada dibujo.
 
+## Cómo dibuja el juego (sacado de sus shaders, 6/11)
+- **G-buffer** (3 destinos + profundidad): `t_position` (RGBA16F) guarda la posición **en la vista del juego**. Los objetos sueltos (VS con `cb_main_matrices0`) usan `m_WV` y `m_WVP`. Los objetos en grupo (DrawIndexedInstanced) usan `xform` (WV, por instancia, en la lista de vértices) y `m_P` (hueco 1); si llevan huesos, también `cb_bones` (hueco 8).
+- **Pasada previa de profundidad**: VS con solo `m_WVP`, sin PS (la barandilla del Pixel History, EID 224).
+- **Hueco 3 = `cb_misc_0`**, con `m_screen` en las casillas 36..51. Cambia según la pasada:
+  - de píxel a NDC;
+  - "rayos" (de la pantalla a la vista);
+  - P;
+  - **reflejos**: S·(V_ant·V_act⁻¹), que lee `t_bloom`, la imagen borrosa del fotograma anterior.
+- **Hueco 7**: [P | P·T], con T = V_ant·V_act⁻¹, o [P | P·V_ant].
+- **Hueco 12 = `cb_sun`** (sombras del sol); **hueco 2 = `cb_screen`** (armónicos esféricos).
+- **Oclusión**: una profundidad de 120×67 que se copia a la CPU (CopyResource a STAGING) para decidir qué se dibuja en el siguiente fotograma. Explica cosas que desaparecen un instante.
+- **Cámara del arma**: P00 ≈ 0,96 (más estrecha que la principal, 0,5625 con FOV 90). Antes se confundía con la principal.
+
 ## Cómo trabajamos
 - El usuario lo prueba todo en Windows y pasa `%TEMP%\metro_vr_log.txt`.
 - Claude compila la DLL con mingw-w64 para probarla y, en cada versión, actualiza `CHANGELOG.md`, este archivo y `VERSION`. Al subirlo, GitHub Actions crea la Release con la DLL.

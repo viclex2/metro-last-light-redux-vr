@@ -1,5 +1,5 @@
 /*
- * HITO E8e - d3d11.dll (objetos con su camara + camara del arma tambien) (base E7d otra vez, para RenderDoc con F9) (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E8g - d3d11.dll (reflejos con el H del fotograma anterior) (objetos con su camara + camara del arma tambien) (base E7d otra vez, para RenderDoc con F9) (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -163,6 +163,7 @@ static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
 static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
+static int cfg_previo = 1;              /* (E8g) corregir reflejos/huecos 3 y 7 con el H de antes y el de ahora */
 static int cfg_modoh = 0;               /* 0 = como la E7d (sin fantasma); 1 = como la E8c */
 static int cfg_porobjeto = 1;           /* (E7g) cada dibujo con su propia camara */
 static int cfg_rescate = 1;             /* (E7f) corregir tambien los dibujos con WV/WVP de fotogramas distintos */
@@ -171,6 +172,7 @@ static int cfg_raton_pitch = 1;         /* tambien arriba/abajo */
 static int cfg_raton_lag = 0;           /* cuantos envios tarda el juego en notar el raton */
 static float cfg_raton_pmax = 70.0f;    /* hasta cuantos grados arriba/abajo se lleva al juego (el resto lo pone H) */
 static int cfg_fakehead = 0;
+static int cfg_fakeauto = 0;            /* (E8f) la cabeza falsa se mueve sola */
 static int cfg_lights = 1;
 static volatile LONG g_l7 = 0, g_l3 = 0;
 static float cfg_ipdscale = 1.0f;      /* usar el campo de vision del visor */
@@ -286,11 +288,13 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "rescate"))          cfg_rescate = v;
     else if (!strcmp(s, "por_objeto"))       cfg_porobjeto = v;
     else if (!strcmp(s, "modo_h"))           cfg_modoh = v;
+    else if (!strcmp(s, "previo"))           cfg_previo = v;
     else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
     else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
     else if (!strcmp(s, "raton_max_grados")) cfg_raton_pmax = (fv < 0.0f) ? 0.0f : (fv > 85.0f ? 85.0f : fv);
     else if (!strcmp(s, "linterna_grados")) cfg_linterna_deg = (fv < 60.0f) ? 60.0f : (fv > 160.0f ? 160.0f : fv);
     else if (!strcmp(s, "cabeza_falsa"))    cfg_fakehead = v;
+    else if (!strcmp(s, "cabeza_falsa_auto")) cfg_fakeauto = v;
     else if (!strcmp(s, "luces_visor"))     cfg_lights = v;
 }
 
@@ -625,6 +629,11 @@ static float g_rt_Rb[3][3]; static volatile LONG g_rt_haveRb = 0;
  * Y el del fotograma anterior, para el hueco 7, que guarda la camara del fotograma ANTERIOR (para
  * reaprovechar su imagen): hay que darle lo que de verdad se dibujo entonces, no lo de ahora. */
 static float g_fs_curH[4][4], g_fs_prevH[4][4], g_fs_curL[2][4], g_fs_prevL[2][4];
+/* (E8g) H de la camara principal en ESTE fotograma y en el ANTERIOR (con el ojo), y la lente de cada uno.
+ * Los efectos que reaprovechan la imagen del fotograma anterior (reflejos, hueco 7) tienen que usar el de antes. */
+static float g_oc_H[4][4], g_oc_Hi[4][4], g_oc_L[2][4], g_op_H[4][4], g_op_Hi[4][4], g_op_L[2][4];
+static volatile LONG g_oc_have = 0, g_op_have = 0;
+static volatile LONG g_s7vp = 0, g_s7T = 0, g_s3rays = 0, g_s3P = 0, g_s3refl = 0;
 static volatile LONG g_fs_have = 0, g_fs_need = 1, g_fs_frames = 0;   /* (E7g) el "cuerpo" (camara sin nuestro raton) */
 static volatile LONG g_cb0_own = 0, g_iw_bad = 0, g_own_fail = 0, g_l7own = 0, g_l7prev = 0;
 static void finish_H(float A[4][4], float Ai[4][4], float H[4][4], float Hi[4][4]);
@@ -872,6 +881,21 @@ static volatile ULONGLONG g_pv_until = 0;   /* buscar hasta esta hora (Shift+D) 
 static int rd_float(const float *p, float *v) { SIZE_T g = 0; return ReadProcessMemory(GetCurrentProcess(), p, v, 4, &g) && g == 4; }
 static int wr_float(float *p, float v) { SIZE_T g = 0; return WriteProcessMemory(GetCurrentProcess(), p, &v, 4, &g) && g == 4; }
 
+/* (E8g) La camara PRINCIPAL: forma de pantalla apaisada (en ventana no es 16:9 exacto) y la lente MAS ANCHA.
+ * Ojo: con r_base_fov 90, la camara del ARMA tambien es 16:9 y P00 < 1.43; antes se colaba como principal y
+ * cambiaba a ratos la lente "original" (por eso a ratos no se corregian luces y reflejos). */
+static float g_main_p00 = 0; static ULONGLONG g_main_seen = 0;
+static int is_main_cam(const float *f)
+{
+    float p00 = f[24], p11 = f[29];
+    if (!(p00 > 0.05f && p00 < 1.428f && p11 > 0.05f)) return 0;
+    float r = p11 / p00;
+    if (r < 1.70f || r > 1.95f) return 0;
+    ULONGLONG now = GetTickCount64();
+    if (g_main_p00 <= 0 || now - g_main_seen > 700 || p00 < g_main_p00 * 0.95f) { g_main_p00 = p00; g_main_seen = now; return 1; }
+    if (fabsf(p00 - g_main_p00) <= g_main_p00 * 0.05f) { g_main_p00 = p00; g_main_seen = now; return 1; }
+    return 0;    /* lente mas estrecha: el arma */
+}
 static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT mapType, const char *via)
 {
     float f[CAM_BYTES / 4];
@@ -883,7 +907,10 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
     }
     if (!is_real_cam(f)) return;
     /* solo la camara PRINCIPAL: forma de pantalla 16:9 (las camaras de reflejos/cubos son cuadradas) */
-    if (f[24] < 1.428f && f[24] > 0.05f && fabsf(f[29] / f[24] - g_aspect) < 0.03f) {
+    {   static int said = 0;
+        if (f[24] < 1.428f && f[24] > 0.05f && said < 6 && GetTickCount64() % 997 < 3) { said++; vr_log("CAMARA: P00=%.4f P11=%.4f forma=%.4f (busco %.4f)", f[24], f[29], f[29] / f[24], g_aspect); }
+    }
+    if (is_main_cam(f)) {
         float fy = f[9]; if (fy > 1) fy = 1; if (fy < -1) fy = -1;
         g_cam_yaw = atan2f(f[8], f[10]);
         g_cam_fx = f[8]; g_cam_fy = f[9]; g_cam_fz = f[10];
@@ -918,7 +945,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
     if (mode == 1 && dst && (p00 < 1.428f || g_arma)) {      /* solo la camara ancha: el arma (57 grados) se queda quieta */
         float g[CAM_BYTES / 4], Hc[4][4], Hic[4][4];
         memcpy(g, f, sizeof(g));
-        int main_cam = raton_active() && p00 < 1.428f && fabsf(f[29] / f[24] - g_aspect) < 0.03f;
+        int main_cam = raton_active() && is_main_cam(f);
         if (main_cam && cfg_modoh == 1 && g_fs_need) {
             g_fs_need = 0;
             if (g_fs_have) { memcpy(g_fs_prevH, g_fs_curH, sizeof(g_fs_curH)); memcpy(g_fs_prevL, g_fs_curL, sizeof(g_fs_curL)); }
@@ -935,6 +962,15 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         /* como la E7d; y (E8e) con por_objeto, TODAS las camaras (tambien la del arma) con su propio H, igual que
          * los dibujos del hueco 0: el arma se dibuja con piezas de los dos caminos y tienen que coincidir */
         if (raton_active() && cfg_modoh == 0 && (main_cam || cfg_porobjeto)) cam_own_H(f, Hc, Hic);
+        if (main_cam && cfg_modoh == 0) {
+            float Pt[4][4];
+            memcpy(Pt, f + 24, sizeof(Pt));
+            fov_xy(Pt);
+            memcpy(g_oc_H, Hc, sizeof(Hc)); memcpy(g_oc_Hi, Hic, sizeof(Hic));
+            for (int j = 0; j < 4; j++) { g_oc_L[0][j] = Pt[0][j]; g_oc_L[1][j] = Pt[1][j]; }
+            if (!g_op_have) { memcpy(g_op_H, g_oc_H, sizeof(g_oc_H)); memcpy(g_op_Hi, g_oc_Hi, sizeof(g_oc_Hi)); memcpy(g_op_L, g_oc_L, sizeof(g_oc_L)); g_op_have = 1; }
+            g_oc_have = 1;
+        }
         if (apply_view_yaw_cam(g, Hc, Hic)) {
             memcpy(dst, g, CAM_BYTES);
             _mm_sfence();
@@ -1383,10 +1419,101 @@ static void inst_stuff(int slot, const Pending *p)
     if (any) { memcpy((void *)p->p, f, p->bw); _mm_sfence(); InterlockedIncrement(&g_inst_mod); }
 }
 
+
+/* (E8g) Hueco 7 = [P | M2]. M2 puede ser P*V (la camara de AHORA, para cosas en coordenadas del mundo)
+ * o P*T con T = V_antes * V_ahora^-1 (para reaprovechar la imagen del fotograma ANTERIOR). Las posiciones que
+ * llegan son las del juego (vista del juego, sin H), asi que:  P' = Lente_ahora*H_ahora ;  P*V -> Lente_ahora*H_ahora*V ;
+ * P*T -> Lente_antes*H_antes*T   (H_antes = el que se uso para dibujar la imagen anterior) */
+static int fix_prev_s7(float *f)
+{
+    float P[4][4], M2[4][4], iP[4][4], T[4][4], Pc[4][4], Pp[4][4], A[4][4], B[4][4], C[4][4];
+    for (int i = 0; i < 32; i++) if (!isfinite(f[i])) return 0;
+    memcpy(P, f, sizeof(P)); memcpy(M2, f + 16, sizeof(M2));
+    if (fabsf(P[0][0] - g_orig_P00) > 1e-3f || fabsf(P[1][1] - g_orig_P11) > 1e-3f) return 0;
+    if (fabsf(P[3][2] - 1.0f) > 1e-4f || fabsf(P[3][3]) > 1e-4f) return 0;
+    if (!inv4(P, iP)) return 0;
+    mul4(iP, M2, T);
+    memcpy(Pc, P, sizeof(P)); memcpy(Pp, P, sizeof(P));
+    for (int j = 0; j < 4; j++) { Pc[0][j] = g_oc_L[0][j]; Pc[1][j] = g_oc_L[1][j]; Pp[0][j] = g_op_L[0][j]; Pp[1][j] = g_op_L[1][j]; }
+    mul4(Pc, g_oc_H, A);
+    int vp = 1;
+    for (int i = 0; i < 3 && vp; i++) for (int j = 0; j < 4; j++)
+        if (fabsf(T[i][j] - g_rt_lastcam[i * 4 + j]) > 2e-3f * (1.0f + fabsf(g_rt_lastcam[i * 4 + j]))) { vp = 0; break; }
+    if (vp) { mul4(A, T, B); InterlockedIncrement(&g_s7vp); }
+    else    { mul4(Pp, g_op_H, C); mul4(C, T, B); InterlockedIncrement(&g_s7T); }
+    memcpy(f, A, sizeof(A)); memcpy(f + 16, B, sizeof(B));
+    return 1;
+}
+/* (E8g) Hueco 3, casillas 36..51 (una matriz 4x4 que cambia segun la pasada):
+ *  - "rayos" (de la pantalla a la vista): con la lente de ahora y pasados a la vista del juego (H_ahora^-1)
+ *  - P del juego: -> Lente_ahora*H_ahora
+ *  - REFLEJOS (S*T, sin traslacion): miran la imagen borrosa del fotograma ANTERIOR. Su lente y su H son los de antes:
+ *       S*T -> S*Lj^-1 * Lente_antes * H_antes * T          (este era el "fantasma") */
+static int fix_prev_s3(float *f)
+{
+    float *m = f + 36;
+    for (int i = 0; i < 16; i++) if (!isfinite(m[i])) return 0;
+    float p00 = g_orig_P00, p11 = g_orig_P11;
+    if (p00 <= 0 || p11 <= 0) return 0;
+    if (fabsf(m[0] - 2.0f / p00) < 1e-3f && fabsf(m[5] + 2.0f / p11) < 1e-3f &&
+        fabsf(m[3] + 1.0f / p00) < 1e-3f && fabsf(m[7] - 1.0f / p11) < 1e-3f) {
+        float a = g_oc_L[0][0], b = g_oc_L[0][2], c = g_oc_L[1][1], d = g_oc_L[1][2], R[4][4], O[4][4];
+        if (fabsf(a) < 1e-3f || fabsf(c) < 1e-3f) return 0;
+        memcpy(R, m, sizeof(R));
+        R[0][0] = 2.0f / a; R[0][1] = 0; R[0][2] = 0; R[0][3] = -(1.0f + b) / a;
+        R[1][0] = 0; R[1][1] = -2.0f / c; R[1][2] = 0; R[1][3] = (1.0f - d) / c;
+        mul4(g_oc_Hi, R, O);
+        memcpy(m, O, sizeof(O));
+        InterlockedIncrement(&g_s3rays);
+        return 1;
+    }
+    if (fabsf(m[0] - p00) < 1e-4f && fabsf(m[5] - p11) < 1e-4f && fabsf(m[10] - g_orig_P22) < 1e-3f &&
+        fabsf(m[11] - g_orig_P23) < 1e-3f && fabsf(m[14] - 1.0f) < 1e-4f && fabsf(m[15]) < 1e-6f &&
+        fabsf(m[1]) < 1e-6f && fabsf(m[2]) < 1e-6f && fabsf(m[4]) < 1e-6f && fabsf(m[6]) < 1e-6f) {
+        float Pc[4][4], O[4][4];
+        memcpy(Pc, m, sizeof(Pc));
+        for (int j = 0; j < 4; j++) { Pc[0][j] = g_oc_L[0][j]; Pc[1][j] = g_oc_L[1][j]; }
+        mul4(Pc, g_oc_H, O);
+        memcpy(m, O, sizeof(O));
+        InterlockedIncrement(&g_s3P);
+        return 1;
+    }
+    if (fabsf(m[3]) < 1e-6f && fabsf(m[7]) < 1e-6f && fabsf(m[11]) < 1e-6f && fabsf(m[12]) < 1e-6f &&
+        fabsf(m[13]) < 1e-6f && fabsf(m[14]) < 1e-6f && fabsf(m[15] - 1.0f) < 1e-6f) {
+        float s0 = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+        float s1 = sqrtf(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]);
+        float s2 = sqrtf(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]);
+        if (fabsf(s2 - 1.0f) > 0.01f || s0 < 0.1f || s1 < 0.1f) return 0;
+        float X[3][3], L3[3][3], Hr[3][3], K0 = s0 / p00, K1 = s1 / p11, Q[3][3], Q2[3][3];
+        for (int j = 0; j < 3; j++) { X[0][j] = m[j] / s0; X[1][j] = m[4 + j] / s1; X[2][j] = m[8 + j]; }
+        for (int j = 0; j < 3; j++) { L3[0][j] = g_op_L[0][j]; L3[1][j] = g_op_L[1][j]; L3[2][j] = (j == 2) ? 1.0f : 0.0f; }
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Hr[i][j] = g_op_H[i][j];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { float a = 0; for (int k = 0; k < 3; k++) a += Hr[i][k] * X[k][j]; Q[i][j] = a; }
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { float a = 0; for (int k = 0; k < 3; k++) a += L3[i][k] * Q[k][j]; Q2[i][j] = a; }
+        for (int j = 0; j < 3; j++) { m[j] = K0 * Q2[0][j]; m[4 + j] = K1 * Q2[1][j]; m[8 + j] = Q2[2][j]; }
+        InterlockedIncrement(&g_s3refl);
+        return 1;
+    }
+    return 0;
+}
+
 static void slot_stuff(void *res, const Pending *p)
 {
     int slot = slot_of(res);
     if (slot < 0) return;
+    if (g_mode == 1 && cfg_previo && cfg_porobjeto && cfg_modoh == 0 && raton_active() && g_oc_have && g_orig_P00 > 0) {
+        if (slot == 7 && p->bw == 144) {
+            float f[36]; SIZE_T got = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 144, &got) && got == 144 && fix_prev_s7(f)) {
+                memcpy((void *)p->p, f, 128); _mm_sfence(); InterlockedIncrement(&g_l7);
+            }
+        } else if (slot == 3 && p->bw == 272) {
+            float f[68]; SIZE_T got = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 272, &got) && got == 272 && fix_prev_s3(f)) {
+                memcpy((char *)p->p + 36 * 4, f + 36, 16 * 4); _mm_sfence(); InterlockedIncrement(&g_l3);
+            }
+        }
+    } else
     if (g_mode == 1 && cfg_lights && cfg_fov && g_fov_ok && g_orig_P00 > 0) {
         if (slot == 7 && p->bw == 144) {
             float f[36]; SIZE_T got = 0;
@@ -1636,6 +1763,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_pv_have = (dd > 1e-3f) ? 2 : 0;      /* solo si la camara se ha movido de un fotograma a otro */
         g_ord_flag = 0;
         g_fs_need = 1;
+        if (g_oc_have) { memcpy(g_op_H, g_oc_H, sizeof(g_oc_H)); memcpy(g_op_Hi, g_oc_Hi, sizeof(g_oc_Hi)); memcpy(g_op_L, g_oc_L, sizeof(g_oc_L)); g_op_have = 1; }
+        if (!vr_active() && (n % 60) == 1) {     /* sin visor: la forma de pantalla real (en ventana no es 16:9 exacto) */
+            DXGI_SWAP_CHAIN_DESC sd;
+            if (SUCCEEDED(IDXGISwapChain_GetDesc(sc, &sd)) && sd.BufferDesc.Height)
+                g_aspect = (float)sd.BufferDesc.Width / (float)sd.BufferDesc.Height;
+        }
         vr_after_present();
     }
     t_in_present = 0;
@@ -2073,7 +2206,14 @@ static void vr_after_present(void)
     /* SIN visor: cabeza falsa con las teclas, para poder probar (y capturar con RenderDoc) sin el visor */
     if (cfg_fakehead && !(cfg_vrimg && g_head_state == 1 && p_WaitGetPoses)) {
         OvrPose fp; memset(&fp, 0, sizeof(fp));
-        float y = -g_yaw * 0.01745329f, x = g_pitch * 0.01745329f;     /* OpenVR: girar a la derecha = -Y */
+        float fy = g_yaw, fx = g_pitch;
+        if (cfg_fakeauto && g_mode == 1 && g_rt_cal == 2) {
+            /* (E8f) cabeza falsa que se mueve sola (para ver y capturar el fallo sin tocar teclas) */
+            double t = (double)GetTickCount64() / 1000.0;
+            fy = (float)(35.0 * sin(6.2831853 * t / 3.0));
+            fx = (float)(8.0 * sin(6.2831853 * t / 2.3));
+        }
+        float y = -fy * 0.01745329f, x = fx * 0.01745329f;     /* OpenVR: girar a la derecha = -Y */
         float cy = cosf(y), sy = sinf(y), cx = cosf(x), sx = sinf(x);
         float R[3][3] = { { cy, sy * sx, sy * cx }, { 0, cx, -sx }, { -sy, cy * sx, cy * cx } };   /* Ry(y) * Rx(x) */
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) fp.mat.m[i][j] = R[i][j];
@@ -2961,6 +3101,21 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             }
             prevh = hh;
         }
+        /* F11: (E8f) por_objeto en directo */
+        {
+            static int prev11 = 0;
+            int k11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+            if (k11 && !prev11 && rsh) {
+                cfg_previo = !cfg_previo;
+                vr_log(">>> Shift+F11: previo=%d (reflejos y huecos 3/7 con el H de antes)", cfg_previo);
+                if (cfg_previo) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+            } else if (k11 && !prev11) {
+                cfg_porobjeto = !cfg_porobjeto;
+                vr_log(">>> F11: por_objeto=%d", cfg_porobjeto);
+                if (cfg_porobjeto) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+            }
+            prev11 = k11;
+        }
         /* F10: (E7e) corregir los objetos de los huecos 8 y 13 */
         {
             static int prevf8 = 0;
@@ -3081,8 +3236,10 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)InterlockedExchange(&g_fs_frames, 0), (long)InterlockedExchange(&g_l7prev, 0), (long)InterlockedExchange(&g_l7own, 0), (long)InterlockedExchange(&g_cb0_own, 0), (long)InterlockedExchange(&g_own_fail, 0), (long)InterlockedExchange(&g_iw_bad, 0), (long)InterlockedExchange(&g_cb0_resc, 0), (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
+            vr_log("seg %d: h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
+                   (long)InterlockedExchange(&g_s3rays, 0), (long)InterlockedExchange(&g_s3P, 0), (long)InterlockedExchange(&g_s3refl, 0),
+                   (long)InterlockedExchange(&g_fs_frames, 0), (long)InterlockedExchange(&g_l7prev, 0), (long)InterlockedExchange(&g_l7own, 0), (long)InterlockedExchange(&g_cb0_own, 0), (long)InterlockedExchange(&g_own_fail, 0), (long)InterlockedExchange(&g_iw_bad, 0), (long)InterlockedExchange(&g_cb0_resc, 0), (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
             (void)m; (void)c;
             if (0 && since_cam % 5 == 1 && bursts < 20) {   /* muestras detalladas apagadas (metian mucho texto al log) */
@@ -3252,7 +3409,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E8e: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E8g: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

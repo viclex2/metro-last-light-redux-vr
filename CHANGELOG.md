@@ -2,6 +2,20 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8g — Lo que de verdad usa el juego (sacado de sus shaders) y el fantasma de los reflejos
+- He leído los shaders del juego desde la captura de RenderDoc (qué variables usa cada uno):
+  - El G-buffer guarda las posiciones **en la vista del juego**, sin nuestra corrección. Los objetos sueltos las sacan de `m_WV` (hueco 0) y los objetos en grupo, de la lista de vértices. Así que cualquier pasada que lleve esas posiciones a la pantalla tiene que usar **lente del visor × H**, y la que va al revés, su inversa.
+  - Hay una pasada de **reflejos** (`t_bloom`, la imagen borrosa del fotograma **anterior**) que usa una matriz del hueco 3 (`m_screen`) con el paso "vista de ahora → vista de antes". **No la corregíamos en ninguna versión**: ese reflejo del fotograma anterior desplazado es muy probablemente **el fantasma oscuro**.
+  - El hueco 7 lleva [P | P·(cámara anterior)], para lo mismo.
+  - Con `r_base_fov 90`, la **cámara del arma** también es 16:9 y se colaba como "cámara principal", así que a ratos cambiaba la lente de referencia y algunas correcciones fallaban al azar. Ahora la principal es la de lente **más ancha**.
+- Ahora (`previo=1`):
+  - Los dibujos del hueco 0 y todas las cámaras llevan su propio H, como la E8e.
+  - Hueco 7: P → lente·H de ahora; la cámara anterior → lente·H **del fotograma anterior**.
+  - Hueco 3: "rayos" → con la lente y pasados a la vista del juego (H⁻¹); P → lente·H de ahora; **reflejos** → con la lente y el H del fotograma anterior.
+- Teclas para comparar en directo: **Shift+F11** = `previo` sí/no; **F11** = `por_objeto` sí/no.
+- Probado por Claude en el PC del usuario, sin visor (cabeza falsa que se mueve sola, `cabeza_falsa_auto=1`): se calibra, el juego gira con la "cabeza" y las correcciones nuevas se aplican (en el log, `h7` y `h3`).
+- Juego en ventana (`r_fullscreen off`) para que no se cierre al cambiar de ventana.
+
 ## E8e — Lo que se vio en RenderDoc con el píxel
 - Con Pixel History en la captura de RenderDoc:
   - **La barandilla** (EID 224) es un `DrawIndexed` que usa `cb_main_matrices0` (hueco 0) y su posición sale de **m_WVP**.
