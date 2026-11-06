@@ -1,5 +1,5 @@
 /*
- * HITO E8h - d3d11.dll (el cuerpo solo con la camara principal) (reflejos con el H del fotograma anterior) (objetos con su camara + camara del arma tambien) (base E7d otra vez, para RenderDoc con F9) (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E9 - d3d11.dll (camara nativa: la cabeza dentro de la camara del juego) (el cuerpo solo con la camara principal) (reflejos con el H del fotograma anterior) (objetos con su camara + camara del arma tambien) (base E7d otra vez, para RenderDoc con F9) (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -163,6 +163,12 @@ static int cfg_stereo = 2;
 static int cfg_clock_thread = 1;
 static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
+static int cfg_nativa = 1;              /* (E9) la cabeza entra en la camara del juego por dentro (metro.exe+0x69B900) */
+static int cfg_oclusion = 1;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
+static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
+static void nat_install(void);
+static void ocl_update(void);
+static int nat_active(void);
 static int cfg_previo = 1;              /* (E8g) corregir reflejos/huecos 3 y 7 con el H de antes y el de ahora */
 static int cfg_modoh = 0;               /* 0 = como la E7d (sin fantasma); 1 = como la E8c */
 static int cfg_porobjeto = 1;           /* (E7g) cada dibujo con su propia camara */
@@ -289,6 +295,8 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "por_objeto"))       cfg_porobjeto = v;
     else if (!strcmp(s, "modo_h"))           cfg_modoh = v;
     else if (!strcmp(s, "previo"))           cfg_previo = v;
+    else if (!strcmp(s, "camara_nativa"))    cfg_nativa = v;
+    else if (!strcmp(s, "sin_oclusion"))     cfg_oclusion = v;
     else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
     else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
     else if (!strcmp(s, "raton_max_grados")) cfg_raton_pmax = (fv < 0.0f) ? 0.0f : (fv > 85.0f ? 85.0f : fv);
@@ -1772,6 +1780,8 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_pv_have = (dd > 1e-3f) ? 2 : 0;      /* solo si la camara se ha movido de un fotograma a otro */
         g_ord_flag = 0;
         g_fs_need = 1;
+        if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
+        ocl_update();
         if (g_oc_have) { memcpy(g_op_H, g_oc_H, sizeof(g_oc_H)); memcpy(g_op_Hi, g_oc_Hi, sizeof(g_oc_Hi)); memcpy(g_op_L, g_oc_L, sizeof(g_oc_L)); g_op_have = 1; }
         if (!vr_active() && (n % 60) == 1) {     /* sin visor: la forma de pantalla real (en ventana no es 16:9 exacto) */
             DXGI_SWAP_CHAIN_DESC sd;
@@ -2351,7 +2361,19 @@ static int head_apply(const OvrPose *pz)
  *   cuerpo  = camara del juego menos lo que ha girado por nuestro raton  (Rb)
  *   deseado = cuerpo * cabeza                                            (Rd = Rb * Rg)
  *   H       = [ Rd^T * Rcam | -Rg^T * dg ]                                                                       */
-static int raton_active(void) { return cfg_raton && g_rt_cal == 2 && g_mode == 1 && (g_head_ok || cfg_fakehead); }
+/* (E9) camara nativa: estado */
+static volatile ULONGLONG g_nat_last = 0;
+static float g_nat_yh = 0, g_nat_ref = 0; static int g_nat_was = 0;
+static int nat_active(void)
+{
+    return cfg_nativa && g_nat_installed == 1 && g_mode == 1 && (GetTickCount64() - g_nat_last) < 500;
+}
+static int raton_active(void)
+{
+    if (g_mode != 1 || !(g_head_ok || cfg_fakehead)) return 0;
+    if (nat_active()) return 1;
+    return cfg_raton && g_rt_cal == 2;
+}
 
 /* camara (a mundo) a partir de giro e inclinacion, como la del juego: columnas derecha, arriba, adelante */
 static void euler_cam(float yaw, float pitch, float M[3][3])
@@ -2376,6 +2398,7 @@ static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4])
     float Pg = asinf(fy);
     float yb = G - g_rt_kx * (float)rt_applied(g_rt_hx);
     float pb = Pg - g_rt_ky * (float)rt_applied(g_rt_hy);
+    if (nat_active()) { yb = G - g_nat_yh; pb = 0; }   /* (E9) el juego ya lleva el giro y la inclinacion de la cabeza */
     euler_cam(yb, pb, Rb);
     if (g_rt_bodyfrom_any) { memcpy(g_rt_Rb, Rb, sizeof(Rb)); g_rt_haveRb = 1; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
@@ -2484,6 +2507,7 @@ static void raton_step(void)
 {
     if (!cfg_raton || g_mode != 1) { g_rt_reset = 1; return; }
     if (!(g_head_ok || cfg_fakehead)) return;            /* (E7b) visor perdido un instante: esperar, NO reiniciar */
+    if (cfg_nativa && g_nat_installed >= 0) { g_rt_reset = 1; return; }   /* (E9) camara nativa (o buscandola): no se mueve el raton */
     LONG c = g_rt_cal;
     if (c == 0 || (c == -1 && GetTickCount64() > g_rt_cal_retry && g_rt_cal_retry)) {
         if (g_rt_havecam && game_has_focus()) { g_rt_cal_retry = 0; raton_calibrate(); }
@@ -2521,6 +2545,102 @@ static void raton_step(void)
     g_rt_hx[hi] = g_rt_cx; g_rt_hy[hi] = g_rt_cy;
     g_rt_hi = hi;
     InterlockedExchangeAdd(&g_rt_sent, labs(nx) + labs(ny));
+}
+
+/* ------------------------------------------------ (E9) camara nativa */
+/* El motor 4A construye cada fotograma la base de la camara (posicion, adelante, arriba) en metro.exe+0x69B900,
+ * llamada desde la actualizacion de la camara del jugador en +0x1F3960. (Encontrado por D-Rey86 en Metro 2033
+ * Redux; el codigo de Last Light Redux es identico en esas direcciones.) Nos colamos ahi: el giro del cuerpo
+ * sigue siendo el del juego (raton/mando), y le sumamos el giro de la cabeza y su inclinacion. Asi TODO el juego
+ * (lo que se dibuja, lo que se ve, luces, reflejos, el arma, a donde apuntas) usa la cabeza desde el principio,
+ * sin mover el raton y sin ir un fotograma por detras. La inclinacion de lado (roll), cada ojo y moverse siguen en H. */
+typedef void (*nat_fn_t)(void *, const float *, const float *, const float *, void *, void *);
+static void *g_nat_tramp = NULL; static BYTE *g_nat_ret = NULL;
+static void nat_hook(void *mgr, const float *pos, const float *a, const float *b, void *a5, void *a6)
+{
+    nat_fn_t orig = (nat_fn_t)g_nat_tramp;
+    if ((BYTE *)__builtin_return_address(0) != g_nat_ret || !cfg_nativa || g_mode != 1 ||
+        !(g_head_ok || cfg_fakehead) || !pos || !a || !b) {
+        g_nat_was = 0;
+        orig(mgr, pos, a, b, a5, a6); return;
+    }
+    float h = sqrtf(a[0] * a[0] + a[2] * a[2]);
+    if (!(h > 1e-5f) || !isfinite(h)) { orig(mgr, pos, a, b, a5, a6); return; }
+    float yh = atan2f(g_rt_Rg[0][2], g_rt_Rg[2][2]);
+    float ph = asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f));
+    if (!g_nat_was || (GetTickCount64() - g_nat_last) > 500) { g_nat_ref = yh; vr_log("NATIVA: la cabeza entra en la camara del juego"); }
+    g_nat_was = 1;
+    float yaw = atan2f(a[0], a[2]) + (yh - g_nat_ref);
+    float pitch = clampf(ph, -1.48f, 1.48f);
+    float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+    __attribute__((aligned(16))) float fwd[4] = { cp * sy, sp, cp * cy, 0.0f };
+    __attribute__((aligned(16))) float up[4]  = { -sp * sy, cp, -sp * cy, 0.0f };
+    g_nat_yh = yh;      /* raton_make_H: cuerpo = juego - yh, y la cabeza entera encima => el giro y la inclinacion quedan exactos; H solo lleva ladeo, ojos y posicion */
+    g_nat_last = GetTickCount64();
+    InterlockedIncrement(&g_nat_hits);
+    orig(mgr, pos, fwd, up, a5, a6);
+}
+
+/* Parcheo seguro con el juego en marcha: primero un "espera aqui" de 2 bytes (EB FE) escrito de golpe, para que
+ * ningun hilo entre a medias; 2 ms para que el que ya estuviera dentro salga; el resto; y los 2 primeros de golpe. */
+static int patch_bytes(BYTE *dst, const BYTE *src, SIZE_T n)
+{
+    DWORD old = 0;
+    if (n < 2 || ((UINT_PTR)dst & 1)) return 0;
+    if (!VirtualProtect(dst, n, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    __atomic_store_n((volatile SHORT *)dst, (SHORT)0xFEEB, __ATOMIC_SEQ_CST);
+    FlushInstructionCache(GetCurrentProcess(), dst, n);
+    Sleep(2);
+    memcpy(dst + 2, src + 2, n - 2);
+    FlushInstructionCache(GetCurrentProcess(), dst, n);
+    __atomic_store_n((volatile SHORT *)dst, (SHORT)(src[0] | (src[1] << 8)), __ATOMIC_SEQ_CST);
+    VirtualProtect(dst, n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), dst, n);
+    return 1;
+}
+
+static void nat_install(void)
+{
+    if (g_nat_installed != 0 || !cfg_nativa) return;
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    BYTE *fn = base + 0x69B900, *call = base + 0x1F3960;
+    static const BYTE expect[18] = { 0x48,0x89,0x5C,0x24,0x18, 0x48,0x89,0x74,0x24,0x20, 0x57, 0x48,0x81,0xEC,0xA0,0x00,0x00,0x00 };
+    static int tries = 0;
+    if (memcmp(fn, expect, sizeof(expect)) != 0 || call[0] != 0xE8 || call + 5 + *(INT32 *)(call + 1) != fn) {
+        if (++tries == 40) { vr_log("NATIVA: no encuentro la funcion de la camara (otra version del juego?); sigo con el raton"); g_nat_installed = -1; }
+        return;
+    }
+    BYTE *t = (BYTE *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!t) { g_nat_installed = -1; return; }
+    memcpy(t, fn, 18);
+    t[18] = 0xFF; t[19] = 0x25; *(UINT32 *)(t + 20) = 0; *(UINT64 *)(t + 24) = (UINT64)(fn + 18);
+    FlushInstructionCache(GetCurrentProcess(), t, 64);
+    g_nat_tramp = t; g_nat_ret = call + 5;
+    BYTE j[18];
+    j[0] = 0xFF; j[1] = 0x25; *(UINT32 *)(j + 2) = 0; *(UINT64 *)(j + 6) = (UINT64)(void *)nat_hook;
+    for (int i = 14; i < 18; i++) j[i] = 0x90;
+    if (!patch_bytes(fn, j, 18)) { g_nat_installed = -1; vr_log("NATIVA: no pude parchear la funcion"); return; }
+    g_nat_installed = 1;
+    vr_log("NATIVA: gancho puesto en metro.exe+0x69B900 (llamada de la camara del jugador en +0x1F3960)");
+}
+
+/* (E9) Oclusion de CPU (metro.exe+0x826B50): el juego proyecta la caja de cada objeto sobre una profundidad
+ * pequena del fotograma anterior y lo descarta si "queda tapado". En VR (cabeza que se mueve, FOV distinto)
+ * descarta cosas que si se ven: paredes y objetos que desaparecen un instante. Con F9: siempre "visible". */
+static BYTE g_ocl_orig[6]; static int g_ocl_state = 0;   /* 0 sin tocar, 1 parcheado, -1 no encontrado */
+static void ocl_update(void)
+{
+    BYTE *f = (BYTE *)GetModuleHandleA(NULL) + 0x826B50;
+    static const BYTE expect[16] = { 0x4C,0x8B,0xDC, 0x49,0x89,0x5B,0x20, 0x41,0x56, 0x48,0x81,0xEC,0xA0,0x00,0x00,0x00 };
+    static const BYTE yes[6] = { 0xB8,0x01,0x00,0x00,0x00, 0xC3 };
+    int want = (g_mode == 1 && cfg_oclusion);
+    if (want && g_ocl_state == 0) {
+        if (memcmp(f, expect, sizeof(expect)) != 0) return;
+        memcpy(g_ocl_orig, f, 6);
+        if (patch_bytes(f, yes, 6)) { g_ocl_state = 1; vr_log("OCLUSION: desactivada (todo lo que este en el cono se dibuja)"); }
+    } else if (!want && g_ocl_state == 1) {
+        if (patch_bytes(f, g_ocl_orig, 6)) { g_ocl_state = 0; vr_log("OCLUSION: la del juego otra vez"); }
+    }
 }
 
 /* ------------------------------------------------ buscador de la camara en memoria (Shift+H) */
@@ -3089,8 +3209,7 @@ static DWORD WINAPI keys_thread(LPVOID unused)
                             on = cfg_stereo != 0; name = "F5 ESTEREO"; break;
                     case 1: cfg_lights = !cfg_lights; on = cfg_lights; name = "F6 LUCES_VISOR"; break;
                     case 2: cfg_fov = !cfg_fov; on = cfg_fov; name = "F7 FOV_VISOR (lente del visor)"; break;
-                    case 3: cfg_linterna = !cfg_linterna; on = cfg_linterna; name = "F8 LINTERNA (FOV del juego agrandado con F9)";
-                            if (on) g_fov_tries = 0;
+                    case 3: cfg_nativa = !cfg_nativa; on = cfg_nativa; name = "F8 CAMARA NATIVA (la cabeza dentro de la camara del juego; apagada = mover el raton)";
                             break;
                     }
                     vr_log(">>> %s: %s", name, on ? "ENCENDIDO" : "APAGADO");
@@ -3245,8 +3364,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("seg %d: h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
-                   since_cam, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
+            vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
+                   since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
                    (long)InterlockedExchange(&g_s3rays, 0), (long)InterlockedExchange(&g_s3P, 0), (long)InterlockedExchange(&g_s3refl, 0),
                    (long)InterlockedExchange(&g_fs_frames, 0), (long)InterlockedExchange(&g_l7prev, 0), (long)InterlockedExchange(&g_l7own, 0), (long)InterlockedExchange(&g_cb0_own, 0), (long)InterlockedExchange(&g_own_fail, 0), (long)InterlockedExchange(&g_iw_bad, 0), (long)InterlockedExchange(&g_cb0_resc, 0), (long)g_inst_fix, (long)InterlockedExchange(&g_inst_mod, 0), (long)InterlockedExchange(&g_ord_before, 0), (long)InterlockedExchange(&g_ord_after, 0), (long)InterlockedExchange(&g_ord_cb1, 0), (long)(raton_active() ? 1 : g_rt_cal == 2 ? 0 : -1), (double)InterlockedExchange(&g_rt_resid, 0) / 10.0, (long)InterlockedExchange(&g_rt_sent, 0), (double)fov_game_vdeg(), (int)g_fov_applied, (long)fps, (long)(wus / 1000), (long)frz, (long)vlv, (long)InterlockedExchange(&g_l7, 0), (long)InterlockedExchange(&g_l3, 0), (long)g_mode, (long)g_stereo_on, (long)(k - pk),
                    (long)g_modded, (long)g_cb0_mod, (long)g_cb0_skip, (long)g_nomatch);
@@ -3418,7 +3537,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E8h: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E9: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

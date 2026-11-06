@@ -46,6 +46,15 @@
 - Parejas leídas al encontrar la cámara: (-0.751, -0.370) (0.000, -0.370) (0.000, -0.370). Las copias +12/+24 tienen la **inclinación a 0**, así que podrían ser solo el giro del cuerpo. Habría que escribir solo el giro en ellas y no la inclinación.
 - La búsqueda por firma, más permisiva, da 16 candidatas en 0,6 s.
 
+## E9 (6/11): cámara nativa — LEER PRIMERO
+- `metro.exe` de Last Light Redux (rama de Steam anterior al "next-gen", sha256 74c123b4…) desempaquetado con Steamless: el motor es el mismo que Metro 2033 Redux en las direcciones de D-Rey86.
+  - `+0x69B900` base de la cámara (rcx gestor, rdx posición, r8 adelante, r9 arriba, +2 en pila). Prólogo de 18 bytes `48 89 5C 24 18 48 89 74 24 20 57 48 81 EC A0 00 00 00`. Solo actuamos si la vuelta es `+0x1F3965` (llamada de la cámara del jugador en `+0x1F3960`).
+  - `+0x826B50` oclusión de CPU → `mov eax,1; ret` en modo VR.
+  - Comando de cámara 0x70000014 en `+0xd6f2f` (función `+0xD6BE0`), mismos 12 llamadores que en 2033.
+- Gancho: salto absoluto de 14 bytes + trampolín con el prólogo copiado; parcheo en caliente con `EB FE` primero.
+- Cuerpo para H: yaw = juego − yaw de cabeza, pitch = 0; así H queda en ladeo + ojos + posición.
+- Pendiente de probar: que la cabeza mueva la cámara sin fantasma y sin objetos que se muevan; cinemáticas (el gancho solo actúa en la cámara del jugador; si no, F8).
+
 ## 🧭 Cambio de rumbo (6/11/2026) — LEER PRIMERO
 Llevábamos muchas versiones (E4–E5h) intentando que **la cámara del juego siga a la cabeza** (`camara_juego`, F8). Resultado: el arma te sigue, pero sale el **mundo marrón** y la cámara se suelta. Estábamos en bucle, así que se **abandona ese camino**.
 

@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E9 — Cámara nativa: la cabeza entra en la cámara del juego por dentro
+- He sacado el código del `metro.exe` (quitando la protección SteamStub con Steamless). La parte que **construye la cámara** es idéntica a la de Metro 2033 Redux, en las mismas direcciones que usa el mod de **D-Rey86** (GPL-3): `metro.exe+0x69B900` (base de la cámara: posición, adelante, arriba), llamada desde la cámara del jugador en `+0x1F3960`; y la "oclusión" de CPU en `+0x826B50`. Las 6 firmas coinciden.
+- **Ya no se mueve el ratón.** Cada fotograma, cuando el juego monta la cámara del jugador, le sumamos el giro de tu cabeza y le ponemos tu inclinación. El cuerpo sigue con ratón/mando. Así **todo** el juego (dibujo, luces, reflejos, el arma, a dónde apuntas, qué se descarta) usa ya la cabeza, sin ir un fotograma detrás. Nuestro H solo pone lo que falta: ladeo, cada ojo y posición de la cabeza.
+- **Oclusión desactivada en VR** (`sin_oclusion=1`): el juego ya no esconde objetos que cree tapados mirando el fotograma anterior (paredes/objetos que desaparecían un instante).
+- **F8** = cámara nativa sí/no (apagada vuelve al método del ratón de la E7/E8). Si el juego no tiene esas direcciones (otra versión), lo dice en el log y usa el ratón.
+- Log: `NATIVA: gancho puesto…`, `NATIVA: la cabeza entra…`, `OCLUSION: desactivada`, y cada segundo `nativa=1(60/s)`.
+- Config: `camara_nativa=1`, `sin_oclusion=1`.
+- Escrito por nosotros, con la idea y las direcciones de D-Rey86/Metro2033ReduxVR. ¡Gracias!
+
 ## E8h — El "cuerpo" solo se calcula con la cámara principal
 - Probada la E8g: sigue igual. O fantasma o los objetos se mueven. **Pista nueva del usuario:** los objetos solo se mueven al mover **las gafas**, nunca al mover **el ratón**.
 - Causa probable: desde la E7g (`por_objeto`), cada cámara del hueco 1 (también la del **arma**, que se balancea al girar) recalculaba el "cuerpo" (la cámara sin nuestro ratón) con **su propia** orientación. Los dibujos que venían después usaban ese cuerpo equivocado, así que se colocaban un poco girados respecto al mundo, y ese giro cambiaba al mover la cabeza. En la E7d solo lo calculaba la cámara principal, y por eso no tenía fantasma.
