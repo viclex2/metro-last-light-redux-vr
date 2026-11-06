@@ -1,5 +1,5 @@
 /*
- * HITO E7 - d3d11.dll (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E7b - d3d11.dll (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -2068,7 +2068,8 @@ static void raton_calibrate(void)
 /* despues de cada Present (en estereo sincronizado, una vez por pareja): mandar el raton que toca */
 static void raton_step(void)
 {
-    if (!cfg_raton || g_mode != 1 || !(g_head_ok || cfg_fakehead)) { g_rt_reset = 1; return; }
+    if (!cfg_raton || g_mode != 1) { g_rt_reset = 1; return; }
+    if (!(g_head_ok || cfg_fakehead)) return;            /* (E7b) visor perdido un instante: esperar, NO reiniciar */
     LONG c = g_rt_cal;
     if (c == 0 || (c == -1 && GetTickCount64() > g_rt_cal_retry && g_rt_cal_retry)) {
         if (g_rt_havecam && game_has_focus()) { g_rt_cal_retry = 0; raton_calibrate(); }
@@ -2083,7 +2084,13 @@ static void raton_step(void)
         g_rt_unwrap = yh; g_rt_last = yh;
         vr_log("RATON: empiezo (cuerpo = donde mira ahora el juego)");
     }
-    g_rt_unwrap += wrap_pi(yh - g_rt_last); g_rt_last = yh;
+    {
+        /* (E7b) un salto enorme de golpe (SteamVR recentrado, el visor que se pierde y vuelve) no es tu cabeza:
+         * nadie gira 45 grados en un fotograma. Se ignora, para que el juego no pegue un giro loco */
+        float d = wrap_pi(yh - g_rt_last);
+        if (fabsf(d) > 0.785f) { vr_log("RATON: salto de %.0f grados de golpe en el visor: lo ignoro", (double)(d * RAD2DEG)); d = 0; }
+        g_rt_unwrap += d; g_rt_last = yh;
+    }
     if (!game_has_focus()) return;                       /* sin el juego delante no se mueve el raton de Windows */
     LONG nx = (LONG)lroundf(g_rt_unwrap / g_rt_kx) - g_rt_cx, ny = 0;
     if (cfg_raton_pitch && g_rt_ky != 0) {
@@ -2962,7 +2969,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E7: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E7b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

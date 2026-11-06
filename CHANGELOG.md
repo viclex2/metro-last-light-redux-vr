@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7b — Arreglo: el juego daba giros locos al perderse el visor un instante
+- Probada la E7: **se calibra bien** (0,09° por paso) y **el juego gira con la cabeza**. En el vídeo, las luces se ven bien y el arma sale delante al mirar a cualquier lado.
+- Fallo: si SteamVR perdía el visor un instante, la DLL "volvía a empezar" y mandaba otra vez todo el giro de la cabeza, de modo que el juego daba un giro de más. Pasó docenas de veces seguidas (`RATON: empiezo...`).
+- Ahora, si se pierde el visor, solo espera. Solo vuelve a empezar al activar F9 o al recentrar.
+- Un salto de más de 45° en un fotograma (SteamVR recentrado, el visor que vuelve) se ignora.
+
 ## E7 — La cabeza mueve el ratón: el juego gira de verdad con tu cabeza
 - Probada la E6: el FOV del juego **no cambia en directo** (ninguno de los números probados cambia la lente). En cambio, **`r_base_fov 90` en los dos user.cfg sí funciona** (el log pasa de 50.6 a 90). El 100 que había lo ignoraba: 90 parece el máximo. Ahora `linterna=0` por defecto.
 - En VR, con el FOV a 90: no hay marrón, 72 fps y de frente se ve bien. Pero, girando mucho la cabeza (más de 120°, mirar atrás) con el ratón quieto, salen **zonas grises sin dibujar**: la linterna no llega detrás.
