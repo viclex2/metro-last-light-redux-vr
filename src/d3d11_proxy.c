@@ -594,6 +594,7 @@ static void get_H(float H[4][4], float Hi[4][4])
 
 static void raton_make_H(const float *f, float Ho[4][4], float Hio[4][4]);
 static volatile LONG g_cb0_resc = 0;
+static volatile float g_orig_P00 = 0, g_orig_P11 = 0, g_orig_P22 = 0, g_orig_P23 = 0;   /* lente ORIGINAL del juego */
 static volatile LONG g_inst_fix = 0, g_inst_mod = 0, g_inst_dump = 0;   /* (E7e) huecos 8 y 13 */
 static volatile LONG g_ord_flag = 0, g_ord_before = 0, g_ord_after = 0, g_ord_cb1 = 0;   /* (E7d) orden de los cajones */
 /* (E7d) H para el cajon de la camara, hecho con ESA camara. El juego prepara la camara del siguiente
@@ -775,7 +776,6 @@ static volatile float g_cam_yaw = 0, g_cam_pitch = 0;
 static volatile float g_cam_fx = 0, g_cam_fy = 0, g_cam_fz = 0;
 static float g_aspect = 16.0f / 9.0f;      /* se actualiza con el tamano real de la imagen */
 static volatile LONG g_cam_seq = 0;
-static volatile float g_orig_P00 = 0, g_orig_P11 = 0, g_orig_P22 = 0, g_orig_P23 = 0;   /* lente ORIGINAL del juego */
 static float wrap_pi(float a);
 
 /* (E6) La camara del juego ya NO se toca: el raton la mueve como siempre y la cabeza solo mueve lo que se ve
