@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E7g — Cada dibujo con su propia cámara
+- Probada la E7f: los objetos siguen moviéndose (`rescatados=0`: no era eso).
+- Nueva idea: cada dibujo del hueco 0 trae, además de WV, la inversa de su posición en el mundo (iW). Así se puede saber **qué cámara usó exactamente ese dibujo**: V = WV·iW.
+- Ahora cada dibujo se corrige con un H hecho **con su propia cámara**: H = (cuerpo·cabeza)^T·V del dibujo. Da igual que lleve la cámara de este fotograma o la del anterior: todos acaban mirando a donde mira la cabeza.
+- `por_objeto=1` (0 = como la E7f). El log cuenta `propios=`.
+
 ## E7f — Rescate de los dibujos que no cuadran
 - Probada la E7e: con F10, los objetos se mueven **más**, y la mirilla y el silenciador del arma flotan. Los huecos 8 y 13 son los **huesos** de los modelos (en el espacio del propio modelo) y no se deben tocar. F10 se queda apagada.
 - La E7e leía esos cajones aunque F10 estuviera apagada, y el juego iba a unos 24 fps. Arreglado.
