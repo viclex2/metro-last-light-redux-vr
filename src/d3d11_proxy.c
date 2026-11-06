@@ -1,5 +1,5 @@
 /*
- * HITO E8b - d3d11.dll (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
+ * HITO E8c - d3d11.dll (un H por fotograma; hueco 7 con el del anterior) (base E7d; preparada para RenderDoc) (luces con su camara) (cada dibujo con su camara) (rescate de dibujos que no cuadran) (F10: objetos de los huecos 8 y 13) (fantasma: H de los dibujos fijado en Present) (detective del fotograma anterior: Shift+D) (la cabeza mueve el raton: el juego gira de verdad con tu cabeza) (la linterna: con F9 se agranda el FOV del juego para que no desaparezcan cosas al girar la cabeza; la camara del juego ya no se toca) (cabeza falsa para RenderDoc) (compatible con RenderDoc) (F5-F8 encienden/apagan piezas en directo) (luces y sombras con la lente del visor) (detective: que otros cajones llevan la lente del juego) (buscador de la camara del juego en memoria: Shift+H) (estereo sincronizado: los dos ojos ven el mismo instante, con el reloj del juego parado en el 2o ojo) (lente del juego = lente del visor; cada ojo recibe su trozo) (imagen al visor: la misma para los dos ojos; visor via SteamVR + teclado) (vista con el teclado: flechas, o cualquier Shift / Bloq Mayus + letras, o numerico) "adaptador" (proxy) para Metro Last Light Redux (64 bits)
  *
  * Que hace, ademas de pasar todo a la d3d11.dll real de Windows:
  *   1) Vigila cuando el juego escribe datos en los "cajones" (constant buffers).
@@ -1311,8 +1311,12 @@ static int fix_slot7(float *f)
         float Pp[4][4], P3[4][4];
         memcpy(Pp, P, sizeof(Pp));
         for (int j = 0; j < 4; j++) { Pp[0][j] = g_fs_prevL[0][j]; Pp[1][j] = g_fs_prevL[1][j]; }
+        /* T = V_ant * V_act^-1 (de "vista de ahora" a "vista de antes"). Nuestra vista de ahora es H_act*V_act y la
+         * imagen de antes se hizo con Plente_ant*H_ant*V_ant, asi que: M2' = Plente_ant * H_ant * T * H_act^-1 */
+        float P4[4][4];
         mul4(Pp, g_fs_prevH, P3);
-        mul4(P3, T, M2n);
+        mul4(P3, T, P4);
+        mul4(P4, Hi, M2n);
         InterlockedIncrement(&g_l7prev);
     } else
     mul4(P2, T, M2n);
@@ -3242,7 +3246,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E8b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E8c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E8c — La fórmula buena para el hueco 7
+- Probada la E8b: vuelve el fantasma.
+- Mirando en la captura qué hay exactamente en el hueco 7: no es la cámara anterior tal cual, sino el **paso de "vista de ahora" a "vista de antes"**, T = V_ant·V_act⁻¹. Con el ratón girando, es un giro pequeño (unos 3°) y sin desplazamiento.
+- La pieza de reaprovechar la imagen recibe las posiciones en **nuestra** vista de ahora (H_act·V_act). Así que lo correcto es M2' = Plente_ant·H_ant·T·**H_act⁻¹**. A la E8b le faltaba ese último H_act⁻¹, y a la E7d también, aunque allí casi no se notaba.
+
 ## E8b — Lo que enseñó RenderDoc: un H por fotograma, y el hueco 7 con el del fotograma anterior
 - Captura de RenderDoc (sin F9, moviendo el ratón), analizada dibujo a dibujo:
   - Dentro de un fotograma **todos** los dibujos usan la misma cámara (la del hueco 1).
