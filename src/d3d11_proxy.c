@@ -846,6 +846,18 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
     }
     if (Pe[0][0] < 0.05f || Pe[1][1] < 0.05f) return 0;     /* no parece una lente en perspectiva (0.05: linterna) */
     if (Pe[0][0] >= 1.428f && !g_arma) return 0;             /* lente estrecha (~57 grados): es el arma */
+    float Hw[4][4];
+    if (nat_full() && g_stereo_on && cfg_natarma && g_orig_P00 > 0 && Pe[0][0] > g_orig_P00 * 1.3f) {
+        /* (E10c) ARMA y BRAZOS (su lente es mas estrecha): el juego los pega a la camara, y la camara ya va en
+         * cada ojo -> el arma se iba con cada ojo y los dos la veian igual (sin 3D, enorme). Se la devuelve al
+         * centro de la cabeza: en la vista del ojo, todo lo del arma se corre -ojo. */
+        LONG e = g_eye;
+        float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
+        memcpy(Hw, H, sizeof(Hw));
+        for (int r = 0; r < 3; r++) Hw[r][3] -= t[r];
+        H = (const float (*)[4])Hw;
+        InterlockedIncrement(&g_nat_armaojo);
+    }
     if (cfg_fov && g_fov_ok) {
         fov_xy(Pe);                    /* WVP' = Plente_visor * H * WV */
         mul4(H, WV4, M1);
@@ -999,7 +1011,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         /* (E10b) camaras que NO salen de nuestra posicion (la del ARMA y los brazos: el juego la monta aparte, pegada
          * a la cara): sin esto los dos ojos ven el arma igual -> sin profundidad, enorme. Se les pone el ojo en H. */
         else if (nat_full() && g_stereo_on && cfg_natarma) {
-            if (!nat_pos_match(f, NULL)) {
+            if (g_orig_P00 > 0 && p00 > g_orig_P00 * 1.3f) {   /* (E10c) camara del arma (lente estrecha) */
                 LONG e = g_eye;
                 float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
                 for (int r = 0; r < 3; r++) {
@@ -3443,7 +3455,7 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | otras camaras: con_ojo_puesto(arma)=%ld ya_con_ojo=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
@@ -3619,7 +3631,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E10b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E10c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

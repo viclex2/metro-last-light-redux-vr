@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E10c — El arma vuelve al centro de la cabeza
+- E10b no cambió nada: el log decía que la cámara del arma **sí** sale de nuestra posición (con el ojo puesto).
+- Causa real: el juego pega el arma y los brazos a la cámara, y la cámara ya va en cada ojo. El arma se movía con cada ojo, así que los dos la veían en el mismo sitio de la imagen: sin 3D, como en el infinito, y por eso enorme.
+- Ahora, todo lo que se dibuja con la lente del arma (más estrecha que la del mundo) se devuelve al centro de la cabeza: en cada ojo se corre la separación del ojo. Log: `arma: piezas_corregidas=…`.
+
 ## E10b — El arma y los brazos con profundidad
 - Prueba de la E10 (usuario): **sin fantasma, sin objetos que se mueven**. Los ojos se detectan bien (`bien=5000 mal=0`). Quedan dos cosas: **brazos y arma se ven enormes / sin profundidad**, y los FPS van algo irregulares.
 - Causa: el juego dibuja el arma y los brazos con **otra cámara** que monta aparte, pegada a la cara, sin pasar por nuestra posición. Así los dos ojos la veían igual (sin 3D), y algo sin 3D parece muy lejos y, por tanto, enorme.
