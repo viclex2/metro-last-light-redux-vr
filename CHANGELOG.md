@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E10b — El arma y los brazos con profundidad
+- Prueba de la E10 (usuario): **sin fantasma, sin objetos que se mueven**. Los ojos se detectan bien (`bien=5000 mal=0`). Quedan dos cosas: **brazos y arma se ven enormes / sin profundidad**, y los FPS van algo irregulares.
+- Causa: el juego dibuja el arma y los brazos con **otra cámara** que monta aparte, pegada a la cara, sin pasar por nuestra posición. Así los dos ojos la veían igual (sin 3D), y algo sin 3D parece muy lejos y, por tanto, enorme.
+- Ahora a toda cámara que **no** sale de nuestra posición se le pone la separación del ojo. Log: `otras camaras: con_ojo_puesto(arma)=…`. Config `ojo_arma=1`.
+
 ## E10 — Cámara nativa completa: ya no corregimos nada objeto por objeto
 - Pruebas de la E9 (usuario): con **F11** (sin corrección objeto por objeto) **se va el fantasma**, pero los objetos se mueven en el ojo derecho. Shift+F11 no cambia nada. Con F5 (sin 3D) y moviendo solo el ratón sigue el fantasma. **Conclusión:** el fantasma lo hacía nuestra corrección por objeto, no el juego.
 - Ahora a la cámara del juego le damos **todo**: giro, inclinación, **ladeo**, **posición de la cabeza** y la **posición de cada ojo**. Nuestro H pasa a ser "nada" (identidad), así que ya no hay que corregir ningún objeto: solo se cambia la lente por la del visor (igual para todos los dibujos).

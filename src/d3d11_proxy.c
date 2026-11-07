@@ -166,9 +166,12 @@ static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la lintern
 static int cfg_nativa = 1;              /* (E9) la cabeza entra en la camara del juego por dentro (metro.exe+0x69B900) */
 static int cfg_oclusion = 1;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
 static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
+static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no sale de nuestra posicion) se le pone el ojo */
 static int cfg_natfull = 1;             /* (E10) TODA la cabeza (ladeo, posicion y cada ojo) dentro de la camara del juego; H = nada */
 static int nat_full(void);
 static void nat_eye_check(const float *f);
+static int nat_pos_match(const float *f, LONG *eye);
+static volatile LONG g_nat_armaojo = 0, g_nat_otras = 0;
 static volatile LONG g_nat_flip = 1, g_nat_eok = 0, g_nat_ebad = 0, g_nat_enone = 0;
 static void nat_install(void);
 static void ocl_update(void);
@@ -301,6 +304,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "previo"))           cfg_previo = v;
     else if (!strcmp(s, "camara_nativa"))    cfg_nativa = v;
     else if (!strcmp(s, "camara_nativa_completa")) cfg_natfull = v;
+    else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "sin_oclusion"))     cfg_oclusion = v;
     else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
     else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
@@ -992,6 +996,19 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
             else cam_own_H(f, Hc, Hic);
         }
         if (main_cam) nat_eye_check(f);
+        /* (E10b) camaras que NO salen de nuestra posicion (la del ARMA y los brazos: el juego la monta aparte, pegada
+         * a la cara): sin esto los dos ojos ven el arma igual -> sin profundidad, enorme. Se les pone el ojo en H. */
+        else if (nat_full() && g_stereo_on && cfg_natarma) {
+            if (!nat_pos_match(f, NULL)) {
+                LONG e = g_eye;
+                float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
+                for (int r = 0; r < 3; r++) {
+                    Hc[r][3] -= t[r];
+                    Hic[r][3] += Hic[r][0] * t[0] + Hic[r][1] * t[1] + Hic[r][2] * t[2];
+                }
+                InterlockedIncrement(&g_nat_armaojo);
+            } else InterlockedIncrement(&g_nat_otras);
+        }
         if (main_cam && cfg_modoh == 0) {
             float Pt[4][4];
             memcpy(Pt, f + 24, sizeof(Pt));
@@ -2577,16 +2594,23 @@ static float g_nat_ring[8][3]; static LONG g_nat_ringe[8]; static volatile LONG 
 static int nat_full(void) { return cfg_natfull && nat_active(); }
 /* (E10) Cada camara que llega a la grafica: con que ojo la monte? (busco su posicion entre las ultimas que di).
  * Si no coincide con el ojo que se esta dibujando, el juego monta la camara un fotograma antes o despues: me cambio. */
-static void nat_eye_check(const float *f)
+/* la camara (f) sale de una posicion que dimos nosotros? (y con que ojo) */
+static int nat_pos_match(const float *f, LONG *eye)
 {
-    if (!nat_full() || !g_stereo_on) return;
     float cx = f[15], cyy = f[19], cz = f[23], best = 1e9f; LONG be = -2;
     for (int k = 0; k < 8; k++) {
         float dx = g_nat_ring[k][0] - cx, dy = g_nat_ring[k][1] - cyy, dz = g_nat_ring[k][2] - cz;
         float d = dx * dx + dy * dy + dz * dz;
         if (d < best) { best = d; be = g_nat_ringe[k]; }
     }
-    if (best > 0.003f * 0.003f || be < 0) { InterlockedIncrement(&g_nat_enone); return; }
+    if (eye) *eye = be;
+    return best <= 0.003f * 0.003f && be >= 0;
+}
+static void nat_eye_check(const float *f)
+{
+    if (!nat_full() || !g_stereo_on) return;
+    LONG be;
+    if (!nat_pos_match(f, &be)) { InterlockedIncrement(&g_nat_enone); return; }
     if (be == g_eye) InterlockedIncrement(&g_nat_eok); else InterlockedIncrement(&g_nat_ebad);
 }
 static void *g_nat_tramp = NULL; static BYTE *g_nat_ret = NULL;
@@ -3419,7 +3443,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip);
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | otras camaras: con_ojo_puesto(arma)=%ld ya_con_ojo=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3594,7 +3619,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E10: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E10b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
