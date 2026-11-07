@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E10 — Cámara nativa completa: ya no corregimos nada objeto por objeto
+- Pruebas de la E9 (usuario): con **F11** (sin corrección objeto por objeto) **se va el fantasma**, pero los objetos se mueven en el ojo derecho. Shift+F11 no cambia nada. Con F5 (sin 3D) y moviendo solo el ratón sigue el fantasma. **Conclusión:** el fantasma lo hacía nuestra corrección por objeto, no el juego.
+- Ahora a la cámara del juego le damos **todo**: giro, inclinación, **ladeo**, **posición de la cabeza** y la **posición de cada ojo**. Nuestro H pasa a ser "nada" (identidad), así que ya no hay que corregir ningún objeto: solo se cambia la lente por la del visor (igual para todos los dibujos).
+- El juego monta la cámara un poco antes de dibujarla. Para saber para qué ojo es, cada cámara que llega a la gráfica se compara con las últimas que dimos; si el ojo no cuadra, se cambia solo (`NATIVA ojos: bien= mal= flip=` en el log).
+- Config: `camara_nativa_completa=1` (0 = como la E9).
+
 ## E9 — Cámara nativa: la cabeza entra en la cámara del juego por dentro
 - He sacado el código del `metro.exe` (quitando la protección SteamStub con Steamless). La parte que **construye la cámara** es idéntica a la de Metro 2033 Redux, en las mismas direcciones que usa el mod de **D-Rey86** (GPL-3): `metro.exe+0x69B900` (base de la cámara: posición, adelante, arriba), llamada desde la cámara del jugador en `+0x1F3960`; y la "oclusión" de CPU en `+0x826B50`. Las 6 firmas coinciden.
 - **Ya no se mueve el ratón.** Cada fotograma, cuando el juego monta la cámara del jugador, le sumamos el giro de tu cabeza y le ponemos tu inclinación. El cuerpo sigue con ratón/mando. Así **todo** el juego (dibujo, luces, reflejos, el arma, a dónde apuntas, qué se descarta) usa ya la cabeza, sin ir un fotograma detrás. Nuestro H solo pone lo que falta: ladeo, cada ojo y posición de la cabeza.
