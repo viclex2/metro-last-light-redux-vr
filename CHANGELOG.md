@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E10d — F10 = foto de lo que ve cada ojo
+- Prueba de la E10c: **arma y brazos bien** (cerca y de tamaño normal). Es la primera versión jugable.
+- Para arreglar el HUD doble hay que ver qué parte sale doble, y desde las gafas no se puede grabar. **F10** guarda lo que ve cada ojo en `%TEMP%\metro_vr_ojo_izq.bmp` y `metro_vr_ojo_der.bmp` (a mitad de tamaño).
+- (F10 antes era la prueba de los huecos 8/13, que no servía.)
+
 ## E10c — El arma vuelve al centro de la cabeza
 - E10b no cambió nada: el log decía que la cámara del arma **sí** sale de nuestra posición (con el ojo puesto).
 - Causa real: el juego pega el arma y los brazos a la cámara, y la cámara ya va en cada ojo. El arma se movía con cada ojo, así que los dos la veían en el mismo sitio de la imagen: sin 3D, como en el infinito, y por eso enorme.

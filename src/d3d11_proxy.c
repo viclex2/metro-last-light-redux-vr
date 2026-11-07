@@ -2114,6 +2114,56 @@ static void head_try_init(void)
 }
 
 /* ---- imagen al visor: copiamos la imagen final del juego y se la damos a SteamVR ---- */
+
+/* (E10d) F10 = FOTO: guarda lo que ve cada ojo en %TEMP%\metro_vr_ojo_izq.bmp y _der.bmp (a mitad de tamano) */
+static volatile LONG g_photo = 0;    /* bits: 1 = falta el ojo izq, 2 = falta el der */
+static void photo_save(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11Texture2D *src, const D3D11_TEXTURE2D_DESC *d, int eye)
+{
+    int bgra;
+    switch ((int)d->Format) {
+        case 27: case 28: case 29: bgra = 0; break;          /* R8G8B8A8 */
+        case 87: case 88: case 90: case 91: bgra = 1; break; /* B8G8R8A8 */
+        default: vr_log("FOTO: formato de imagen %d no soportado", (int)d->Format); return;
+    }
+    D3D11_TEXTURE2D_DESC t = *d;
+    t.MipLevels = 1; t.ArraySize = 1; t.SampleDesc.Count = 1; t.SampleDesc.Quality = 0;
+    t.Usage = D3D11_USAGE_STAGING; t.BindFlags = 0; t.CPUAccessFlags = D3D11_CPU_ACCESS_READ; t.MiscFlags = 0;
+    ID3D11Texture2D *st = NULL;
+    if (FAILED(ID3D11Device_CreateTexture2D(dev, &t, NULL, &st)) || !st) { vr_log("FOTO: no pude crear la copia"); return; }
+    if (d->SampleDesc.Count > 1) { vr_log("FOTO: imagen con antialiasing (MSAA), no se puede"); ID3D11Texture2D_Release(st); return; }
+    ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)st, (ID3D11Resource *)src);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) { ID3D11Texture2D_Release(st); return; }
+    UINT W = d->Width / 2, H = d->Height / 2, row = (W * 3 + 3) & ~3u;
+    BYTE *out = (BYTE *)malloc((size_t)row * H);
+    if (out) {
+        for (UINT y = 0; y < H; y++) {
+            const BYTE *sp = (const BYTE *)m.pData + (size_t)(y * 2) * m.RowPitch;
+            BYTE *dp = out + (size_t)(H - 1 - y) * row;        /* BMP va de abajo a arriba */
+            for (UINT x = 0; x < W; x++) {
+                const BYTE *px = sp + x * 8;
+                dp[x * 3 + 0] = bgra ? px[0] : px[2];
+                dp[x * 3 + 1] = px[1];
+                dp[x * 3 + 2] = bgra ? px[2] : px[0];
+            }
+        }
+        char path[MAX_PATH]; GetTempPathA(MAX_PATH, path);
+        strcat(path, eye ? "metro_vr_ojo_der.bmp" : "metro_vr_ojo_izq.bmp");
+        FILE *fp = fopen(path, "wb");
+        if (fp) {
+            BYTE hd[54]; memset(hd, 0, sizeof(hd));
+            UINT fsz = 54 + row * H;
+            hd[0] = 'B'; hd[1] = 'M'; *(UINT *)(hd + 2) = fsz; *(UINT *)(hd + 10) = 54;
+            *(UINT *)(hd + 14) = 40; *(INT32 *)(hd + 18) = (INT32)W; *(INT32 *)(hd + 22) = (INT32)H;
+            *(WORD *)(hd + 26) = 1; *(WORD *)(hd + 28) = 24; *(UINT *)(hd + 34) = row * H;
+            fwrite(hd, 1, 54, fp); fwrite(out, 1, (size_t)row * H, fp); fclose(fp);
+            vr_log("FOTO: guardado %s (%ux%u)", path, W, H);
+        }
+        free(out);
+    }
+    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)st, 0);
+    ID3D11Texture2D_Release(st);
+}
 static ID3D11Texture2D *g_vr_tex = NULL;      /* (ojo 0) la copia, vista desde el dispositivo del JUEGO */
 static ID3D11Texture2D *g_vr_own = NULL;      /* (ojo 0) la misma copia, vista desde NUESTRO dispositivo (la que va a SteamVR) */
 static ID3D11Texture2D *g_vr_tex2 = NULL, *g_vr_own2 = NULL;   /* ojo 1 (para el estereo) */
@@ -2230,6 +2280,11 @@ static void vr_submit_frame(IDXGISwapChain *sc)
             else
                 ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)dst, (ID3D11Resource *)bb);
             ID3D11DeviceContext_Flush(ctx);     /* que la copia llegue antes de que SteamVR la lea */
+            if (g_photo) {
+                int pe = stereo ? (int)eye : 0;
+                if (g_photo & (1 << pe)) { photo_save(dev, ctx, bb, &d, pe); InterlockedAnd(&g_photo, ~(1 << pe)); }
+                if (!stereo) g_photo = 0;
+            }
             if (g_have_frame_pose) g_eye_pose[eye] = g_frame_pose;
             if (!stereo) g_eye_pose[1] = g_eye_pose[0];
             /* textura + postura con la que se dibujo: asi SteamVR recoloca bien cada ojo aunque su imagen sea de antes */
@@ -3336,10 +3391,10 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         {
             static int prevf8 = 0;
             int k8 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-            if (k8 && !prevf8) {
-                g_inst_fix = !g_inst_fix; g_inst_dump = 4;
-                vr_log(">>> F10: objetos de los huecos 8 y 13 %s", g_inst_fix ? "CORREGIDOS" : "sin corregir");
-                if (g_inst_fix) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+            if (k8 && !prevf8) {   /* (E10d) F10 = FOTO de los dos ojos */
+                g_photo = 3;
+                vr_log(">>> F10: FOTO de lo que ve cada ojo (en la carpeta TEMP)");
+                Beep(1200, 60);
             }
             prevf8 = k8;
         }
@@ -3631,7 +3686,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E10c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E10d: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
