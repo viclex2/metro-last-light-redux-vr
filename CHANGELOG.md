@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E13 — Mandos como teclado/ratón, y la oclusión del juego otra vez puesta
+- Prueba de la E12: en VR el juego hace unas 25-35 parejas de ojos por segundo; cada pareja tarda ~25 ms y no llega a los 13,9 ms de los 72 Hz. En pantalla normal va bien.
+- Ahora que la cámara es la del juego, ya no hace falta quitar su "oclusión" (la E9 la quitaba): con ella puesta el juego no dibuja lo que está tapado, y debería ir bastante más rápido. **Shift+F10** la quita/pone para comparar (`sin_oclusion=1` en la config la deja quitada).
+- **Mandos** (paso 1 del plan de los mandos):
+  - Izquierdo: stick = andar · clic del stick = correr · gatillo = lanzar (C) · agarre = botiquín (Q) · X toque = linterna (F), X mantener = máscara (G) · Y toque = arma siguiente, Y mantener 1 s = menú (Esc).
+  - Derecho: gatillo = disparar · agarre = apuntar · A = usar (E) · B = recargar (R) · stick a los lados = girar · stick arriba = saltar · stick abajo = agacharse (Z) · clic del stick = cuchillo (V).
+  - Config: `mandos=1`, `giro_velocidad=120` (grados/s), `giro_saltos=0` (p. ej. 30 = giro a saltos de 30°), `raton_por_grado=11`.
+
 ## E12 — Medir por qué va a tirones
 - El log decía `fps=72` y `espera_steamvr=600ms`: el juego dibuja ~36 parejas de ojos por segundo (la mitad de los 72 Hz de las gafas) y pasa el 60% del tiempo esperando. Eso es SteamVR bajando a la mitad porque la pareja no llega a tiempo, así que cada ojo se refresca a 36 Hz.
 - Ahora se apunta cada segundo lo que mide el propio SteamVR: `STEAMVR: pares=… grafica_juego=…ms grafica_total=… entre_pares=… repetidos=… con_reproyeccion=…`. Con esto se ve si falta gráfica (bajar resolución/calidad) o si es otra cosa.

@@ -164,12 +164,16 @@ static int cfg_clock_thread = 1;
 static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
 static int cfg_nativa = 1;              /* (E9) la cabeza entra en la camara del juego por dentro (metro.exe+0x69B900) */
-static int cfg_oclusion = 1;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
+static int cfg_oclusion = 0;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
 static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
 static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no sale de nuestra posicion) se le pone el ojo */
 static void *g_bb_ptr;
 static volatile LONG g_hud_n;
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
+static int cfg_mandos = 1;
+static float cfg_giro = 120.0f;       /* grados por segundo con el stick derecho a tope */
+static float cfg_giro_paso = 0.0f;    /* >0: giro a saltos de estos grados (0 = suave) */
+static float cfg_raton_grado = 11.0f; /* pasos de raton por grado de giro del juego (se ajusta con la calibracion E7 si la hay) */
 static int cfg_hud = 0;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
 static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
 static float cfg_hud_dist = 1.5f;       /* metros a los que se ve el HUD */
@@ -181,6 +185,7 @@ static volatile LONG g_nat_armaojo = 0, g_nat_otras = 0;
 static volatile LONG g_nat_flip = 1, g_nat_eok = 0, g_nat_ebad = 0, g_nat_enone = 0;
 static void nat_install(void);
 static void ocl_update(void);
+static void mandos_step(float dt);
 static int nat_active(void);
 static int cfg_previo = 1;              /* (E8g) corregir reflejos/huecos 3 y 7 con el H de antes y el de ahora */
 static int cfg_modoh = 0;               /* 0 = como la E7d (sin fantasma); 1 = como la E8c */
@@ -312,6 +317,10 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "camara_nativa_completa")) cfg_natfull = v;
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
+    else if (!strcmp(s, "mandos"))           cfg_mandos = v;
+    else if (!strcmp(s, "giro_velocidad"))   { if (fv > 1.0f && fv < 1000.0f) cfg_giro = fv; }
+    else if (!strcmp(s, "giro_saltos"))      { if (fv >= 0.0f && fv < 180.0f) cfg_giro_paso = fv; }
+    else if (!strcmp(s, "raton_por_grado"))  { if (fv > 0.1f && fv < 1000.0f) cfg_raton_grado = fv; }
     else if (!strcmp(s, "hud_tamano"))       { if (fv > 0.1f && fv < 3.0f) cfg_hud_size = fv; }
     else if (!strcmp(s, "hud_distancia"))    { if (fv > 0.2f && fv < 50.0f) cfg_hud_dist = fv; }
     else if (!strcmp(s, "sin_oclusion"))     cfg_oclusion = v;
@@ -1833,6 +1842,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_fs_need = 1;
         g_hud_draws = 0;
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
+        {   /* (E13) mandos */
+            static LARGE_INTEGER lt; LARGE_INTEGER now, fq; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&fq);
+            float dt = lt.QuadPart ? (float)(now.QuadPart - lt.QuadPart) / (float)fq.QuadPart : 0.0f; lt = now;
+            if (dt > 0.1f) dt = 0.1f;
+            mandos_step(dt);
+        }
         ocl_update();
         if (g_oc_have) { memcpy(g_op_H, g_oc_H, sizeof(g_oc_H)); memcpy(g_op_Hi, g_oc_Hi, sizeof(g_oc_Hi)); memcpy(g_op_L, g_oc_L, sizeof(g_oc_L)); g_op_have = 1; }
         if (!vr_active() && (n % 60) == 1) {     /* sin visor: la forma de pantalla real (en ventana no es 16:9 exacto) */
@@ -2000,6 +2015,13 @@ typedef void     (*PFN_GetPose)(int origin, float predict, OvrPose *poses, unsig
 static PFN_VR_InitInternal        p_VR_Init = NULL;
 static PFN_VR_GetGenericInterface p_VR_GetIf = NULL;
 static PFN_GetPose                p_GetPose = NULL;
+/* (E13) mandos */
+typedef struct { float x, y; } OvrAxis;
+typedef struct { uint32_t packet; uint64_t pressed, touched; OvrAxis axis[5]; } OvrCtrlState;
+typedef uint32_t (*PFN_RoleIdx)(int role);
+typedef int (*PFN_CtrlState)(uint32_t idx, OvrCtrlState *st, uint32_t size);
+static PFN_RoleIdx p_RoleIdx = NULL;
+static PFN_CtrlState p_CtrlState = NULL;
 typedef struct { void *handle; int type; int colorspace; } OvrTexture;
 typedef struct { float uMin, vMin, uMax, vMax; } OvrBounds;
 typedef int (*PFN_WaitGetPoses)(OvrPose *render, unsigned nr, OvrPose *game, unsigned ng);
@@ -2074,6 +2096,10 @@ static void head_try_init(void)
         void **tbl = (void **)p_VR_GetIf(vers[i], &err);
         if (tbl && err == 0) {
             p_GetPose = (PFN_GetPose)tbl[12];      /* GetDeviceToAbsoluteTrackingPose */
+            if (i == 0) {   /* (E13) mandos: solo con la version de la tabla que conocemos */
+                p_RoleIdx = (PFN_RoleIdx)tbl[18];       /* GetTrackedDeviceIndexForControllerRole */
+                p_CtrlState = (PFN_CtrlState)tbl[37];   /* GetControllerState */
+            }
             p_PollEvent = (PFN_PollEvent)tbl[30];  /* PollNextEvent: SteamVR espera que la escena "lea su correo" */
             int32_t ai = -1; ((PFN_GetDXGIOutputInfo)tbl[8])(&ai); g_vr_adapter = ai;
             {
@@ -2686,6 +2712,117 @@ static void raton_step(void)
     g_rt_hx[hi] = g_rt_cx; g_rt_hy[hi] = g_rt_cy;
     g_rt_hi = hi;
     InterlockedExchangeAdd(&g_rt_sent, labs(nx) + labs(ny));
+}
+
+/* ------------------------------------------------ (E13) mandos como teclado y raton */
+/* Mando de Quest (modo "heredado" de SteamVR): gatillo = eje 1, agarre = boton 2 (y eje 2), stick = eje 0 (clic = boton 32),
+ * A/X = boton 7, B/Y = boton 1. Teclas = las del juego (user.cfg). Se mandan como "codigo de tecla" (scancode). */
+static volatile LONG g_mandos_ok = 0;
+/* codigo fisico de la tecla (el del teclado US, que es el que guarda el juego en user.cfg: kW, kLBRACKET...) */
+static void key_send(WORD sc, int down)
+{
+    INPUT in; memset(&in, 0, sizeof(in));
+    in.type = INPUT_KEYBOARD;
+    in.ki.wScan = sc;
+    in.ki.dwFlags = KEYEVENTF_SCANCODE | (down ? 0 : KEYEVENTF_KEYUP);
+    SendInput(1, &in, sizeof(in));
+}
+static void mouse_btn(int b, int down)
+{
+    INPUT in; memset(&in, 0, sizeof(in));
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = b == 0 ? (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP)
+                  : b == 1 ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
+                           : (down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP);
+    SendInput(1, &in, sizeof(in));
+}
+/* una "salida": tecla (vk) o boton de raton (vk = 0x1000 + n) que se mantiene mientras 'on' */
+typedef struct { WORD vk; int on; } Out;
+enum { O_W, O_A, O_S, O_D, O_FIRE, O_AIM, O_USE, O_RELOAD, O_JUMP, O_CROUCH, O_SPRINT, O_LIGHT, O_MASK, O_THROW,
+       O_NEXT, O_KNIFE, O_ESC, O_MEDKIT, O_COUNT };
+static Out g_out[O_COUNT] = {   /* W A S D | raton izq/der | E R ESPACIO Z SHIFT_IZQ | F G C [ V ESC Q */
+    {0x11,0},{0x1E,0},{0x1F,0},{0x20,0},{0x1000,0},{0x1001,0},{0x12,0},{0x13,0},{0x39,0},{0x2C,0},{0x2A,0},
+    {0x21,0},{0x22,0},{0x2E,0},{0x1A,0},{0x2F,0},{0x01,0},{0x10,0} };
+static int g_pulse[O_COUNT];      /* toques cortos: fotogramas que quedan pulsados */
+static void out_pulse(int o);
+static void out_set(int o, int on)
+{
+    if (g_out[o].on == on) return;
+    g_out[o].on = on;
+    if (g_out[o].vk >= 0x1000) mouse_btn(g_out[o].vk - 0x1000, on); else key_send(g_out[o].vk, on);
+}
+static void mandos_release_all(void) { for (int i = 0; i < O_COUNT; i++) { out_set(i, 0); g_pulse[i] = 0; } }
+static void out_pulse(int o) { out_set(o, 1); g_pulse[o] = 4; }
+static void mandos_step(float dt)
+{
+    static int was = 0;
+    int active = cfg_mandos && p_RoleIdx && p_CtrlState && g_head_state == 1 && game_has_focus();
+    if (!active) { if (was) { mandos_release_all(); was = 0; } return; }
+    OvrCtrlState L, R; memset(&L, 0, sizeof(L)); memset(&R, 0, sizeof(R));
+    uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
+    int lok = li < 64 && p_CtrlState(li, &L, sizeof(L));
+    int rok = ri < 64 && p_CtrlState(ri, &R, sizeof(R));
+    if (!lok && !rok) { if (was) { mandos_release_all(); was = 0; } return; }
+    if (!was) { vr_log("MANDOS: leyendo mandos (izq=%u der=%u)", li, ri); was = 1; }
+    for (int i = 0; i < O_COUNT; i++) if (g_pulse[i] > 0 && --g_pulse[i] == 0) out_set(i, 0);
+    InterlockedExchange(&g_mandos_ok, 1);
+#define BTN(st, id) (((st).pressed >> (id)) & 1ull)
+    /* izquierdo: andar, correr (clic del stick), botiquin (agarre), lanzar (gatillo), linterna/mascara (X), arma/menu (Y) */
+    float lx = lok ? L.axis[0].x : 0, ly = lok ? L.axis[0].y : 0;
+    out_set(O_W, ly > 0.45f); out_set(O_S, ly < -0.45f);
+    out_set(O_D, lx > 0.45f); out_set(O_A, lx < -0.45f);
+    static int sprint = 0, lclick_prev = 0;
+    int lclick = lok && BTN(L, 32);
+    if (lclick && !lclick_prev) sprint = !sprint;
+    if (lx * lx + ly * ly < 0.04f) sprint = 0;          /* stick suelto: deja de correr */
+    lclick_prev = lclick;
+    out_set(O_SPRINT, sprint);
+    out_set(O_MEDKIT, lok && BTN(L, 2));                 /* agarre izq = botiquin */
+    out_set(O_THROW, lok && L.axis[1].x > 0.6f);         /* gatillo izq = lanzar */
+    /* X: toque = linterna; mantener medio segundo = mascara */
+    static ULONGLONG xdown = 0; static int xmask = 0;
+    int xb = lok && BTN(L, 7);
+    if (xb && !xdown) { xdown = GetTickCount64(); xmask = 0; }
+    if (xb && !xmask && GetTickCount64() - xdown > 600) { out_set(O_MASK, 1); xmask = 1; }
+    if (!xb && xdown) {
+        if (!xmask) out_pulse(O_LIGHT);
+        out_set(O_MASK, 0); xdown = 0;
+    }
+    /* Y: toque corto = arma siguiente; mantener 1 s = menu (Esc) */
+    static ULONGLONG ydown = 0; static int yesc = 0;
+    int y = lok && BTN(L, 1);
+    if (y && !ydown) { ydown = GetTickCount64(); yesc = 0; }
+    if (y && !yesc && GetTickCount64() - ydown > 1000) { out_set(O_ESC, 1); yesc = 1; }
+    if (!y && ydown) {
+        if (!yesc) out_pulse(O_NEXT);
+        out_set(O_ESC, 0); ydown = 0;
+    }
+    /* derecho: disparar (gatillo), apuntar (agarre), usar (A), recargar (B), saltar/agacharse (stick arriba/abajo),
+     * cuchillo (clic del stick), girar (stick a los lados) */
+    out_set(O_FIRE, rok && R.axis[1].x > 0.6f);
+    out_set(O_AIM, rok && BTN(R, 2));
+    out_set(O_USE, rok && BTN(R, 7));
+    out_set(O_RELOAD, rok && BTN(R, 1));
+    out_set(O_KNIFE, rok && BTN(R, 32));
+    float rx = rok ? R.axis[0].x : 0, ry = rok ? R.axis[0].y : 0;
+    out_set(O_JUMP, ry > 0.7f && fabsf(rx) < 0.5f);
+    static int crouch_prev = 0;
+    int cr = ry < -0.7f && fabsf(rx) < 0.5f;
+    out_set(O_CROUCH, cr);           /* Z = agacharse (alterna) */
+    crouch_prev = cr; (void)crouch_prev;
+    float steps_per_deg = (g_rt_cal == 2 && g_rt_kx > 1e-5f) ? 1.0f / (g_rt_kx * RAD2DEG) : cfg_raton_grado;
+    if (cfg_giro_paso > 0.5f) {
+        static int armed = 1;
+        if (fabsf(rx) < 0.3f) armed = 1;
+        if (armed && fabsf(rx) > 0.75f) { armed = 0; rt_send((LONG)(copysignf(cfg_giro_paso, rx) * steps_per_deg), 0); }
+    } else if (fabsf(rx) > 0.2f) {
+        static float acc = 0;
+        float a = (fabsf(rx) - 0.2f) / 0.8f; a = a * a;
+        acc += copysignf(a, rx) * cfg_giro * dt * steps_per_deg;
+        LONG st = (LONG)acc; acc -= (float)st;
+        if (st) rt_send(st, 0);
+    }
+#undef BTN
 }
 
 /* ------------------------------------------------ (E9) camara nativa */
@@ -3430,7 +3567,11 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         {
             static int prevf8 = 0;
             int k8 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-            if (k8 && !prevf8) {   /* (E10d) F10 = FOTO de los dos ojos */
+            if (k8 && !prevf8 && rsh) {   /* (E13) Shift+F10 = oclusion del juego si/no */
+                cfg_oclusion = !cfg_oclusion;
+                vr_log(">>> Shift+F10: %s", cfg_oclusion ? "oclusion del juego QUITADA (se dibuja todo, mas lento)" : "oclusion del juego PUESTA (mas rapido)");
+                if (cfg_oclusion) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+            } else if (k8 && !prevf8) {   /* (E10d) F10 = FOTO de los dos ojos */
                 g_photo = 3;
                 vr_log(">>> F10: FOTO de lo que ve cada ojo (en la carpeta TEMP)");
                 Beep(1200, 60);
@@ -3813,7 +3954,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E12: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E13: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
