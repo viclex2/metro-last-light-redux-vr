@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E11 — HUD como un cartel delante de ti (no doble)
+- Fotos con F10 (usuario): se ve el aviso de recoger ("E") y el inventario del lateral. En la captura de RenderDoc el juego pinta primero la escena entera en la imagen final (un triángulo que la tapa toda) y luego, encima, el HUD con rectángulos en coordenadas de pantalla.
+- Cada ojo tiene la lente descentrada (izq −1.28…0.90, der −0.90…1.28): el mismo píxel apunta a sitios distintos en cada ojo, y el HUD salía doble (unos 20° de separación).
+- Ahora, todo lo que se dibuja en la imagen final **después** de la escena se coloca (cambiando el rectángulo de pantalla, sin tocar el juego) como un **cartel** de tamaño fijo a **1,5 m** delante de ti, igual en los dos ojos. Los efectos de pantalla completa no se tocan.
+- Config: `hud_vr=1`, `hud_tamano=0.75` (más = HUD más grande), `hud_distancia=1.5` (metros). Log: `hud: dibujos_recolocados=…`.
+
 ## E10d — F10 = foto de lo que ve cada ojo
 - Prueba de la E10c: **arma y brazos bien** (cerca y de tamaño normal). Es la primera versión jugable.
 - Para arreglar el HUD doble hay que ver qué parte sale doble, y desde las gafas no se puede grabar. **F10** guarda lo que ve cada ojo en `%TEMP%\metro_vr_ojo_izq.bmp` y `metro_vr_ojo_der.bmp` (a mitad de tamaño).

@@ -167,6 +167,12 @@ static int cfg_nativa = 1;              /* (E9) la cabeza entra en la camara del
 static int cfg_oclusion = 1;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
 static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
 static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no sale de nuestra posicion) se le pone el ojo */
+static void *g_bb_ptr;
+static volatile LONG g_hud_n;
+static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
+static int cfg_hud = 1;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
+static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
+static float cfg_hud_dist = 1.5f;       /* metros a los que se ve el HUD */
 static int cfg_natfull = 1;             /* (E10) TODA la cabeza (ladeo, posicion y cada ojo) dentro de la camara del juego; H = nada */
 static int nat_full(void);
 static void nat_eye_check(const float *f);
@@ -305,6 +311,9 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "camara_nativa"))    cfg_nativa = v;
     else if (!strcmp(s, "camara_nativa_completa")) cfg_natfull = v;
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
+    else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
+    else if (!strcmp(s, "hud_tamano"))       { if (fv > 0.1f && fv < 3.0f) cfg_hud_size = fv; }
+    else if (!strcmp(s, "hud_distancia"))    { if (fv > 0.2f && fv < 50.0f) cfg_hud_dist = fv; }
     else if (!strcmp(s, "sin_oclusion"))     cfg_oclusion = v;
     else if (!strcmp(s, "raton_inclinacion")) cfg_raton_pitch = v;
     else if (!strcmp(s, "raton_retraso"))    cfg_raton_lag = (iv < 0) ? 0 : (iv > 4 ? 4 : iv);
@@ -1822,6 +1831,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_pv_have = (dd > 1e-3f) ? 2 : 0;      /* solo si la camara se ha movido de un fotograma a otro */
         g_ord_flag = 0;
         g_fs_need = 1;
+        g_hud_draws = 0;
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
         ocl_update();
         if (g_oc_have) { memcpy(g_op_H, g_oc_H, sizeof(g_oc_H)); memcpy(g_op_Hi, g_oc_Hi, sizeof(g_oc_Hi)); memcpy(g_op_L, g_oc_L, sizeof(g_oc_L)); g_op_have = 1; }
@@ -2242,6 +2252,7 @@ static void vr_submit_frame(IDXGISwapChain *sc)
     if (!cfg_vrimg || g_head_state != 1 || !p_Submit) return;
     ID3D11Texture2D *bb = NULL;
     if (FAILED(IDXGISwapChain_GetBuffer(sc, 0, &IID_ID3D11Texture2D, (void **)&bb)) || !bb) return;
+    g_bb_ptr = (void *)bb;   /* (E11) para reconocer la imagen final al dibujar el HUD */
     D3D11_TEXTURE2D_DESC d;
     ID3D11Texture2D_GetDesc(bb, &d);
     ID3D11Device *dev = NULL; ID3D11DeviceContext *ctx = NULL;
@@ -3510,8 +3521,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
-                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0));
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3541,6 +3552,78 @@ static DWORD WINAPI stats_thread(LPVOID unused)
     return 0;
 }
 
+
+/* ------------------------------------------------ (E11) HUD */
+/* El juego pinta primero la escena entera en la imagen final (un triangulo que tapa la pantalla) y DESPUES, encima,
+ * el HUD (inventario, avisos de "E", textos) con rectangulos en coordenadas de pantalla. En las gafas cada ojo tiene
+ * su lente descentrada, asi que un mismo pixel apunta a sitios distintos en cada ojo: el HUD sale doble.
+ * Arreglo: a los dibujos que van a la imagen final DESPUES de la escena se les cambia el "rectangulo de pantalla"
+ * (viewport) para que el HUD quede como un cartel de tamano fijo, a cfg_hud_dist metros delante, igual en los dos ojos. */
+typedef void (STDMETHODCALLTYPE *PFN_OMSetRT)(ID3D11DeviceContext *, UINT, ID3D11RenderTargetView *const *, ID3D11DepthStencilView *);
+typedef void (STDMETHODCALLTYPE *PFN_RSSetVP)(ID3D11DeviceContext *, UINT, const D3D11_VIEWPORT *);
+typedef void (STDMETHODCALLTYPE *PFN_Draw)(ID3D11DeviceContext *, UINT, UINT);
+typedef void (STDMETHODCALLTYPE *PFN_DrawIdx)(ID3D11DeviceContext *, UINT, UINT, INT);
+typedef void (STDMETHODCALLTYPE *PFN_DrawInst)(ID3D11DeviceContext *, UINT, UINT, UINT, UINT);
+typedef void (STDMETHODCALLTYPE *PFN_DrawIdxInst)(ID3D11DeviceContext *, UINT, UINT, UINT, INT, UINT);
+static PFN_OMSetRT g_orig_OMSetRT = NULL; static PFN_RSSetVP g_orig_RSSetVP = NULL;
+static PFN_Draw g_orig_Draw = NULL; static PFN_DrawIdx g_orig_DrawIdx = NULL;
+static PFN_DrawInst g_orig_DrawInst = NULL; static PFN_DrawIdxInst g_orig_DrawIdxInst = NULL;
+static ID3D11DeviceContext *g_hud_ctx = NULL;
+static void *g_bb_ptr = NULL;                 /* la imagen final (backbuffer) del juego, para reconocerla */
+
+static int g_hud_bound = 0, g_vp_have = 0;
+static D3D11_VIEWPORT g_vp_game;
+static volatile LONG g_hud_n = 0;
+static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext *c, UINT n, ID3D11RenderTargetView *const *rtv, ID3D11DepthStencilView *dsv)
+{
+    if (c == g_hud_ctx) {
+        int bb = 0;
+        if (n >= 1 && rtv && rtv[0] && g_bb_ptr) {
+            ID3D11Resource *r = NULL;
+            ID3D11View_GetResource((ID3D11View *)rtv[0], &r);
+            if (r) { bb = ((void *)r == g_bb_ptr); ID3D11Resource_Release(r); }
+        }
+        g_hud_bound = bb;
+    }
+    g_orig_OMSetRT(c, n, rtv, dsv);
+}
+static void STDMETHODCALLTYPE hk_RSSetVP(ID3D11DeviceContext *c, UINT n, const D3D11_VIEWPORT *vp)
+{
+    if (c == g_hud_ctx && n >= 1 && vp) { g_vp_game = vp[0]; g_vp_have = 1; }
+    g_orig_RSSetVP(c, n, vp);
+}
+/* 1 = se ha cambiado el viewport (hay que devolverlo despues del dibujo) */
+static int hud_pre(ID3D11DeviceContext *c, int fulltri)
+{
+    if (c != g_hud_ctx || !g_hud_bound || !cfg_hud || g_mode != 1 || !g_stereo_on || !g_fov_ok || !g_vp_have) return 0;
+    if (g_hud_draws++ == 0 || fulltri) return 0;       /* el primero es la escena; los triangulos de pantalla completa, efectos */
+    LONG e = g_eye;
+    float ehw = 1.0f / g_eyerow[e][0][0], ecx = -g_eyerow[e][0][2] * ehw;
+    float ehh = 1.0f / g_eyerow[e][1][1], ecy = -g_eyerow[e][1][2] * ehh;
+    float asp = g_aspect > 0.5f ? g_aspect : 16.0f / 9.0f;
+    float T = cfg_hud_size, Ty = cfg_hud_size / asp;
+    float cxe = -g_eyepos[e][0] * cfg_ipdscale / cfg_hud_dist;      /* el cartel a esa distancia, visto desde este ojo */
+    float a = T / ehw, b = (cxe - ecx) / ehw, ay = Ty / ehh, by = -ecy / ehh;
+    float W = (float)g_vr_w, Hh = (float)g_vr_h;
+    if (W <= 0 || Hh <= 0) return 0;
+    D3D11_VIEWPORT v = g_vp_game;
+    v.TopLeftX = W * (b + 1.0f - a) * 0.5f + a * g_vp_game.TopLeftX;
+    v.Width    = a * g_vp_game.Width;
+    v.TopLeftY = Hh * (1.0f - ay - by) * 0.5f + ay * g_vp_game.TopLeftY;
+    v.Height   = ay * g_vp_game.Height;
+    g_orig_RSSetVP(c, 1, &v);
+    InterlockedIncrement(&g_hud_n);
+    return 1;
+}
+static void hud_post(ID3D11DeviceContext *c) { g_orig_RSSetVP(c, 1, &g_vp_game); }
+static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext *c, UINT vc, UINT sv)
+{ int h = hud_pre(c, vc == 3); g_orig_Draw(c, vc, sv); if (h) hud_post(c); }
+static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv)
+{ int h = hud_pre(c, 0); g_orig_DrawIdx(c, ic, si, bv); if (h) hud_post(c); }
+static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si)
+{ int h = hud_pre(c, vc == 3 && ni == 1); g_orig_DrawInst(c, vc, ni, sv, si); if (h) hud_post(c); }
+static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst)
+{ int h = hud_pre(c, 0); g_orig_DrawIdxInst(c, ic, ni, si, bv, sinst); if (h) hud_post(c); }
 /* -------------------------------------------------- instalar los hooks */
 static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
 {
@@ -3557,6 +3640,15 @@ static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
             PATCH(&ctx->lpVtbl->CSSetConstantBuffers, hk_CSSetCB, g_orig_CSSetCB, "CSSetConstantBuffers");
             PATCH(&ctx->lpVtbl->CopyResource, hk_CopyRes, g_orig_CopyRes, "CopyResource");
             PATCH(&ctx->lpVtbl->CopySubresourceRegion, hk_CopySub, g_orig_CopySub, "CopySubresourceRegion");
+        }
+        if (cfg_hud) {   /* (E11) */
+            g_hud_ctx = ctx;
+            PATCH(&ctx->lpVtbl->OMSetRenderTargets, hk_OMSetRT, g_orig_OMSetRT, "OMSetRenderTargets");
+            PATCH(&ctx->lpVtbl->RSSetViewports, hk_RSSetVP, g_orig_RSSetVP, "RSSetViewports");
+            PATCH(&ctx->lpVtbl->Draw, hk_Draw, g_orig_Draw, "Draw");
+            PATCH(&ctx->lpVtbl->DrawIndexed, hk_DrawIdx, g_orig_DrawIdx, "DrawIndexed");
+            PATCH(&ctx->lpVtbl->DrawInstanced, hk_DrawInst, g_orig_DrawInst, "DrawInstanced");
+            PATCH(&ctx->lpVtbl->DrawIndexedInstanced, hk_DrawIdxInst, g_orig_DrawIdxInst, "DrawIndexedInstanced");
         }
     }
     if (cfg_present) {
@@ -3686,7 +3778,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E10d: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E11: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
