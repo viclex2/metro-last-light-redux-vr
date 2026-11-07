@@ -2006,6 +2006,22 @@ typedef int (*PFN_WaitGetPoses)(OvrPose *render, unsigned nr, OvrPose *game, uns
 typedef int (*PFN_Submit)(int eye, OvrTexture *tex, OvrBounds *bounds, int flags);
 static PFN_WaitGetPoses p_WaitGetPoses = NULL;
 static PFN_Submit       p_Submit = NULL;
+/* (E12) tiempos que mide SteamVR de cada fotograma (IVRCompositor::GetFrameTiming) */
+typedef struct {
+    uint32_t size, frameIndex, numPresents, numMisPresented, numDropped, reprojFlags;
+    double sysTime;
+    float preSubmitGpu, postSubmitGpu, totalRenderGpu, compGpu, compCpu, compIdleCpu;
+    float clientInterval, presentCallCpu, waitForPresentCpu, submitFrame;
+    float waitCalled, posesReady, frameReady, compUpdStart, compUpdEnd, compRenderStart;
+    unsigned char pose[80];
+    uint32_t vsyncsReady, vsyncsToFirstView;
+    float transferLatency;
+} OvrFrameTiming;
+typedef int (*PFN_GetFrameTiming)(OvrFrameTiming *t, uint32_t framesAgo);
+static PFN_GetFrameTiming p_GetFrameTiming = NULL;
+static double g_ft_gpu = 0, g_ft_tot = 0, g_ft_int = 0, g_ft_idle = 0, g_ft_comp = 0;
+static long g_ft_n = 0, g_ft_drop = 0, g_ft_mis = 0, g_ft_reproj = 0, g_ft_pres = 0;
+static uint32_t g_ft_last = 0;
 typedef unsigned char (*PFN_PollEvent)(void *ev, uint32_t size);
 static PFN_PollEvent    p_PollEvent = NULL;
 static int head_apply(const OvrPose *pz);
@@ -2115,6 +2131,7 @@ static void head_try_init(void)
             if (tbl && err == 0) {
                 p_WaitGetPoses = (PFN_WaitGetPoses)tbl[2];
                 p_Submit       = (PFN_Submit)tbl[6];
+                p_GetFrameTiming = (PFN_GetFrameTiming)tbl[10];
                 vr_log("VISOR: compositor listo (%s): la imagen ira al visor", cv[i] + 8);
             }
         }
@@ -2386,6 +2403,17 @@ static void vr_after_present(void)
     p_WaitGetPoses(rp, 1, NULL, 0);
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
     InterlockedExchangeAdd(&g_wait_us, (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart));
+    if (p_GetFrameTiming) {   /* (E12) lo que ha tardado la grafica en el ultimo fotograma que vio SteamVR */
+        OvrFrameTiming ft; memset(&ft, 0, sizeof(ft)); ft.size = sizeof(ft);
+        if (p_GetFrameTiming(&ft, 1) && ft.frameIndex != g_ft_last) {
+            g_ft_last = ft.frameIndex;
+            g_ft_gpu += ft.preSubmitGpu; g_ft_tot += ft.totalRenderGpu; g_ft_int += ft.clientInterval;
+            g_ft_idle += ft.compIdleCpu; g_ft_comp += ft.compGpu;
+            g_ft_drop += ft.numDropped; g_ft_mis += ft.numMisPresented; g_ft_pres += ft.numPresents;
+            if (ft.reprojFlags) g_ft_reproj++;
+            g_ft_n++;
+        }
+    }
     /* esta postura es la que SteamVR espera para el proximo fotograma: la usamos para dibujarlo */
     if (rp[0].valid) { g_frame_pose = rp[0].mat; g_have_frame_pose = 1; }
     if (cfg_head && head_apply(&rp[0])) publish_H();
@@ -3518,6 +3546,13 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
+            if (g_ft_n > 0) {   /* (E12) */
+                vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
+                       "steamvr_esperando=%.1fms veces_mostrado=%.2f repetidos=%ld fuera_de_hora=%ld con_reproyeccion=%ld",
+                       g_ft_n, g_ft_gpu / g_ft_n, g_ft_tot / g_ft_n, g_ft_comp / g_ft_n, g_ft_int / g_ft_n,
+                       g_ft_idle / g_ft_n, (double)g_ft_pres / g_ft_n, g_ft_drop, g_ft_mis, g_ft_reproj);
+                g_ft_gpu = g_ft_tot = g_ft_int = g_ft_idle = g_ft_comp = 0; g_ft_n = g_ft_drop = g_ft_mis = g_ft_reproj = g_ft_pres = 0;
+            }
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
@@ -3778,7 +3813,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E11b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E12: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

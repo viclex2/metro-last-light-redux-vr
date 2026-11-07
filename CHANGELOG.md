@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E12 — Medir por qué va a tirones
+- El log decía `fps=72` y `espera_steamvr=600ms`: el juego dibuja ~36 parejas de ojos por segundo (la mitad de los 72 Hz de las gafas) y pasa el 60% del tiempo esperando. Eso es SteamVR bajando a la mitad porque la pareja no llega a tiempo, así que cada ojo se refresca a 36 Hz.
+- Ahora se apunta cada segundo lo que mide el propio SteamVR: `STEAMVR: pares=… grafica_juego=…ms grafica_total=… entre_pares=… repetidos=… con_reproyeccion=…`. Con esto se ve si falta gráfica (bajar resolución/calidad) o si es otra cosa.
+
 ## E11b — HUD apagado desde el juego
 - La E11 no encontró los dibujos del HUD (`dibujos_recolocados=0`) y seguía doble. Decisión del usuario: **quitar el HUD** desde el `user.cfg` del juego (`show_game_ui 0`, `g_show_crosshair off`, `g_quick_hints 0`). El reloj de la muñeca (filtro, si te ven) es 3D y se sigue viendo bien.
 - El arreglo de la E11 queda apagado por defecto (`hud_vr=0`) para no gastar nada.
