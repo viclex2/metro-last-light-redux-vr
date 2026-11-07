@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E11b — HUD apagado desde el juego
+- La E11 no encontró los dibujos del HUD (`dibujos_recolocados=0`) y seguía doble. Decisión del usuario: **quitar el HUD** desde el `user.cfg` del juego (`show_game_ui 0`, `g_show_crosshair off`, `g_quick_hints 0`). El reloj de la muñeca (filtro, si te ven) es 3D y se sigue viendo bien.
+- El arreglo de la E11 queda apagado por defecto (`hud_vr=0`) para no gastar nada.
+- Pendiente para más adelante: avisos útiles (arma o balas en el suelo, la "E" de recoger) como cartel en VR.
+
 ## E11 — HUD como un cartel delante de ti (no doble)
 - Fotos con F10 (usuario): se ve el aviso de recoger ("E") y el inventario del lateral. En la captura de RenderDoc el juego pinta primero la escena entera en la imagen final (un triángulo que la tapa toda) y luego, encima, el HUD con rectángulos en coordenadas de pantalla.
 - Cada ojo tiene la lente descentrada (izq −1.28…0.90, der −0.90…1.28): el mismo píxel apunta a sitios distintos en cada ojo, y el HUD salía doble (unos 20° de separación).

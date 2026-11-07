@@ -170,7 +170,7 @@ static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no s
 static void *g_bb_ptr;
 static volatile LONG g_hud_n;
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
-static int cfg_hud = 1;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
+static int cfg_hud = 0;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
 static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
 static float cfg_hud_dist = 1.5f;       /* metros a los que se ve el HUD */
 static int cfg_natfull = 1;             /* (E10) TODA la cabeza (ladeo, posicion y cada ojo) dentro de la camara del juego; H = nada */
@@ -3778,7 +3778,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E11: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E11b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
