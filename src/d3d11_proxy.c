@@ -175,6 +175,14 @@ static int cfg_mandos = 1;
 static float cfg_giro = 120.0f;       /* grados por segundo con el stick derecho a tope */
 static float cfg_giro_paso = 0.0f;    /* >0: giro a saltos de estos grados (0 = suave) */
 static float cfg_raton_grado = 11.0f; /* pasos de raton por grado de giro del juego (se ajusta con la calibracion E7 si la hay) */
+/* (E15) el arma en la mano derecha */
+static int cfg_mano = 1;
+static volatile LONG g_hand_ok = 0;          /* hay postura del mando derecho */
+static float g_hand_rel[4][4];               /* mando derecho respecto al centro de la cabeza, en ejes del juego */
+static float g_hand_G[4][4];                 /* lo que se mueve el arma: mano_ahora * mano_calibrada^-1 */
+static int g_hand_cal = 0;                   /* 1 = ya hay calibracion */
+static float g_hand_C0[4][4];                /* postura de la mano "con el arma en reposo" */
+static volatile LONG g_hand_req = 0, g_hand_n = 0;
 static int cfg_hud = 0;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
 static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
 static float cfg_hud_dist = 1.5f;       /* metros a los que se ve el HUD */
@@ -319,6 +327,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
+    else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
     else if (!strcmp(s, "giro_velocidad"))   { if (fv > 1.0f && fv < 1000.0f) cfg_giro = fv; }
     else if (!strcmp(s, "giro_saltos"))      { if (fv >= 0.0f && fv < 180.0f) cfg_giro_paso = fv; }
     else if (!strcmp(s, "raton_por_grado"))  { if (fv > 0.1f && fv < 1000.0f) cfg_raton_grado = fv; }
@@ -873,8 +882,17 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
         LONG e = g_eye;
         float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
         memcpy(Hw, H, sizeof(Hw));
+        int mano = cfg_mano && g_hand_ok;
+        if (mano) {   /* (E15) el arma va a la mano: primero se mueve con la mano, luego al ojo */
+            float Hg[4][4]; mul4(g_hand_G, H, Hg); memcpy(Hw, Hg, sizeof(Hw));
+        }
         for (int r = 0; r < 3; r++) Hw[r][3] -= t[r];
         H = (const float (*)[4])Hw;
+        if (mano) {   /* y su posicion para la luz (m_WV) tambien, si no se ilumina como si siguiera en la cara */
+            float NWV[4][4]; mul4(H, WV4, NWV);
+            for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) f[24 + i * 4 + j] = NWV[i][j];
+            InterlockedIncrement(&g_hand_n);
+        }
         InterlockedIncrement(&g_nat_armaojo);
     }
     if (cfg_fov && g_fov_ok) {
@@ -2048,6 +2066,7 @@ static uint32_t g_ft_last = 0;
 typedef unsigned char (*PFN_PollEvent)(void *ev, uint32_t size);
 static PFN_PollEvent    p_PollEvent = NULL;
 static int head_apply(const OvrPose *pz);
+static void hand_update(const OvrPose *rp);
 static void raton_step(void);
 static OvrMat34 g_frame_pose;              /* postura con la que se esta dibujando este fotograma */
 static OvrMat34 g_eye_pose[2];             /* postura con la que se dibujo la ultima imagen de cada ojo */
@@ -2424,10 +2443,11 @@ static void vr_after_present(void)
         }
         if (!want) g_freeze = 0;
     }
-    OvrPose rp[1];
+    OvrPose rp[16];
     memset(rp, 0, sizeof(rp));
     LARGE_INTEGER q0, q1, qf; QueryPerformanceCounter(&q0);
-    p_WaitGetPoses(rp, 1, NULL, 0);
+    p_WaitGetPoses(rp, 16, NULL, 0);
+    hand_update(rp);
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
     InterlockedExchangeAdd(&g_wait_us, (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart));
     if (p_GetFrameTiming) {   /* (E12) lo que ha tardado la grafica en el ultimo fotograma que vio SteamVR */
@@ -2447,6 +2467,68 @@ static void vr_after_present(void)
     raton_step();
 }
 
+
+/* ------------------------------------------------ (E15) el arma en la mano derecha */
+/* Mano respecto a la cabeza (SteamVR: x derecha, y arriba, z hacia atras) -> ejes del juego (z hacia delante).
+ * Calibrar: con la mano donde ves el arma y apuntando adelante, mantener 1,5 s el clic del stick derecho.
+ * Desde ahi, el arma (en la vista, respecto al centro de la cabeza) se mueve: G = mano_ahora * mano_calibrada^-1 */
+static void hand_save(void)
+{
+    char path[MAX_PATH]; GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_mano.txt");
+    FILE *fp = fopen(path, "w"); if (!fp) return;
+    for (int i = 0; i < 3; i++) fprintf(fp, "%.6f %.6f %.6f %.6f\n", g_hand_C0[i][0], g_hand_C0[i][1], g_hand_C0[i][2], g_hand_C0[i][3]);
+    fclose(fp);
+}
+static void hand_load(void)
+{
+    static int done = 0; if (done) return; done = 1;
+    char path[MAX_PATH]; GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_mano.txt");
+    FILE *fp = fopen(path, "r");
+    memset(g_hand_C0, 0, sizeof(g_hand_C0)); g_hand_C0[3][3] = 1.0f;
+    if (fp) {
+        int ok = 1;
+        for (int i = 0; i < 3 && ok; i++)
+            if (fscanf(fp, "%f %f %f %f", &g_hand_C0[i][0], &g_hand_C0[i][1], &g_hand_C0[i][2], &g_hand_C0[i][3]) != 4) ok = 0;
+        fclose(fp);
+        if (ok) { g_hand_cal = 1; vr_log("MANO: calibracion cargada de %s", path); return; }
+    }
+    /* sin calibrar: mano 15 cm a la derecha, 25 cm abajo, 30 cm delante, mando apuntando adelante */
+    memset(g_hand_C0, 0, sizeof(g_hand_C0));
+    for (int i = 0; i < 4; i++) g_hand_C0[i][i] = 1.0f;
+    g_hand_C0[0][3] = 0.15f; g_hand_C0[1][3] = -0.25f; g_hand_C0[2][3] = 0.30f;
+    g_hand_cal = 0;
+}
+static void hand_update(const OvrPose *rp)
+{
+    hand_load();
+    if (!cfg_mano || !p_RoleIdx) { g_hand_ok = 0; return; }
+    uint32_t ri = p_RoleIdx(2);
+    if (ri >= 16 || !rp[0].valid || !rp[ri].valid) { g_hand_ok = 0; return; }
+    /* rel = cabeza^-1 * mano (SteamVR) */
+    const OvrMat34 *Hm = &rp[0].mat, *Mm = &rp[ri].mat;
+    float d[3] = { Mm->m[0][3] - Hm->m[0][3], Mm->m[1][3] - Hm->m[1][3], Mm->m[2][3] - Hm->m[2][3] };
+    float R[3][3], t[3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) R[i][j] = Hm->m[0][i] * Mm->m[0][j] + Hm->m[1][i] * Mm->m[1][j] + Hm->m[2][i] * Mm->m[2][j];
+        t[i] = Hm->m[0][i] * d[0] + Hm->m[1][i] * d[1] + Hm->m[2][i] * d[2];
+    }
+    /* a ejes del juego: S R S, S t, con S = diag(1,1,-1) */
+    float A[4][4]; memset(A, 0, sizeof(A)); A[3][3] = 1.0f;
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) A[i][j] = R[i][j] * ((i == 2) != (j == 2) ? -1.0f : 1.0f);
+    A[0][3] = t[0]; A[1][3] = t[1]; A[2][3] = -t[2];
+    memcpy(g_hand_rel, A, sizeof(A));
+    if (g_hand_req) {
+        g_hand_req = 0;
+        memcpy(g_hand_C0, A, sizeof(A)); g_hand_cal = 1; hand_save();
+        vr_log("MANO: calibrada (mano a %.2f %.2f %.2f m de la cabeza)", A[0][3], A[1][3], A[2][3]);
+        Beep(900, 80); Beep(1300, 120);
+    }
+    float C0i[4][4], G[4][4];
+    if (!inv4(g_hand_C0, C0i)) { g_hand_ok = 0; return; }
+    mul4(A, C0i, G);
+    memcpy(g_hand_G, G, sizeof(G));
+    g_hand_ok = 1;
+}
 /* Lee el visor y deja preparada g_headH. Devuelve 1 si ha cambiado algo. */
 static int head_update(void)
 {
@@ -2804,7 +2886,12 @@ static void mandos_step(float dt)
     out_set(O_AIM, rok && BTN(R, 2));
     out_set(O_USE, rok && BTN(R, 7));
     out_set(O_RELOAD, rok && BTN(R, 1));
-    out_set(O_KNIFE, rok && BTN(R, 32));
+    /* clic del stick derecho: toque = cuchillo; mantener 1,5 s = calibrar la mano del arma (E15) */
+    static ULONGLONG rdown = 0; static int rcal = 0;
+    int rc = rok && BTN(R, 32);
+    if (rc && !rdown) { rdown = GetTickCount64(); rcal = 0; }
+    if (rc && !rcal && GetTickCount64() - rdown > 1500) { g_hand_req = 1; rcal = 1; }
+    if (!rc && rdown) { if (!rcal) out_pulse(O_KNIFE); rdown = 0; }
     float rx = rok ? R.axis[0].x : 0, ry = rok ? R.axis[0].y : 0;
     out_set(O_JUMP, ry > 0.7f && fabsf(rx) < 0.5f);
     static int crouch_prev = 0;
@@ -3742,8 +3829,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
-                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0));
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal);
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3999,7 +4086,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E14: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E15: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

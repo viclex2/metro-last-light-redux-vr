@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E15 — El arma en la mano derecha (paso 2 del plan de los mandos)
+- Prueba de la E14: andar hacia donde miras, **bien**.
+- Lo que se dibuja con la lente del arma (arma y brazos) ahora sigue al **mando derecho**: se calcula dónde está el mando respecto a la cabeza y se mueve el arma eso mismo (y también su posición para la luz, `m_WV`, para que no se ilumine como si siguiera en la cara).
+- **Calibrar:** pon la mano donde ves el arma, apuntando adelante, y **mantén 1,5 s el clic del stick derecho** (pitido doble). Se guarda en `%TEMP%\metro_vr_mano.txt` y se carga al arrancar. Un toque corto sigue siendo el cuchillo.
+- Todavía las balas van hacia donde miras (paso 3). Los brazos giran rígidos con el arma.
+- Config: `arma_en_mano=1`. Log: `mano: piezas=… calibrada=…`.
+
 ## E14 — Andar hacia donde miras
 - Prueba de la E13: botones bien, pero el stick izquierdo iba "al revés". No eran los ejes: el juego mueve según el giro del **cuerpo**, y la cabeza solo gira la cámara. Si te giras en la habitación, "adelante" iba hacia donde mira el cuerpo (a tu espalda).
 - Gancho en `metro.exe+0x28D110` (movimiento del jugador, llamada en `+0x1F32C5`; comprobado en nuestro exe, idéntico a 2033): el resultado se gira con lo que tu cabeza se ha girado. Ahora "adelante" es hacia donde miras, con el stick y con el teclado. Idea de D-Rey86.
