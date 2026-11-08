@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E14 — Andar hacia donde miras
+- Prueba de la E13: botones bien, pero el stick izquierdo iba "al revés". No eran los ejes: el juego mueve según el giro del **cuerpo**, y la cabeza solo gira la cámara. Si te giras en la habitación, "adelante" iba hacia donde mira el cuerpo (a tu espalda).
+- Gancho en `metro.exe+0x28D110` (movimiento del jugador, llamada en `+0x1F32C5`; comprobado en nuestro exe, idéntico a 2033): el resultado se gira con lo que tu cabeza se ha girado. Ahora "adelante" es hacia donde miras, con el stick y con el teclado. Idea de D-Rey86.
+- Log: `ANDAR: gancho puesto…` y `andar=` (veces por segundo).
+
 ## E13b — Correr con el mando ya no activa atajos del mod
 - En el log de la E13 salía muchas veces `Shift+D: busco la camara del fotograma ANTERIOR`. Al correr (clic del stick = Shift) e ir a la derecha (D), el mod creía que habías pulsado su atajo Shift+D, que pone el juego muy lento 10 s. Igual con Shift+R (recargar). Ahora, mientras el mando tiene pulsado Shift, los atajos con Shift del mod no cuentan.
 - Medido en la E13: con la oclusión del juego puesta va a ~72 fps (36 parejas) con margen (espera 300-470 ms/s); quitándola (Shift+F10) baja a 50-65 fps.

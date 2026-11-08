@@ -169,6 +169,7 @@ static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
 static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no sale de nuestra posicion) se le pone el ojo */
 static void *g_bb_ptr;
 static volatile LONG g_hud_n;
+static volatile LONG g_mov_hits;
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
 static int cfg_mandos = 1;
 static float cfg_giro = 120.0f;       /* grados por segundo con el stick derecho a tope */
@@ -2918,6 +2919,48 @@ static int patch_bytes(BYTE *dst, const BYTE *src, SIZE_T n)
     return 1;
 }
 
+
+/* (E14) Andar hacia donde miras. El juego convierte "adelante/atras/lados" a direccion del mundo con el giro del
+ * CUERPO (metro.exe+0x28D110, llamada del jugador en +0x1F32C5). La cabeza gira la camara pero no el cuerpo: si te
+ * giras en la habitacion, "adelante" del stick iba hacia donde mira el cuerpo (detras de ti). Se gira el resultado
+ * con lo que la cabeza se ha girado desde la referencia (como D-Rey86). */
+typedef void (*mov_fn_t)(void *, void *, int, void *, float *, void *, float, void *, void *, void *, void *, void *, void *);
+static void *g_mov_tramp = NULL; static BYTE *g_mov_ret = NULL; static int g_mov_installed = 0;
+static void mov_hook(void *pl, void *req, int prev, void *acc, float *mv, void *a6, float dt, void *basis,
+                     void *a9, void *a10, void *a11, void *a12, void *a13)
+{
+    ((mov_fn_t)g_mov_tramp)(pl, req, prev, acc, mv, a6, dt, basis, a9, a10, a11, a12, a13);
+    if ((BYTE *)__builtin_return_address(0) != g_mov_ret || !mv || !nat_active() || !g_nat_was) return;
+    if (!isfinite(mv[0]) || !isfinite(mv[2])) return;
+    float d = atan2f(g_rt_Rg[0][2], g_rt_Rg[2][2]) - g_nat_ref;
+    while (d > 3.14159265f) d -= 6.28318531f;
+    while (d < -3.14159265f) d += 6.28318531f;
+    float c = cosf(d), sn = sinf(d), x = mv[0], z = mv[2];
+    mv[0] = c * x + sn * z;
+    mv[2] = -sn * x + c * z;
+    InterlockedIncrement(&g_mov_hits);
+}
+static void mov_install(void)
+{
+    if (g_mov_installed) return;
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    BYTE *fn = base + 0x28D110, *call = base + 0x1F32C5;
+    static const BYTE expect[14] = { 0x48,0x8B,0xC4, 0x44,0x89,0x40,0x18, 0x55, 0x53, 0x57, 0x48,0x8D,0x68,0xE1 };
+    if (memcmp(fn, expect, 14) != 0 || call[0] != 0xE8 || call + 5 + *(INT32 *)(call + 1) != fn) {
+        g_mov_installed = -1; vr_log("ANDAR: no encuentro la funcion del movimiento; el stick ira segun el cuerpo"); return;
+    }
+    BYTE *t = (BYTE *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!t) { g_mov_installed = -1; return; }
+    memcpy(t, fn, 14);
+    t[14] = 0xFF; t[15] = 0x25; *(UINT32 *)(t + 16) = 0; *(UINT64 *)(t + 20) = (UINT64)(fn + 14);
+    FlushInstructionCache(GetCurrentProcess(), t, 64);
+    g_mov_tramp = t; g_mov_ret = call + 5;
+    BYTE j[14];
+    j[0] = 0xFF; j[1] = 0x25; *(UINT32 *)(j + 2) = 0; *(UINT64 *)(j + 6) = (UINT64)(void *)mov_hook;
+    if (!patch_bytes(fn, j, 14)) { g_mov_installed = -1; return; }
+    g_mov_installed = 1;
+    vr_log("ANDAR: gancho puesto en metro.exe+0x28D110 (se anda hacia donde miras)");
+}
 static void nat_install(void)
 {
     if (g_nat_installed != 0 || !cfg_nativa) return;
@@ -2940,6 +2983,7 @@ static void nat_install(void)
     for (int i = 14; i < 18; i++) j[i] = 0x90;
     if (!patch_bytes(fn, j, 18)) { g_nat_installed = -1; vr_log("NATIVA: no pude parchear la funcion"); return; }
     g_nat_installed = 1;
+    mov_install();
     vr_log("NATIVA: gancho puesto en metro.exe+0x69B900 (llamada de la camara del jugador en +0x1F3960)");
 }
 
@@ -3698,8 +3742,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
-                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0));
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3955,7 +3999,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E13b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E14: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
