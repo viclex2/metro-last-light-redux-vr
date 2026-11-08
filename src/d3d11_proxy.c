@@ -3500,6 +3500,7 @@ static DWORD WINAPI keys_thread(LPVOID unused)
         /* "modificador": cualquier Shift (izquierdo o derecho) o Bloq Mayus activado */
         int rsh = ((GetAsyncKeyState(VK_SHIFT) | GetAsyncKeyState(VK_RSHIFT) | GetAsyncKeyState(VK_LSHIFT)) & 0x8000) != 0
                   || (GetKeyState(VK_CAPITAL) & 1) != 0;
+        if (g_out[O_SPRINT].on) rsh = 0;   /* (E13b) el Shift lo pone el mando (correr): no son atajos del mod */
         int down = ((GetAsyncKeyState(VK_F9) | GetAsyncKeyState(VK_INSERT)) & 0x8000) != 0 ||
                    (rsh && (GetAsyncKeyState('P') & 0x8000) != 0);
         if (down && !prev) {
@@ -3954,7 +3955,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E13: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E13b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

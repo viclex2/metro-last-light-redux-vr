@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E13b — Correr con el mando ya no activa atajos del mod
+- En el log de la E13 salía muchas veces `Shift+D: busco la camara del fotograma ANTERIOR`. Al correr (clic del stick = Shift) e ir a la derecha (D), el mod creía que habías pulsado su atajo Shift+D, que pone el juego muy lento 10 s. Igual con Shift+R (recargar). Ahora, mientras el mando tiene pulsado Shift, los atajos con Shift del mod no cuentan.
+- Medido en la E13: con la oclusión del juego puesta va a ~72 fps (36 parejas) con margen (espera 300-470 ms/s); quitándola (Shift+F10) baja a 50-65 fps.
+
 ## E13 — Mandos como teclado/ratón, y la oclusión del juego otra vez puesta
 - Prueba de la E12: en VR el juego hace unas 25-35 parejas de ojos por segundo; cada pareja tarda ~25 ms y no llega a los 13,9 ms de los 72 Hz. En pantalla normal va bien.
 - Ahora que la cámara es la del juego, ya no hace falta quitar su "oclusión" (la E9 la quitaba): con ella puesta el juego no dibuja lo que está tapado, y debería ir bastante más rápido. **Shift+F10** la quita/pone para comparar (`sin_oclusion=1` en la config la deja quitada).
