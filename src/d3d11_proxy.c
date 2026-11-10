@@ -172,6 +172,9 @@ static volatile LONG g_hud_n;
 static volatile LONG g_mov_hits;
 static void pieces_frame(void);
 static void pieces_key(int shift, int ctrl);
+static void draw_hooks_check(void);
+static ID3D11DeviceContext *g_hud_ctx;
+static volatile LONG g_vt_fix;
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
 static int cfg_mandos = 1;
 static float cfg_giro = 120.0f;       /* grados por segundo con el stick derecho a tope */
@@ -1901,6 +1904,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_ord_flag = 0;
         g_fs_need = 1;
         g_hud_draws = 0;
+        draw_hooks_check();
         pieces_frame();
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
         {   /* (E13) mandos */
@@ -2366,6 +2370,10 @@ static void vr_submit_frame(IDXGISwapChain *sc)
     ID3D11Device *dev = NULL; ID3D11DeviceContext *ctx = NULL;
     ID3D11Texture2D_GetDevice(bb, &dev);
     if (dev) ID3D11Device_GetImmediateContext(dev, &ctx);
+    if (ctx && ctx != g_hud_ctx && (cfg_hud || cfg_brazos)) {   /* (E17c) el contexto que de verdad usa el juego */
+        vr_log("VTABLE: el juego pinta con el contexto %p (los desvios estaban en %p): me cambio", (void *)ctx, (void *)g_hud_ctx);
+        g_hud_ctx = ctx;
+    }
     if (dev && ctx) {
         vr_make_device(dev);
         static int vr_fail = 0;
@@ -3890,11 +3898,11 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
-                                       (long)InterlockedExchange(&g_draws_seen, 0));
+                                       (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4090,6 +4098,40 @@ static void pieces_key(int shift, int ctrl)
     Beep(1000, 60);
 }
 
+/* (E17c) El mod no veia NINGUN dibujo (dibujos=0) aunque los desvios estaban puestos. Sospecha: Windows cambia
+ * por dentro la tabla de funciones del contexto (o casillas sueltas de los Draw) despues de que la parcheamos.
+ * Cada fotograma se mira; si una casilla ya no es nuestra, se apunta y se vuelve a poner. */
+static void *g_vt_seen = NULL;
+static void draw_hooks_check(void)
+{
+    ID3D11DeviceContext *c = g_hud_ctx;
+    if (!c || !(cfg_hud || cfg_brazos)) return;
+    ID3D11DeviceContextVtbl *vt = c->lpVtbl;
+    if ((void *)vt != g_vt_seen) {
+        if (g_vt_seen) vr_log("VTABLE: el contexto tiene OTRA tabla de funciones (%p -> %p)", g_vt_seen, (void *)vt);
+        g_vt_seen = (void *)vt;
+    }
+    struct { void **slot; void *hook; void **orig; const char *n; } t[6] = {
+        { (void **)&vt->OMSetRenderTargets, (void *)hk_OMSetRT, (void **)&g_orig_OMSetRT, "OMSetRenderTargets" },
+        { (void **)&vt->RSSetViewports, (void *)hk_RSSetVP, (void **)&g_orig_RSSetVP, "RSSetViewports" },
+        { (void **)&vt->Draw, (void *)hk_Draw, (void **)&g_orig_Draw, "Draw" },
+        { (void **)&vt->DrawIndexed, (void *)hk_DrawIdx, (void **)&g_orig_DrawIdx, "DrawIndexed" },
+        { (void **)&vt->DrawInstanced, (void *)hk_DrawInst, (void **)&g_orig_DrawInst, "DrawInstanced" },
+        { (void **)&vt->DrawIndexedInstanced, (void *)hk_DrawIdxInst, (void **)&g_orig_DrawIdxInst, "DrawIndexedInstanced" } };
+    for (int i = 0; i < 6; i++) {
+        void *cur = *t[i].slot;
+        if (cur == t[i].hook) continue;
+        static int said[6];
+        if (said[i] < 5) { said[i]++; vr_log("VTABLE: %s ya no es nuestro (antes %p, ahora %p): lo vuelvo a poner", t[i].n, *t[i].orig, cur); }
+        DWORD old;
+        if (!VirtualProtect((LPVOID)t[i].slot, sizeof(void *), PAGE_READWRITE, &old)) continue;
+        *t[i].orig = cur;                       /* lo que haya ahora es lo que hay que llamar */
+        *t[i].slot = t[i].hook;
+        VirtualProtect((LPVOID)t[i].slot, sizeof(void *), old, &old);
+        InterlockedIncrement(&g_vt_fix);
+    }
+}
+
 /* -------------------------------------------------- instalar los hooks */
 static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
 {
@@ -4244,7 +4286,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E17b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E17c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

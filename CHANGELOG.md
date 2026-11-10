@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E17c (rama `manos`) — El mod no veía ningún dibujo
+- Log de la E17b: `dibujos=0`. El mod no ve ni una orden de "pinta esto" del juego (sí ve los datos, por eso la cámara y el 3D funcionan). Por eso F6 no encuentra piezas y el HUD de la E11 no hizo nada.
+- Sospecha: Windows cambia por dentro la "centralita" de esas órdenes después de que pusimos el desvío, o el juego pinta con otro contexto. Ahora, en cada fotograma, se comprueba y se vuelve a poner, y se usa el contexto que de verdad usa el juego. Log: `VTABLE: …` y `desvios_repuestos=`.
+
 ## E17b (rama `manos`) — Arreglos del arma en la mano y de F6
 - Log de la E17: el mando derecho "desaparecía" la mitad del tiempo (`porque=3`: SteamVR decía que no sabía cuál era el derecho), así que el arma iba a la mano y volvía a la cara muchas veces por segundo. Ahora se busca el mando derecho entre los mandos y se recuerda el último bueno. Lo mismo para los botones.
 - F6 no encontraba ninguna pieza (`pintadas=0`): el juego pinta también desde otros hilos (listas "diferidas") y solo se miraba uno. Ahora se miran todos. Esto explica también por qué el HUD de la E11 no encontraba nada.
