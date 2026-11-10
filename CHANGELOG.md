@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E17 (rama `manos`) — Solo el arma en el mando: quitar los brazos
+- Objetivo: solo el arma, sin brazos, en el mando derecho, y poder verla por todos lados.
+- **Quitar brazos** (idea de D-Rey86 en 2033, que no pinta las "mangas"): el mod apunta qué piezas se pintan con la lente del arma (cada una por su número de triángulos y dónde empieza). Las que se guardan como "brazos" no se pintan.
+  - **F6**: oculta la siguiente pieza, para ver cuál es (pitido).
+  - **Shift+F6**: "la que acabo de ocultar es un brazo": se guarda en `%TEMP%\metro_vr_brazos.txt` y ya no se pinta nunca.
+  - **Ctrl+F6**: borra todas las guardadas. (F6 antes era "luces", una prueba antigua.)
+  - Config `ocultar_brazos=1`. Log: `PIEZAS del arma (n): 1:triangulos/inicio …` cuando cambian, y `brazos: ocultas= pintadas= guardadas=`.
+- **Arma en la mano:** la E15 no hizo nada visible. Ahora el log dice por qué: `mano: … ok= porque= pos=` (1 apagado, 2 falta funcion de SteamVR, 3 sin mando derecho, 4 visor no valido, 5 mando no valido) y dónde está la mano.
+
 ## E16 — Optimización: tirones al apuntar y trabajo de sobra
 - **Al apuntar** el juego hace zoom y la lente principal se estrecha deprisa. El mod solo aceptaba cambios del 5 %: durante el zoom tomaba la cámara principal por "la del arma" (0,7 s cada vez) y todo se descolocaba a tirones; al soltar se arreglaba. Ahora sigue el zoom (hasta 15 % por paso, y se recupera en 0,15 s). El arma se reconoce comparando con la lente principal del momento.
 - **Trabajo de sobra quitado:** el "detective de lentes" (una herramienta de las pruebas antiguas) seguía leyendo entero cada cajón que el juego escribía, en cada dibujo, para siempre. Y la búsqueda de la cámara miraba también los cajones de huesos (3856 bytes) de cada personaje. Apagado lo primero (`detective=1` lo enciende) y lo segundo solo mira el cajón de la cámara.
