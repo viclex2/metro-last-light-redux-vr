@@ -1,11 +1,12 @@
+# Rama main = version normal; rama manos = version de pruebas (sale como pre-release).
 # Cuando cambia el archivo VERSION (por ejemplo, de E5 a E6), GitHub compila la DLL
 # desde el codigo y crea la Release con esa etiqueta, la DLL adjunta y las notas del CHANGELOG.
 name: Release
 
 on:
   push:
-    branches: [main]
-    paths: [VERSION]
+    branches: [main, manos]
+    paths: [VERSION, .github/workflows/release.yml]
   workflow_dispatch:
 
 permissions:
@@ -44,4 +45,5 @@ jobs:
           name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
           body_path: notas.md
+          prerelease: ${{ github.ref_name != 'main' }}
           files: d3d11.dll
