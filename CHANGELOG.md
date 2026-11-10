@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E16 — Optimización: tirones al apuntar y trabajo de sobra
+- **Al apuntar** el juego hace zoom y la lente principal se estrecha deprisa. El mod solo aceptaba cambios del 5 %: durante el zoom tomaba la cámara principal por "la del arma" (0,7 s cada vez) y todo se descolocaba a tirones; al soltar se arreglaba. Ahora sigue el zoom (hasta 15 % por paso, y se recupera en 0,15 s). El arma se reconoce comparando con la lente principal del momento.
+- **Trabajo de sobra quitado:** el "detective de lentes" (una herramienta de las pruebas antiguas) seguía leyendo entero cada cajón que el juego escribía, en cada dibujo, para siempre. Y la búsqueda de la cámara miraba también los cajones de huesos (3856 bytes) de cada personaje. Apagado lo primero (`detective=1` lo enciende) y lo segundo solo mira el cajón de la cámara.
+- La cámara principal se reconoce con la forma real de la pantalla (ya no solo 16:9): se puede probar otra resolución.
+- Log nuevo cada segundo: `TIEMPOS: en_grafica(Present)=…ms/s en_el_mod=…ms/s fotograma_mas_lento=…ms lente_principal=…` para saber si lo que frena es la gráfica, el procesador o el mod.
+- E15 (arma en la mano): el usuario no notó nada; queda pendiente de revisar.
+
 ## E15 — El arma en la mano derecha (paso 2 del plan de los mandos)
 - Prueba de la E14: andar hacia donde miras, **bien**.
 - Lo que se dibuja con la lente del arma (arma y brazos) ahora sigue al **mando derecho**: se calcula dónde está el mando respecto a la cabeza y se mueve el arma eso mismo (y también su posición para la luz, `m_WV`, para que no se ilumine como si siguiera en la cara).

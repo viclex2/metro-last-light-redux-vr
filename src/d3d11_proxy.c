@@ -183,6 +183,8 @@ static float g_hand_G[4][4];                 /* lo que se mueve el arma: mano_ah
 static int g_hand_cal = 0;                   /* 1 = ya hay calibracion */
 static float g_hand_C0[4][4];                /* postura de la mano "con el arma en reposo" */
 static volatile LONG g_hand_req = 0, g_hand_n = 0;
+static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
+static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
 static int cfg_hud = 0;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
 static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
 static float cfg_hud_dist = 1.5f;       /* metros a los que se ve el HUD */
@@ -326,6 +328,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "camara_nativa_completa")) cfg_natfull = v;
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
+    else if (!strcmp(s, "detective"))        cfg_detective = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
     else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
     else if (!strcmp(s, "giro_velocidad"))   { if (fv > 1.0f && fv < 1000.0f) cfg_giro = fv; }
@@ -875,7 +878,7 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
     if (Pe[0][0] < 0.05f || Pe[1][1] < 0.05f) return 0;     /* no parece una lente en perspectiva (0.05: linterna) */
     if (Pe[0][0] >= 1.428f && !g_arma) return 0;             /* lente estrecha (~57 grados): es el arma */
     float Hw[4][4];
-    if (nat_full() && g_stereo_on && cfg_natarma && g_orig_P00 > 0 && Pe[0][0] > g_orig_P00 * 1.3f) {
+    if (nat_full() && g_stereo_on && cfg_natarma && g_orig_P00 > 0 && Pe[0][0] > g_orig_P00 * 1.10f) {
         /* (E10c) ARMA y BRAZOS (su lente es mas estrecha): el juego los pega a la camara, y la camara ya va en
          * cada ojo -> el arma se iba con cada ojo y los dos la veian igual (sin 3D, enorme). Se la devuelve al
          * centro de la cabeza: en la vista del ojo, todo lo del arma se corre -ojo. */
@@ -964,11 +967,16 @@ static int is_main_cam(const float *f)
     float p00 = f[24], p11 = f[29];
     if (!(p00 > 0.05f && p00 < 1.428f && p11 > 0.05f)) return 0;
     float r = p11 / p00;
-    if (r < 1.70f || r > 1.95f) return 0;
+    /* (E16) la forma de la pantalla del juego, sea la que sea (antes solo 16:9) */
+    if (g_aspect > 0.5f) { if (fabsf(r / g_aspect - 1.0f) > 0.08f) return 0; }
+    else if (r < 1.70f || r > 1.95f) return 0;
     ULONGLONG now = GetTickCount64();
-    if (g_main_p00 <= 0 || now - g_main_seen > 700 || p00 < g_main_p00 * 0.95f) { g_main_p00 = p00; g_main_seen = now; return 1; }
-    if (fabsf(p00 - g_main_p00) <= g_main_p00 * 0.05f) { g_main_p00 = p00; g_main_seen = now; return 1; }
-    return 0;    /* lente mas estrecha: el arma */
+    if (g_main_p00 <= 0 || now - g_main_seen > 150 || p00 < g_main_p00 * 0.95f) { g_main_p00 = p00; g_main_seen = now; return 1; }
+    /* (E16) al APUNTAR el juego hace zoom: la lente principal se estrecha poco a poco (hasta ~10% por fotograma).
+     * Antes solo se aceptaba un 5%: durante el zoom la camara principal se tomaba por "el arma" 0,7 s cada vez
+     * y todo se descolocaba a tirones. La del arma esta mucho mas lejos (0.96 frente a 0.55). */
+    if (fabsf(p00 - g_main_p00) <= g_main_p00 * 0.15f) { g_main_p00 = p00; g_main_seen = now; return 1; }
+    return 0;    /* lente mucho mas estrecha de golpe: el arma */
 }
 static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT mapType, const char *via)
 {
@@ -1091,6 +1099,7 @@ static int cb_buffer_info(ID3D11Resource *res, UINT *bw)
     return 1;
 }
 
+static LONGLONG g_qpf = 10000000;
 typedef struct { void *res; const void *p; UINT bw; UINT type; } Pending;
 static Pending g_pend[16];
 
@@ -1653,11 +1662,14 @@ static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext *c, ID3D11Resource *r
 {
     Pending p;
     if (cfg_read && pend_take(r, &p)) {
-        if (p.bw >= CAM_BYTES)
+        LARGE_INTEGER pq0, pq1; QueryPerformanceCounter(&pq0);
+        if (p.bw == CAM_BYTES)   /* (E16) la camara va en su cajon de 352; antes se miraban tambien los de huesos (3856) en cada dibujo */
             check_camera(p.p, (void *)p.p, r, p.bw, p.type, "Map");   /* leer/cambiar ANTES de soltar */
         slot_stuff(r, &p);
-        if (g_mode == 1) lens_detective(r, p.p, p.bw);
+        if (cfg_detective && g_mode == 1) lens_detective(r, p.p, p.bw);
         prev_detective(r, p.p, p.bw);
+        QueryPerformanceCounter(&pq1);
+        InterlockedExchangeAdd(&g_prof_mod_us, (LONG)((pq1.QuadPart - pq0.QuadPart) * 1000000 / g_qpf));
     }
     g_orig_Unmap(c, r, sub);
 }
@@ -1668,9 +1680,9 @@ static void STDMETHODCALLTYPE hk_UpdateSub(ID3D11DeviceContext *c, ID3D11Resourc
     InterlockedIncrement(&g_updsub);
     UINT bw;
     if (cfg_read && src && cb_buffer_info(r, &bw)) {
-        if (!box && bw >= CAM_BYTES)
+        if (!box && bw == CAM_BYTES)
             check_camera(src, NULL, r, bw, 0, "UpdateSubresource");
-        if (!box && g_mode == 1) lens_detective(r, src, bw);
+        if (!box && cfg_detective && g_mode == 1) lens_detective(r, src, bw);
         if (!box) prev_detective(r, src, bw);
         int slot = slot_of(r);
         if (slot >= 0) {
@@ -1850,7 +1862,18 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     int real_frame = !(flags & DXGI_PRESENT_TEST);
     if (cfg_novsync && vr_active()) sync = 0;   /* SteamVR marca el ritmo */
     if (real_frame) { InterlockedIncrement(&g_real_frames); vr_submit_frame(sc); }
+    LARGE_INTEGER pp0, pp1; QueryPerformanceCounter(&pp0);
     HRESULT hr = next(sc, sync, flags);
+    QueryPerformanceCounter(&pp1);
+    {
+        static LARGE_INTEGER lastp; LARGE_INTEGER fq; QueryPerformanceFrequency(&fq); g_qpf = fq.QuadPart;
+        InterlockedExchangeAdd(&g_prof_present_us, (LONG)((pp1.QuadPart - pp0.QuadPart) * 1000000 / fq.QuadPart));
+        if (lastp.QuadPart) {
+            LONG ft = (LONG)((pp1.QuadPart - lastp.QuadPart) * 1000000 / fq.QuadPart);
+            if (ft > g_prof_maxframe_us) g_prof_maxframe_us = ft;
+        }
+        lastp = pp1;
+    }
     if (real_frame) {
         /* (E7c) foto de la camara de este fotograma: en el siguiente, es "la anterior" */
         static float last[88]; float dd = 0;
@@ -3819,6 +3842,9 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
+            vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s fotograma_mas_lento=%.1fms lente_principal=%.3f",
+                   (long)(InterlockedExchange(&g_prof_present_us, 0) / 1000), (long)(InterlockedExchange(&g_prof_mod_us, 0) / 1000),
+                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, g_orig_P00);
             if (g_ft_n > 0) {   /* (E12) */
                 vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
                        "steamvr_esperando=%.1fms veces_mostrado=%.2f repetidos=%ld fuera_de_hora=%ld con_reproyeccion=%ld",
@@ -4086,7 +4112,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E15: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E16: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
