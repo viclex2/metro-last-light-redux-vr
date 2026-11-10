@@ -190,7 +190,8 @@ static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia e
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
 /* (E17) piezas del arma/brazos: censo y ocultar */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
-static volatile LONG g_cb0_weapon = 0;       /* el ultimo cajon 0 era de una pieza con la lente del arma */
+static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
+static volatile LONG g_pc_lock = 0, g_draws_seen = 0;
 typedef struct { UINT ic, si; } PieceSig;
 #define MAXP 64
 static PieceSig g_pc_cur[MAXP], g_pc_last[MAXP]; static int g_pc_ncur = 0, g_pc_nlast = 0;
@@ -2081,6 +2082,8 @@ typedef struct { uint32_t packet; uint64_t pressed, touched; OvrAxis axis[5]; } 
 typedef uint32_t (*PFN_RoleIdx)(int role);
 typedef int (*PFN_CtrlState)(uint32_t idx, OvrCtrlState *st, uint32_t size);
 static PFN_RoleIdx p_RoleIdx = NULL;
+typedef int (*PFN_RoleOf)(uint32_t idx);
+static PFN_RoleOf p_RoleOf = NULL;
 static PFN_CtrlState p_CtrlState = NULL;
 typedef struct { void *handle; int type; int colorspace; } OvrTexture;
 typedef struct { float uMin, vMin, uMax, vMax; } OvrBounds;
@@ -2159,6 +2162,7 @@ static void head_try_init(void)
             p_GetPose = (PFN_GetPose)tbl[12];      /* GetDeviceToAbsoluteTrackingPose */
             if (i == 0) {   /* (E13) mandos: solo con la version de la tabla que conocemos */
                 p_RoleIdx = (PFN_RoleIdx)tbl[18];       /* GetTrackedDeviceIndexForControllerRole */
+                p_RoleOf = (PFN_RoleOf)tbl[19];         /* GetControllerRoleForTrackedDeviceIndex */
                 p_CtrlState = (PFN_CtrlState)tbl[37];   /* GetControllerState */
             }
             p_PollEvent = (PFN_PollEvent)tbl[30];  /* PollNextEvent: SteamVR espera que la escena "lea su correo" */
@@ -2543,8 +2547,13 @@ static void hand_update(const OvrPose *rp)
 {
     hand_load();
     if (!cfg_mano || !p_RoleIdx) { g_hand_ok = 0; g_hand_why = cfg_mano ? 2 : 1; return; }
+    /* (E17b) SteamVR a veces dice "no se cual es el derecho" un instante: se busca entre los mandos y se recuerda */
+    static uint32_t last_ri = 0xFFFFFFFFu;
     uint32_t ri = p_RoleIdx(2);
+    if (ri >= 16 && p_RoleOf) for (uint32_t k = 1; k < 16; k++) if (rp[k].valid && p_RoleOf(k) == 2) { ri = k; break; }
+    if (ri >= 16 && last_ri < 16 && rp[last_ri].valid) ri = last_ri;
     if (ri >= 16) { g_hand_ok = 0; g_hand_why = 3; return; }
+    last_ri = ri;
     if (!rp[0].valid) { g_hand_ok = 0; g_hand_why = 4; return; }
     if (!rp[ri].valid) { g_hand_ok = 0; g_hand_why = 5; return; }
     g_hand_why = 0;
@@ -2887,6 +2896,9 @@ static void mandos_step(float dt)
     if (!active) { if (was) { mandos_release_all(); was = 0; } return; }
     OvrCtrlState L, R; memset(&L, 0, sizeof(L)); memset(&R, 0, sizeof(R));
     uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
+    static uint32_t lli = 0xFFFFFFFFu, lri = 0xFFFFFFFFu;
+    if (li >= 64) li = lli; else lli = li;
+    if (ri >= 64) ri = lri; else lri = ri;
     int lok = li < 64 && p_CtrlState(li, &L, sizeof(L));
     int rok = ri < 64 && p_CtrlState(ri, &R, sizeof(R));
     if (!lok && !rok) { if (was) { mandos_release_all(); was = 0; } return; }
@@ -3878,10 +3890,11 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
-                                       (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide);
+                                       (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
+                                       (long)InterlockedExchange(&g_draws_seen, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3980,10 +3993,16 @@ static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext *c, UINT vc, UINT sv)
 /* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6) */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
 {
-    if (c != g_hud_ctx || !g_cb0_weapon || g_mode != 1) return 0;
+    (void)c;
+    g_draws_seen++;
+    /* (E17b) el juego pinta tambien desde otros hilos (listas de dibujo "diferidas"): no se mira el contexto,
+     * y lo de "esta pieza es del arma" se guarda por hilo */
+    if (!g_cb0_weapon || g_mode != 1) return 0;
+    while (InterlockedCompareExchange(&g_pc_lock, 1, 0) != 0) YieldProcessor();
     int known = 0;
     for (int i = 0; i < g_pc_ncur; i++) if (g_pc_cur[i].ic == ic && g_pc_cur[i].si == si) { known = 1; break; }
     if (!known && g_pc_ncur < MAXP) { g_pc_cur[g_pc_ncur].ic = ic; g_pc_cur[g_pc_ncur].si = si; g_pc_ncur++; }
+    InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
         if (g_hide[i].ic == ic && g_hide[i].si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
@@ -4024,7 +4043,8 @@ static int sig_cmp(const void *a, const void *b)
 static void pieces_frame(void)
 {
     brazos_load();
-    if (g_pc_ncur == 0) return;
+    while (InterlockedCompareExchange(&g_pc_lock, 1, 0) != 0) YieldProcessor();
+    if (g_pc_ncur == 0) { InterlockedExchange(&g_pc_lock, 0); return; }
     qsort(g_pc_cur, g_pc_ncur, sizeof(PieceSig), sig_cmp);
     int same = (g_pc_ncur == g_pc_nlast);
     for (int i = 0; same && i < g_pc_ncur; i++) if (g_pc_cur[i].ic != g_pc_last[i].ic || g_pc_cur[i].si != g_pc_last[i].si) same = 0;
@@ -4040,6 +4060,7 @@ static void pieces_frame(void)
     }
     memcpy(g_pc_last, g_pc_cur, sizeof(PieceSig) * g_pc_ncur); g_pc_nlast = g_pc_ncur;
     g_pc_ncur = 0;
+    InterlockedExchange(&g_pc_lock, 0);
 }
 /* F6: oculta la siguiente pieza para ver cual es. Shift+F6: la pieza oculta ahora SON brazos (se guarda).
  * Ctrl+F6: borra todas las guardadas. */
@@ -4223,7 +4244,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E17: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E17b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

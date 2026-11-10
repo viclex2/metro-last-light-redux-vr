@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E17b (rama `manos`) — Arreglos del arma en la mano y de F6
+- Log de la E17: el mando derecho "desaparecía" la mitad del tiempo (`porque=3`: SteamVR decía que no sabía cuál era el derecho), así que el arma iba a la mano y volvía a la cara muchas veces por segundo. Ahora se busca el mando derecho entre los mandos y se recuerda el último bueno. Lo mismo para los botones.
+- F6 no encontraba ninguna pieza (`pintadas=0`): el juego pinta también desde otros hilos (listas "diferidas") y solo se miraba uno. Ahora se miran todos. Esto explica también por qué el HUD de la E11 no encontraba nada.
+- Log: `dibujos=` (cuántos dibujos ve el mod por segundo).
+
 ## E17 (rama `manos`) — Solo el arma en el mando: quitar los brazos
 - Objetivo: solo el arma, sin brazos, en el mando derecho, y poder verla por todos lados.
 - **Quitar brazos** (idea de D-Rey86 en 2033, que no pinta las "mangas"): el mod apunta qué piezas se pintan con la lente del arma (cada una por su número de triángulos y dónde empieza). Las que se guardan como "brazos" no se pintan.
