@@ -178,8 +178,9 @@ static ID3D11DeviceContext *g_hud_ctx;
 static volatile LONG g_vt_fix;
 /* (E18) MinHook */
 #define MHVAR 6
-static void *g_mh_fn[5][MHVAR], *g_mh_tr[5][MHVAR];  /* funcion real enganchada / puente para llamar a la original */
-static int g_mh_n[5];                                /* versiones enganchadas de Draw, DrawIndexed, DrawInstanced, DrawIndexedInstanced, (E20c) UpdateSubresource */
+#define MHK 12                                       /* (E27) 5 de antes + 7 para los dos ojos */
+static void *g_mh_fn[MHK][MHVAR], *g_mh_tr[MHK][MHVAR];  /* funcion real enganchada / puente para llamar a la original */
+static int g_mh_n[MHK];                                /* versiones enganchadas de Draw, DrawIndexed, DrawInstanced, DrawIndexedInstanced, (E20c) UpdateSubresource */
 static volatile LONG g_mh_calls[4];                  /* llamadas por segundo (log) */
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
 static int cfg_mandos = 1;
@@ -221,6 +222,15 @@ static int cfg_pose_cam = 1;                 /* (E22) mandar cada imagen con la 
 static int g_cine_on; static void cine_hide(void);
 static int cfg_fastread = 1;
 static int cfg_shadow = 1;                   /* (E24) borrador en memoria normal para los cajones de objeto */
+/* (E27) DOS OJOS EN EL MISMO FOTOGRAMA (idea de D-Rey86, Metro 2033 Redux VR; codigo propio).
+ *   0 = como antes (un ojo por fotograma, reloj parado en el 2.o)
+ *   1 = PRUEBA: todo lo que depende del ojo se pinta en "copias" de las texturas en vez de en las del juego, y a las
+ *       gafas se manda la copia. Mismo coste que 0 y la imagen deberia ser IGUAL: si se ve bien, las copias funcionan.
+ *   2 = DE VERDAD: el juego piensa una vez y cada dibujo que depende del ojo se repite para el ojo derecho en las copias. */
+static int cfg_dosojos = 0;
+static volatile LONG g_twin_on = 0;          /* modo de los dos ojos activo AHORA (se cambia entre fotogramas) */
+static __thread int t_eye = -1;              /* ojo forzado en este hilo (para calcular lo del ojo derecho) */
+static __thread int t_quiet = 0;             /* calculo "de copia": sin apuntar nada ni tocar el estado global */
 static volatile LONG g_shadow_n = 0;                 /* (E23) leer los cajones directamente (sin ReadProcessMemory) */
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
@@ -385,6 +395,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "postura_camara"))   cfg_pose_cam = v;
     else if (!strcmp(s, "lectura_rapida"))   cfg_fastread = v;
     else if (!strcmp(s, "borrador"))         cfg_shadow = v;
+    else if (!strcmp(s, "dos_ojos"))         cfg_dosojos = (iv < 0 || iv > 2) ? 0 : iv;
     else if (!strcmp(s, "pantalla_menus"))   cfg_cine = v;
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
@@ -694,15 +705,20 @@ static volatile LONG g_eye = 0;            /* ojo que se esta dibujando en este 
 static volatile LONG g_stereo_on = 0;      /* estereo activo ahora mismo (F9 + estereo=1 + visor listo) */
 static float g_eyepos[2][3];               /* posicion de cada ojo respecto a la cabeza, en ejes del juego (metros) */
 static float g_eyerow[2][2][4];            /* filas x/y de la lente de cada ojo */
+static inline LONG cur_eye(void) { return t_eye >= 0 ? t_eye : g_eye; }   /* (E27) */
+/* (E27) se le pone el ojo a H? Antes solo sin camara nativa. Con los dos ojos de verdad (modo 2) el juego dibuja
+ * desde el CENTRO de la cabeza y cada ojo se aparta en H (igual que hacia el arma). */
+static int nat_full(void);
+static inline int eye_in_H(void) { return g_stereo_on && (!nat_full() || g_twin_on == 2); }
 
 static void get_H(float H[4][4], float Hi[4][4])
 {
     LONG i = g_Hidx;
     memcpy(H,  g_Hbuf[i][0], 16 * sizeof(float));
     memcpy(Hi, g_Hbuf[i][1], 16 * sizeof(float));
-    if (g_stereo_on && !nat_full()) {
+    if (eye_in_H()) {
         /* el ojo esta desplazado t respecto al centro de la cabeza: vista_ojo = T(-t) * vista */
-        LONG e = g_eye;
+        LONG e = cur_eye();
         float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
         for (int r = 0; r < 3; r++) {
             H[r][3] -= t[r];
@@ -790,8 +806,8 @@ static void finish_H(float A[4][4], float Ai[4][4], float H[4][4], float Hi[4][4
     float Hk[4][4], Hki[4][4];
     build_H(g_yaw, g_pitch, g_roll, g_sx, g_sy, g_sz, Hk, Hki);
     mul4(A, Hk, H); mul4(Hki, Ai, Hi);
-    if (g_stereo_on && !nat_full()) {
-        LONG e = g_eye;
+    if (eye_in_H()) {
+        LONG e = cur_eye();
         float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
         for (int r = 0; r < 3; r++) {
             H[r][3] -= t[r];
@@ -810,7 +826,7 @@ static void fov_xy(float P[4][4])
 {
     if (!cfg_fov || !g_fov_ok) return;
     if (g_stereo_on) {      /* lente del ojo de este fotograma */
-        LONG e = g_eye;
+        LONG e = cur_eye();
         for (int j = 0; j < 4; j++) { P[0][j] = g_eyerow[e][0][j]; P[1][j] = g_eyerow[e][1][j]; }
         return;
     }
@@ -948,12 +964,13 @@ static int apply_cb0_yaw(float *f, const float H[4][4])
         /* (E10c) ARMA y BRAZOS (su lente es mas estrecha): el juego los pega a la camara, y la camara ya va en
          * cada ojo -> el arma se iba con cada ojo y los dos la veian igual (sin 3D, enorme). Se la devuelve al
          * centro de la cabeza: en la vista del ojo, todo lo del arma se corre -ojo. */
-        LONG e = g_eye;
+        LONG e = cur_eye();
         float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
         memcpy(Hw, H, sizeof(Hw));
+        if (eye_in_H() && nat_full()) for (int r = 0; r < 3; r++) Hw[r][3] += t[r];   /* (E27) H ya traia el ojo: se quita (va abajo) */
         int mano = cfg_mano && g_hand_ok;
         if (mano) {   /* (E15) el arma va a la mano: primero se mueve con la mano, luego al ojo */
-            float Hg[4][4]; mul4(g_hand_G, H, Hg); memcpy(Hw, Hg, sizeof(Hw));
+            float Hg[4][4]; mul4(g_hand_G, Hw, Hg); memcpy(Hw, Hg, sizeof(Hw));
         }
         for (int r = 0; r < 3; r++) Hw[r][3] -= t[r];
         H = (const float (*)[4])Hw;
@@ -1054,6 +1071,8 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         return;
     }
     if (!is_real_cam(f)) return;
+    float p00 = f[24], p11 = f[29];
+    if (t_quiet) goto modo;   /* (E27) calculo del ojo derecho: sin apuntar nada */
     /* solo la camara PRINCIPAL: forma de pantalla 16:9 (las camaras de reflejos/cubos son cuadradas) */
     {   static int said = 0;
         if (f[24] < 1.428f && f[24] > 0.05f && said < 6 && GetTickCount64() % 997 < 3) { said++; vr_log("CAMARA: P00=%.4f P11=%.4f forma=%.4f (busco %.4f)", f[24], f[29], f[29] / f[24], g_aspect); }
@@ -1079,7 +1098,6 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
         g_cam_buf = res;
         vr_log("El cajon de la camara es %p (ancho=%u)", res, bw);
     }
-    float p00 = f[24], p11 = f[29];
     if (g_budget > 0) {
         InterlockedDecrement(&g_budget);
         float fovH = 2.0f * atanf(1.0f / p00) * RAD2DEG;
@@ -1092,13 +1110,14 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
                p00, p11, fovH, fovV);
     }
 
+modo:;
     /* --- PRUEBA: giro "en el espacio de vista" (modos 7 y 8) --- */
     LONG mode = g_mode;
     if (mode == 1 && dst && (p00 < 1.428f || g_arma)) {      /* solo la camara ancha: el arma (57 grados) se queda quieta */
         float g[CAM_BYTES / 4], Hc[4][4], Hic[4][4];
         memcpy(g, f, sizeof(g));
         int main_cam = raton_active() && is_main_cam(f);
-        if (main_cam && cfg_modoh == 1 && g_fs_need) {
+        if (main_cam && cfg_modoh == 1 && g_fs_need && !t_quiet) {
             g_fs_need = 0;
             if (g_fs_have) { memcpy(g_fs_prevH, g_fs_curH, sizeof(g_fs_curH)); memcpy(g_fs_prevL, g_fs_curL, sizeof(g_fs_curL)); }
             raton_make_H(f, g_headH, g_headHi);
@@ -1118,13 +1137,14 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
             if (view_H(f, Hv, Hiv)) { memcpy(Hc, Hv, sizeof(Hv)); memcpy(Hic, Hiv, sizeof(Hiv)); }
             else cam_own_H(f, Hc, Hic);
         }
-        if (main_cam) nat_eye_check(f);
+        if (main_cam) { if (!t_quiet) nat_eye_check(f); }
         /* (E10b) camaras que NO salen de nuestra posicion (la del ARMA y los brazos: el juego la monta aparte, pegada
          * a la cara): sin esto los dos ojos ven el arma igual -> sin profundidad, enorme. Se les pone el ojo en H. */
         else if (nat_full() && g_stereo_on && cfg_natarma) {
             if (g_orig_P00 > 0 && p00 > g_orig_P00 * 1.3f) {   /* (E10c) camara del arma (lente estrecha) */
-                LONG e = g_eye;
+                LONG e = cur_eye();
                 float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
+                if (eye_in_H()) for (int r = 0; r < 3; r++) Hc[r][3] += t[r];   /* (E27) H ya traia el ojo: se quita (va abajo) */
                 /* (E17d) ESTA es la camara con la que se pinta el arma que ves (la E15 solo movia las piezas del
                  * cajon 0, que eran otras). Se le aplica la mano: vista_arma = T(-ojo) * G_mano * vista */
                 if (cfg_mano && g_hand_ok) {
@@ -1136,7 +1156,7 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
                 InterlockedIncrement(&g_nat_armaojo);
             } else InterlockedIncrement(&g_nat_otras);
         }
-        if (main_cam && cfg_modoh == 0) {
+        if (main_cam && cfg_modoh == 0 && !t_quiet) {
             float Pt[4][4];
             memcpy(Pt, f + 24, sizeof(Pt));
             fov_xy(Pt);
@@ -1629,8 +1649,21 @@ static void inst_stuff(int slot, const Pending *p)
  * o P*T con T = V_antes * V_ahora^-1 (para reaprovechar la imagen del fotograma ANTERIOR). Las posiciones que
  * llegan son las del juego (vista del juego, sin H), asi que:  P' = Lente_ahora*H_ahora ;  P*V -> Lente_ahora*H_ahora*V ;
  * P*T -> Lente_antes*H_antes*T   (H_antes = el que se uso para dibujar la imagen anterior) */
+/* (E27) H y lente de "ahora" y "de antes" para el ojo que se esta calculando. Lo guardado es del ojo izquierdo;
+ * para el derecho (copia) se aparta la diferencia entre ojos y se pone su lente. */
+static void oc_eye(float H[4][4], float Hi[4][4], float L[2][4], float sH[4][4], float sHi[4][4], float sL[2][4])
+{
+    memcpy(H, sH, 64); memcpy(Hi, sHi, 64); memcpy(L, sL, 32);
+    if (t_eye != 1 || g_twin_on != 2) return;
+    float d[3];
+    for (int i = 0; i < 3; i++) d[i] = (g_eyepos[1][i] - g_eyepos[0][i]) * cfg_ipdscale;
+    for (int r = 0; r < 3; r++) { H[r][3] -= d[r]; Hi[r][3] += Hi[r][0] * d[0] + Hi[r][1] * d[1] + Hi[r][2] * d[2]; }
+    for (int j = 0; j < 4; j++) { L[0][j] = g_eyerow[1][0][j]; L[1][j] = g_eyerow[1][1][j]; }
+}
 static int fix_prev_s7(float *f)
 {
+    float ocH[4][4], ocHi[4][4], ocL[2][4], opH[4][4], opHi[4][4], opL[2][4];
+    oc_eye(ocH, ocHi, ocL, g_oc_H, g_oc_Hi, g_oc_L); oc_eye(opH, opHi, opL, g_op_H, g_op_Hi, g_op_L);
     float P[4][4], M2[4][4], iP[4][4], T[4][4], Pc[4][4], Pp[4][4], A[4][4], B[4][4], C[4][4];
     for (int i = 0; i < 32; i++) if (!isfinite(f[i])) return 0;
     memcpy(P, f, sizeof(P)); memcpy(M2, f + 16, sizeof(M2));
@@ -1639,13 +1672,13 @@ static int fix_prev_s7(float *f)
     if (!inv4(P, iP)) return 0;
     mul4(iP, M2, T);
     memcpy(Pc, P, sizeof(P)); memcpy(Pp, P, sizeof(P));
-    for (int j = 0; j < 4; j++) { Pc[0][j] = g_oc_L[0][j]; Pc[1][j] = g_oc_L[1][j]; Pp[0][j] = g_op_L[0][j]; Pp[1][j] = g_op_L[1][j]; }
-    mul4(Pc, g_oc_H, A);
+    for (int j = 0; j < 4; j++) { Pc[0][j] = ocL[0][j]; Pc[1][j] = ocL[1][j]; Pp[0][j] = opL[0][j]; Pp[1][j] = opL[1][j]; }
+    mul4(Pc, ocH, A);
     int vp = 1;
     for (int i = 0; i < 3 && vp; i++) for (int j = 0; j < 4; j++)
         if (fabsf(T[i][j] - g_rt_lastcam[i * 4 + j]) > 2e-3f * (1.0f + fabsf(g_rt_lastcam[i * 4 + j]))) { vp = 0; break; }
     if (vp) { mul4(A, T, B); InterlockedIncrement(&g_s7vp); }
-    else    { mul4(Pp, g_op_H, C); mul4(C, T, B); InterlockedIncrement(&g_s7T); }
+    else    { mul4(Pp, opH, C); mul4(C, T, B); InterlockedIncrement(&g_s7T); }
     memcpy(f, A, sizeof(A)); memcpy(f + 16, B, sizeof(B));
     return 1;
 }
@@ -1656,18 +1689,20 @@ static int fix_prev_s7(float *f)
  *       S*T -> S*Lj^-1 * Lente_antes * H_antes * T          (este era el "fantasma") */
 static int fix_prev_s3(float *f)
 {
+    float ocH[4][4], ocHi[4][4], ocL[2][4], opH[4][4], opHi[4][4], opL[2][4];
+    oc_eye(ocH, ocHi, ocL, g_oc_H, g_oc_Hi, g_oc_L); oc_eye(opH, opHi, opL, g_op_H, g_op_Hi, g_op_L);
     float *m = f + 36;
     for (int i = 0; i < 16; i++) if (!isfinite(m[i])) return 0;
     float p00 = g_orig_P00, p11 = g_orig_P11;
     if (p00 <= 0 || p11 <= 0) return 0;
     if (fabsf(m[0] - 2.0f / p00) < 1e-3f && fabsf(m[5] + 2.0f / p11) < 1e-3f &&
         fabsf(m[3] + 1.0f / p00) < 1e-3f && fabsf(m[7] - 1.0f / p11) < 1e-3f) {
-        float a = g_oc_L[0][0], b = g_oc_L[0][2], c = g_oc_L[1][1], d = g_oc_L[1][2], R[4][4], O[4][4];
+        float a = ocL[0][0], b = ocL[0][2], c = ocL[1][1], d = ocL[1][2], R[4][4], O[4][4];
         if (fabsf(a) < 1e-3f || fabsf(c) < 1e-3f) return 0;
         memcpy(R, m, sizeof(R));
         R[0][0] = 2.0f / a; R[0][1] = 0; R[0][2] = 0; R[0][3] = -(1.0f + b) / a;
         R[1][0] = 0; R[1][1] = -2.0f / c; R[1][2] = 0; R[1][3] = (1.0f - d) / c;
-        mul4(g_oc_Hi, R, O);
+        mul4(ocHi, R, O);
         memcpy(m, O, sizeof(O));
         InterlockedIncrement(&g_s3rays);
         return 1;
@@ -1677,8 +1712,8 @@ static int fix_prev_s3(float *f)
         fabsf(m[1]) < 1e-6f && fabsf(m[2]) < 1e-6f && fabsf(m[4]) < 1e-6f && fabsf(m[6]) < 1e-6f) {
         float Pc[4][4], O[4][4];
         memcpy(Pc, m, sizeof(Pc));
-        for (int j = 0; j < 4; j++) { Pc[0][j] = g_oc_L[0][j]; Pc[1][j] = g_oc_L[1][j]; }
-        mul4(Pc, g_oc_H, O);
+        for (int j = 0; j < 4; j++) { Pc[0][j] = ocL[0][j]; Pc[1][j] = ocL[1][j]; }
+        mul4(Pc, ocH, O);
         memcpy(m, O, sizeof(O));
         InterlockedIncrement(&g_s3P);
         return 1;
@@ -1691,8 +1726,8 @@ static int fix_prev_s3(float *f)
         if (fabsf(s2 - 1.0f) > 0.01f || s0 < 0.1f || s1 < 0.1f) return 0;
         float X[3][3], L3[3][3], Hr[3][3], K0 = s0 / p00, K1 = s1 / p11, Q[3][3], Q2[3][3];
         for (int j = 0; j < 3; j++) { X[0][j] = m[j] / s0; X[1][j] = m[4 + j] / s1; X[2][j] = m[8 + j]; }
-        for (int j = 0; j < 3; j++) { L3[0][j] = g_op_L[0][j]; L3[1][j] = g_op_L[1][j]; L3[2][j] = (j == 2) ? 1.0f : 0.0f; }
-        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Hr[i][j] = g_op_H[i][j];
+        for (int j = 0; j < 3; j++) { L3[0][j] = opL[0][j]; L3[1][j] = opL[1][j]; L3[2][j] = (j == 2) ? 1.0f : 0.0f; }
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Hr[i][j] = opH[i][j];
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { float a = 0; for (int k = 0; k < 3; k++) a += Hr[i][k] * X[k][j]; Q[i][j] = a; }
         for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { float a = 0; for (int k = 0; k < 3; k++) a += L3[i][k] * Q[k][j]; Q2[i][j] = a; }
         for (int j = 0; j < 3; j++) { m[j] = K0 * Q2[0][j]; m[4 + j] = K1 * Q2[1][j]; m[8 + j] = Q2[2][j]; }
@@ -1756,23 +1791,37 @@ static void slot_stuff(void *res, const Pending *p)
             InterlockedIncrement(&g_prof_cb0_n);
         }
     }
-    if (slot != 1 && g_samples_left[slot] > 0) {
+    if (slot != 1 && !t_quiet && g_samples_left[slot] > 0) {
         InterlockedDecrement(&g_samples_left[slot]);
         dump_floats(slot, "map", p->p, p->bw);
     }
 }
 
+static void tw_cb_upload(ID3D11DeviceContext *c, ID3D11Resource *r, const void *data, UINT bw);
+static void tw_cb_invalidate(ID3D11Resource *r);
 static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub)
 {
     Pending p;
     if (cfg_read && pend_take(r, &p)) {
         LARGE_INTEGER pq0, pq1; QueryPerformanceCounter(&pq0);
+        /* (E27) dos ojos: se guarda lo que escribio el juego (antes de tocarlo) para hacer luego la version del ojo derecho */
+        __attribute__((aligned(16))) float tw_raw[96];
+        int tw_do = g_twin_on == 2 && p.real && p.bw <= sizeof(tw_raw);
+        if (tw_do) memcpy(tw_raw, p.p, p.bw);
         if (p.bw == CAM_BYTES)   /* (E16) la camara va en su cajon de 352; antes se miraban tambien los de huesos (3856) en cada dibujo */
             check_camera(p.p, (void *)p.p, r, p.bw, p.type, "Map");   /* leer/cambiar ANTES de soltar */
         slot_stuff(r, &p);
         if (cfg_detective && g_mode == 1) lens_detective(r, p.p, p.bw);
         prev_detective(r, p.p, p.bw);
         if (p.real) memcpy(p.real, p.p, p.bw);   /* (E24) el borrador ya corregido, de golpe a la grafica */
+        if (tw_do) {   /* (E27) lo mismo para el ojo derecho, en su copia del cajon */
+            Pending q = p; q.p = tw_raw; q.real = NULL;
+            t_eye = 1; t_quiet = 1;
+            if (q.bw == CAM_BYTES) check_camera(tw_raw, tw_raw, r, q.bw, q.type, "Map");
+            slot_stuff(r, &q);
+            t_quiet = 0; t_eye = -1;
+            tw_cb_upload(c, r, tw_raw, q.bw);
+        } else if (g_twin_on == 2 && (p.bw == 208 || p.bw == 144 || p.bw == 272 || p.bw == CAM_BYTES)) tw_cb_invalidate(r);
         QueryPerformanceCounter(&pq1);
         InterlockedExchangeAdd(&g_prof_mod_us, (LONG)((pq1.QuadPart - pq0.QuadPart) * 1000000 / g_qpf));
     }
@@ -1790,6 +1839,7 @@ static void upd_core(PFN_UpdateSub orig, ID3D11DeviceContext *c, ID3D11Resource 
     }
     UINT bw;
     if (cfg_read && src && cb_buffer_info(r, &bw)) {
+        if (g_twin_on == 2) tw_cb_invalidate(r);   /* (E27) su copia del ojo derecho ya no vale: se usa el del juego */
         if (!box && bw == CAM_BYTES)
             check_camera(src, NULL, r, bw, 0, "UpdateSubresource");
         if (!box && cfg_detective && g_mode == 1) lens_detective(r, src, bw);
@@ -1957,6 +2007,10 @@ __attribute__((unused)) static void find_real_present(void **slot)
 }
 
 static void vr_submit_frame(IDXGISwapChain *sc);
+static void tw_update_mode(IDXGISwapChain *sc);         /* (E27) */
+static ID3D11Texture2D *tw_twin_tex(ID3D11Texture2D *t);
+static volatile LONG g_tw_nobb;
+static __thread int t_tw_raw;
 static volatile LONG g_real_frames = 0;   /* fotogramas de verdad (sin los de prueba) */
 static volatile LONG g_wait_us = 0;       /* tiempo esperando a SteamVR en el ultimo segundo (microsegundos) */
 static void vr_after_present(void);
@@ -2090,6 +2144,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
             if (SUCCEEDED(IDXGISwapChain_GetDesc(sc, &sd)) && sd.BufferDesc.Height)
                 g_aspect = (float)sd.BufferDesc.Width / (float)sd.BufferDesc.Height;
         }
+        tw_update_mode(sc);   /* (E27) */
         vr_after_present();
     }
     t_in_present = 0;
@@ -2744,7 +2799,7 @@ static void vr_submit_frame(IDXGISwapChain *sc)
     ID3D11Device *dev = NULL; ID3D11DeviceContext *ctx = NULL;
     ID3D11Texture2D_GetDevice(bb, &dev);
     if (dev) ID3D11Device_GetImmediateContext(dev, &ctx);
-    if (ctx && ctx != g_hud_ctx && (cfg_hud || cfg_brazos)) {   /* (E17c) el contexto que de verdad usa el juego */
+    if (ctx && ctx != g_hud_ctx && (cfg_hud || cfg_brazos || cfg_dosojos)) {   /* (E17c) el contexto que de verdad usa el juego */
         vr_log("VTABLE: el juego pinta con el contexto %p (los desvios estaban en %p): me cambio", (void *)ctx, (void *)g_hud_ctx);
         g_hud_ctx = ctx;
     }
@@ -2774,12 +2829,30 @@ static void vr_submit_frame(IDXGISwapChain *sc)
         }
         if (g_vr_tex) {
             int stereo = g_stereo_on && g_vr_tex2;
-            LONG eye = stereo ? g_eye : 0;
+            /* (E27) dos ojos: la imagen final del ojo derecho esta en la COPIA de la imagen final */
+            LONG twm = g_twin_on;
+            ID3D11Texture2D *src = bb, *srcR = NULL;
+            if (twm) {
+                ID3D11Texture2D *tb = tw_twin_tex(bb);
+                if (!tb && InterlockedIncrement(&g_tw_nobb) <= 3) vr_log("DOS OJOS: la imagen final aun no tiene copia (mando la del juego)");
+                if (twm == 1 && tb) src = tb;
+                if (twm == 2) srcR = tb ? tb : bb;
+            }
+            int both = stereo && twm == 2;
+            LONG eye = (stereo && !both) ? g_eye : 0;
             ID3D11Texture2D *dst = eye ? g_vr_tex2 : g_vr_tex;
+            t_tw_raw++;
             if (d.SampleDesc.Count > 1)
-                ID3D11DeviceContext_ResolveSubresource(ctx, (ID3D11Resource *)dst, 0, (ID3D11Resource *)bb, 0, d.Format);
+                ID3D11DeviceContext_ResolveSubresource(ctx, (ID3D11Resource *)dst, 0, (ID3D11Resource *)src, 0, d.Format);
             else
-                ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)dst, (ID3D11Resource *)bb);
+                ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)dst, (ID3D11Resource *)src);
+            if (both) {
+                if (d.SampleDesc.Count > 1)
+                    ID3D11DeviceContext_ResolveSubresource(ctx, (ID3D11Resource *)g_vr_tex2, 0, (ID3D11Resource *)srcR, 0, d.Format);
+                else
+                    ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)g_vr_tex2, (ID3D11Resource *)srcR);
+            }
+            t_tw_raw--;
             ID3D11DeviceContext_Flush(ctx);     /* que la copia llegue antes de que SteamVR la lea */
             if (!stereo && cine_frame(g_vr_own)) goto done_submit;   /* (E20) menus/videos: pantalla flotante */
             if (g_photo) {
@@ -2793,7 +2866,7 @@ static void vr_submit_frame(IDXGISwapChain *sc)
                     if (memcmp(&g_eye_rpose[eye], &g_frame_pose, sizeof(OvrMat34))) InterlockedIncrement(&g_pose_diff); else InterlockedIncrement(&g_pose_same);
                 } else g_eye_pose[eye] = g_frame_pose;
             }
-            if (!stereo) g_eye_pose[1] = g_eye_pose[0];
+            if (!stereo || both) g_eye_pose[1] = g_eye_pose[0];
             /* textura + postura con la que se dibujo: asi SteamVR recoloca bien cada ojo aunque su imagen sea de antes */
             typedef struct { void *handle; int type; int colorspace; OvrMat34 pose; } OvrTexPose;
             OvrTexPose t0 = { g_vr_own, 0, 0, g_eye_pose[0] };
@@ -2807,7 +2880,7 @@ static void vr_submit_frame(IDXGISwapChain *sc)
                 b1.uMin = g_eyeb[1][0]; b1.vMin = g_eyeb[1][1]; b1.uMax = g_eyeb[1][2]; b1.vMax = g_eyeb[1][3];
             }
             /* sincronizado: tras el ojo izquierdo aun no se manda nada; tras el derecho, la pareja entera */
-            if (stereo && cfg_stereo == 2 && eye == 0) goto done_submit;
+            if (stereo && cfg_stereo == 2 && eye == 0 && !both) goto done_submit;
             int e1 = p_Submit(0, (OvrTexture *)&t0, &b0, fl);    /* ojo izquierdo */
             int e2 = p_Submit(1, (OvrTexture *)&t1, &b1, fl);    /* ojo derecho */
             if (e1 || e2) {
@@ -2853,6 +2926,10 @@ static void vr_after_present(void)
             g_stereo_on = want; g_eye = 0; g_freeze = 0;
             vr_log(">>> ESTEREO %s", !want ? "apagado" : (cfg_stereo == 2 ? "SINCRONIZADO (reloj parado en el 2o ojo)" : "alternos (un ojo por fotograma)"));
             if (want && cfg_stereo == 2 && !o_QPC) vr_log("AVISO: el reloj del juego no esta enganchado; los ojos no iran sincronizados");
+            pair_begin();
+        } else if (want && g_twin_on == 2) {
+            /* (E27) los dos ojos en cada fotograma: cada fotograma es una pareja entera, sin parar el reloj */
+            g_eye = 0; g_freeze = 0;
             pair_begin();
         } else if (want && cfg_stereo == 2) {
             if (g_eye == 0) {
@@ -3491,11 +3568,12 @@ static void nat_eye_check(const float *f)
     LONG be;
     int ok = nat_pos_match(f, &be);
     if (ok && g_nat_lastk >= 0 && cfg_pose_cam) {   /* (E22) esta imagen se dibuja con la postura con la que se monto su camara */
-        LONG e = g_stereo_on ? g_eye : 0;
+        int both = !g_stereo_on || g_twin_on == 2;   /* (E27) con los dos ojos a la vez, la misma postura */
+        LONG e = both ? 0 : g_eye;
         g_eye_rpose[e] = g_nat_ringpose[g_nat_lastk]; g_eye_rpose_ok[e] = 1;
-        if (!g_stereo_on) { g_eye_rpose[1] = g_eye_rpose[0]; g_eye_rpose_ok[1] = 1; }
+        if (both) { g_eye_rpose[1] = g_eye_rpose[0]; g_eye_rpose_ok[1] = 1; }
     }
-    if (!g_stereo_on) return;
+    if (!g_stereo_on || g_twin_on == 2) return;
     if (!ok) { InterlockedIncrement(&g_nat_enone); return; }
     if (be == g_eye) InterlockedIncrement(&g_nat_eok); else InterlockedIncrement(&g_nat_ebad);
 }
@@ -3535,7 +3613,8 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
             float t = 0; for (int k = 0; k < 3; k++) t += B[i][k] * g_rt_Rg[k][j]; C[i][j] = t;
         }
         LONG e = -1;
-        if (g_stereo_on) { e = g_eye ^ g_nat_flip; for (int i = 0; i < 3; i++) ev[i] = g_eyepos[e][i] * cfg_ipdscale; }
+        if (g_twin_on == 2) e = 0;   /* (E27) camara en el CENTRO de la cabeza: cada ojo se aparta luego en H */
+        else if (g_stereo_on) { e = g_eye ^ g_nat_flip; for (int i = 0; i < 3; i++) ev[i] = g_eyepos[e][i] * cfg_ipdscale; }
         float hl[3];
         for (int i = 0; i < 3; i++) hl[i] = g_rt_dg[i] + g_rt_Rg[i][0] * ev[0] + g_rt_Rg[i][1] * ev[1] + g_rt_Rg[i][2] * ev[2];
         for (int i = 0; i < 3; i++) off[i] = B[i][0] * hl[0] + B[i][1] * hl[1] + B[i][2] * hl[2];
@@ -4483,6 +4562,531 @@ static DWORD WINAPI keys_thread(LPVOID unused)
 }
 
 /* ---------------------------------------------------- hilo de resumenes */
+/* =========================================================================== (E27) DOS OJOS EN EL MISMO FOTOGRAMA
+ * Como un PC con dos monitores: cada "pizarra" del juego que depende del ojo (texturas donde pinta la escena, la
+ * profundidad, el brillo, la imagen final...) tiene una COPIA para el ojo derecho. Cada dibujo que va a una pizarra
+ * con copia se repite: primero en la del juego (ojo izquierdo) y luego en la copia (ojo derecho), con los cajones de
+ * camara del ojo derecho. Las sombras (pizarras cuadradas) se pintan una sola vez y valen para los dos ojos.
+ * Asi el juego "piensa" (fisica, enemigos, camara...) UNA vez por pareja y solo se repite el pintado.
+ * Idea y datos medidos: D-Rey86 (Metro 2033 Redux VR, docs/history/17-21). Codigo propio, no copiado.
+ * Las copias y sus vistas se crean cuando hacen falta (la primera vez que se usan) y se sueltan solas cuando el
+ * juego suelta la suya: a cada objeto del juego se le pega una "etiqueta" (SetPrivateDataInterface) que, al morir el
+ * objeto, borra su apunte de la tabla y suelta la copia. */
+
+#define TW_N 65536
+#define TW_NONE ((void *)1)
+typedef struct { void *k; void *v; void *tag; volatile LONG stamp; } TwEnt;
+enum { TWT_RES = 0, TWT_VIEW = 1, TWT_CB = 2 };
+static TwEnt g_tw[3][TW_N];
+static SRWLOCK g_tw_lock = SRWLOCK_INIT;
+static LONG g_tw_used[3];
+static volatile LONG g_tw_gen = 1, g_tw_epoch = 1, g_tw_full = 0;
+static volatile LONG g_tw_ntex = 0, g_tw_kb = 0, g_tw_nview = 0, g_tw_ncb = 0, g_tw_said = 0;
+static volatile LONG g_tw_dbl = 0, g_tw_one = 0, g_tw_cbsw = 0, g_tw_clr = 0, g_tw_cpy = 0, g_tw_cs = 0;
+static volatile LONG g_tw_cbup = 0, g_tw_us = 0, g_tw_fail = 0, g_tw_defer = 0, g_tw_srvsw = 0, g_tw_nobb = 0;
+static __thread int t_tw_raw = 0;      /* 1 = llamadas nuestras: los ganchos de borrar/copiar las dejan pasar tal cual */
+static const GUID GUID_tw_tag = { 0x6b1f3a52, 0x8d27, 0x4c1e, { 0x9a, 0x3e, 0x5b, 0x71, 0x2c, 0x0d, 0x4e, 0x93 } };
+
+static inline UINT tw_hash(void *k) { ULONGLONG x = (ULONGLONG)(ULONG_PTR)k; x ^= x >> 21; x *= 0x9E3779B97F4A7C15ull; return (UINT)(x >> 40) & (TW_N - 1); }
+static TwEnt *tw_find(int t, void *k)          /* con el cerrojo cogido (el que sea) */
+{
+    UINT h = tw_hash(k);
+    for (int n = 0; n < 128; n++, h = (h + 1) & (TW_N - 1)) {
+        TwEnt *e = &g_tw[t][h];
+        if (e->k == k) return e;
+        if (!e->k) return NULL;
+    }
+    return NULL;
+}
+static TwEnt *tw_slot(int t, void *k)          /* con el cerrojo EXCLUSIVO: busca o hace sitio */
+{
+    UINT h = tw_hash(k);
+    for (int n = 0; n < 128; n++, h = (h + 1) & (TW_N - 1)) {
+        TwEnt *e = &g_tw[t][h];
+        if (e->k == k) return e;
+        if (!e->k) {
+            if (g_tw_used[t] > TW_N * 3 / 4) break;
+            e->k = k; e->v = NULL; e->tag = NULL; e->stamp = 0; g_tw_used[t]++;
+            return e;
+        }
+    }
+    if (InterlockedIncrement(&g_tw_full) <= 3) vr_log("DOS OJOS: la tabla %d esta llena (no se haran mas copias)", t);
+    return NULL;
+}
+
+/* --- la etiqueta: un objeto COM minimo (QueryInterface, AddRef, Release) --- */
+typedef struct { IUnknownVtbl *vt; volatile LONG ref; int t; void *k; IUnknown *twin; } TwTag;
+static HRESULT STDMETHODCALLTYPE tag_QI(IUnknown *u, REFIID r, void **o)
+{
+    if (o && IsEqualIID(r, &IID_IUnknown)) { *o = u; InterlockedIncrement(&((TwTag *)u)->ref); return S_OK; }
+    if (o) *o = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE tag_AddRef(IUnknown *u) { return (ULONG)InterlockedIncrement(&((TwTag *)u)->ref); }
+static ULONG STDMETHODCALLTYPE tag_Release(IUnknown *u)
+{
+    TwTag *g = (TwTag *)u;
+    LONG r = InterlockedDecrement(&g->ref);
+    if (r) return (ULONG)r;
+    AcquireSRWLockExclusive(&g_tw_lock);
+    TwEnt *e = tw_find(g->t, g->k);
+    if (e && e->tag == (void *)g) { e->v = NULL; e->tag = NULL; e->stamp = 0; }   /* el objeto del juego ha muerto */
+    ReleaseSRWLockExclusive(&g_tw_lock);
+    if (g->twin) IUnknown_Release(g->twin);
+    free(g);
+    return 0;
+}
+static IUnknownVtbl g_tag_vt = { tag_QI, tag_AddRef, tag_Release };
+
+/* apunta k -> twin (o "sin copia") en la tabla t y le pega la etiqueta al objeto del juego.
+ * La etiqueta se queda con nuestra referencia de twin. Devuelve lo que queda apuntado (por si otro hilo gano). */
+static void *tw_put(int t, void *k, IUnknown *twin, LONG stamp)
+{
+    TwTag *g = (TwTag *)calloc(1, sizeof(TwTag));
+    if (!g) { if (twin) IUnknown_Release(twin); return NULL; }
+    g->vt = &g_tag_vt; g->ref = 1; g->t = t; g->k = k; g->twin = twin;
+    void *res = twin ? (void *)twin : TW_NONE;
+    AcquireSRWLockExclusive(&g_tw_lock);
+    TwEnt *e = tw_slot(t, k);
+    if (e && e->v && e->v != TW_NONE && twin) {   /* otro hilo ya hizo la copia: me quedo con la suya */
+        res = e->v;
+        ReleaseSRWLockExclusive(&g_tw_lock);
+        IUnknown_Release(twin); free(g);
+        return res;
+    }
+    if (e) { e->v = res; e->tag = g; e->stamp = stamp; }
+    ReleaseSRWLockExclusive(&g_tw_lock);
+    if (!e) { if (twin) IUnknown_Release(twin); free(g); return NULL; }
+    /* pegarla (si ya habia una, la vieja se suelta sola y no borra nada porque la tabla ya apunta a la nueva) */
+    ID3D11DeviceChild_SetPrivateDataInterface((ID3D11DeviceChild *)k, &GUID_tw_tag, (IUnknown *)g);
+    IUnknown_Release((IUnknown *)g);
+    return res;
+}
+
+/* recurso con copia? -> la copia; NULL si no. */
+static ID3D11Resource *tw_res_look(ID3D11Resource *r, LONG *neg)
+{
+    void *v = NULL; LONG st = 0;
+    AcquireSRWLockShared(&g_tw_lock);
+    TwEnt *e = tw_find(TWT_RES, r);
+    if (e) { v = e->v; st = e->stamp; }
+    ReleaseSRWLockShared(&g_tw_lock);
+    if (neg) *neg = (v == TW_NONE) ? st : 0;
+    return (v && v != TW_NONE) ? (ID3D11Resource *)v : NULL;
+}
+
+/* Lleva una pizarra copia? Texturas 2D normales, no cuadradas (las cuadradas son sombras: valen para los dos ojos),
+ * de al menos 16x16, sin cubos ni pilas. need_rt: ademas tiene que ser pizarra (render target o profundidad). */
+static int tw_tex_ok(ID3D11Resource *r, D3D11_TEXTURE2D_DESC *d, int need_rt)
+{
+    D3D11_RESOURCE_DIMENSION dim;
+    ID3D11Resource_GetType(r, &dim);
+    if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return 0;
+    ID3D11Texture2D_GetDesc((ID3D11Texture2D *)r, d);
+    if (need_rt && !(d->BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL))) return 0;
+    if (d->Usage != D3D11_USAGE_DEFAULT) return 0;
+    if (d->ArraySize != 1 || (d->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE)) return 0;
+    if (d->Width == d->Height || d->Width < 16 || d->Height < 16) return 0;
+    return 1;
+}
+static UINT tw_bpp(DXGI_FORMAT f)
+{
+    if (f >= DXGI_FORMAT_R32G32B32A32_TYPELESS && f <= DXGI_FORMAT_R32G32B32A32_SINT) return 16;
+    if (f >= DXGI_FORMAT_R16G16B16A16_TYPELESS && f <= DXGI_FORMAT_X32_TYPELESS_G8X24_UINT) return 8;
+    if (f >= DXGI_FORMAT_R8G8_TYPELESS && f <= DXGI_FORMAT_R16_SINT) return 2;
+    if (f >= DXGI_FORMAT_R8_TYPELESS && f <= DXGI_FORMAT_A8_UNORM) return 1;
+    return 4;
+}
+
+/* La copia de un recurso (si toca, la crea). make: 0 = solo mirar; 1 = crearla si es pizarra; 2 = crearla aunque no
+ * sea pizarra (es el destino de una copia de algo que ya tiene copia). La copia nueva sale IGUAL que el original. */
+static ID3D11Resource *tw_res(ID3D11DeviceContext *c, ID3D11Resource *r, int make)
+{
+    if (!r) return NULL;
+    LONG neg = 0;
+    ID3D11Resource *t = tw_res_look(r, &neg);
+    if (t || !make || neg >= make) return t;
+    D3D11_TEXTURE2D_DESC d;
+    ID3D11Texture2D *tw = NULL;
+    if (tw_tex_ok(r, &d, make == 1)) {
+        D3D11_TEXTURE2D_DESC td = d;
+        td.MiscFlags &= D3D11_RESOURCE_MISC_GENERATE_MIPS;   /* nada de "compartida", "GDI"... (la imagen final) */
+        td.CPUAccessFlags = 0;
+        ID3D11Device *dev = NULL;
+        ID3D11Resource_GetDevice(r, &dev);
+        if (dev) {
+            HRESULT hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &tw);
+            if (FAILED(hr) || !tw) {
+                tw = NULL;
+                if (InterlockedIncrement(&g_tw_fail) <= 5) vr_log("DOS OJOS: no pude crear la copia de %ux%u formato=%d (hr=0x%08lX)", d.Width, d.Height, (int)d.Format, (unsigned long)hr);
+            }
+            ID3D11Device_Release(dev);
+        }
+        if (tw && c) { t_tw_raw++; ID3D11DeviceContext_CopyResource(c, (ID3D11Resource *)tw, r); t_tw_raw--; }
+    }
+    void *res = tw_put(TWT_RES, r, (IUnknown *)tw, tw ? 0 : make);
+    if (res && res != TW_NONE && (void *)tw == res) {
+        LONG n = InterlockedIncrement(&g_tw_ntex);
+        InterlockedExchangeAdd(&g_tw_kb, (LONG)((ULONGLONG)d.Width * d.Height * tw_bpp(d.Format) * (d.SampleDesc.Count ? d.SampleDesc.Count : 1) / 1024));
+        InterlockedIncrement(&g_tw_gen);   /* las vistas que se miraron "sin copia" hay que mirarlas otra vez */
+        if (n <= 60) vr_log("DOS OJOS: copia %ld: %ux%u formato=%d muestras=%u pizarra=0x%X %s", (long)n, d.Width, d.Height, (int)d.Format,
+                            d.SampleDesc.Count, d.BindFlags, make == 2 ? "(destino de una copia)" : "");
+    }
+    return (res && res != TW_NONE) ? (ID3D11Resource *)res : NULL;
+}
+static ID3D11Texture2D *tw_twin_tex(ID3D11Texture2D *t) { return (ID3D11Texture2D *)tw_res_look((ID3D11Resource *)t, NULL); }
+
+/* La vista copia (kind: 0 = pizarra de color, 1 = profundidad, 2 = textura para leer). NULL si no tiene. */
+static void *tw_view(ID3D11DeviceContext *c, ID3D11View *v, int kind)
+{
+    if (!v) return NULL;
+    void *tv = NULL; LONG st = 0; int have = 0;
+    AcquireSRWLockShared(&g_tw_lock);
+    TwEnt *e = tw_find(TWT_VIEW, v);
+    if (e && e->v) { have = 1; tv = e->v; st = e->stamp; }
+    ReleaseSRWLockShared(&g_tw_lock);
+    if (have && tv != TW_NONE) return tv;
+    if (have && st == g_tw_gen) return NULL;      /* ya se miro y no tiene (y no ha salido ninguna copia nueva desde entonces) */
+    ID3D11Resource *r = NULL;
+    ID3D11View_GetResource(v, &r);
+    if (!r) return NULL;
+    ID3D11Resource *tr = tw_res(c, r, kind == 2 ? 0 : 1);   /* leer no crea copias: si no la tiene, el original vale */
+    IUnknown *nv = NULL;
+    if (tr) {
+        ID3D11Device *dev = NULL;
+        ID3D11Resource_GetDevice(tr, &dev);
+        if (dev) {
+            HRESULT hr = E_FAIL;
+            if (kind == 0) { D3D11_RENDER_TARGET_VIEW_DESC dd; ID3D11RenderTargetView_GetDesc((ID3D11RenderTargetView *)v, &dd);
+                             hr = ID3D11Device_CreateRenderTargetView(dev, tr, &dd, (ID3D11RenderTargetView **)&nv); }
+            else if (kind == 1) { D3D11_DEPTH_STENCIL_VIEW_DESC dd; ID3D11DepthStencilView_GetDesc((ID3D11DepthStencilView *)v, &dd);
+                             hr = ID3D11Device_CreateDepthStencilView(dev, tr, &dd, (ID3D11DepthStencilView **)&nv); }
+            else { D3D11_SHADER_RESOURCE_VIEW_DESC dd; ID3D11ShaderResourceView_GetDesc((ID3D11ShaderResourceView *)v, &dd);
+                             hr = ID3D11Device_CreateShaderResourceView(dev, tr, &dd, (ID3D11ShaderResourceView **)&nv); }
+            if (FAILED(hr)) { nv = NULL; if (InterlockedIncrement(&g_tw_fail) <= 5) vr_log("DOS OJOS: no pude crear la vista copia (tipo %d, hr=0x%08lX)", kind, (unsigned long)hr); }
+            ID3D11Device_Release(dev);
+        }
+    }
+    ID3D11Resource_Release(r);
+    if (!nv && have) {   /* sigue sin copia: solo se apunta que ya se miro (la etiqueta que tiene vale) */
+        AcquireSRWLockExclusive(&g_tw_lock);
+        TwEnt *e2 = tw_find(TWT_VIEW, v);
+        if (e2 && e2->v == TW_NONE) e2->stamp = g_tw_gen;
+        ReleaseSRWLockExclusive(&g_tw_lock);
+        return NULL;
+    }
+    void *res = tw_put(TWT_VIEW, v, nv, g_tw_gen);
+    if (nv && res == (void *)nv) InterlockedIncrement(&g_tw_nview);
+    return (res && res != TW_NONE) ? res : NULL;
+}
+
+/* --- cajones del ojo derecho --- */
+#define TW_CALL(c, fld, hk, orig) ((((void *)(c)->lpVtbl->fld == (void *)(hk)) && (orig)) ? (orig) : (c)->lpVtbl->fld)
+static void tw_cb_upload(ID3D11DeviceContext *c, ID3D11Resource *r, const void *data, UINT bw)
+{
+    ID3D11Buffer *tb = NULL;
+    AcquireSRWLockShared(&g_tw_lock);
+    TwEnt *e = tw_find(TWT_CB, r);
+    if (e && e->v && e->v != TW_NONE) tb = (ID3D11Buffer *)e->v;
+    ReleaseSRWLockShared(&g_tw_lock);
+    if (!tb) {
+        D3D11_BUFFER_DESC d; memset(&d, 0, sizeof(d));
+        d.ByteWidth = bw; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        ID3D11Device *dev = NULL; ID3D11Resource_GetDevice(r, &dev);
+        if (!dev) return;
+        ID3D11Buffer *nb = NULL;
+        if (FAILED(ID3D11Device_CreateBuffer(dev, &d, NULL, &nb))) nb = NULL;
+        ID3D11Device_Release(dev);
+        if (!nb) return;
+        void *res = tw_put(TWT_CB, r, (IUnknown *)nb, 0);
+        if (!res || res == TW_NONE) return;
+        tb = (ID3D11Buffer *)res;
+        InterlockedIncrement(&g_tw_ncb);
+    }
+    PFN_Map mp = TW_CALL(c, Map, hk_Map, g_orig_Map);
+    PFN_Unmap up = TW_CALL(c, Unmap, hk_Unmap, g_orig_Unmap);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(mp(c, (ID3D11Resource *)tb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)) && m.pData) {
+        memcpy(m.pData, data, bw);
+        up(c, (ID3D11Resource *)tb, 0);
+        AcquireSRWLockShared(&g_tw_lock);
+        e = tw_find(TWT_CB, r);
+        if (e && e->v == (void *)tb) InterlockedExchange(&e->stamp, g_tw_epoch);   /* al dia en esta "epoca" */
+        ReleaseSRWLockShared(&g_tw_lock);
+        InterlockedIncrement(&g_tw_cbup);
+    }
+}
+static void tw_cb_invalidate(ID3D11Resource *r)   /* el juego lo ha escrito por otra via: su copia ya no vale */
+{
+    AcquireSRWLockShared(&g_tw_lock);
+    TwEnt *e = tw_find(TWT_CB, r);
+    if (e) InterlockedExchange(&e->stamp, 0);
+    ReleaseSRWLockShared(&g_tw_lock);
+}
+
+/* --- un dibujo doble: guardar lo que hay puesto, poner lo del ojo derecho, y devolverlo todo --- */
+#define TW_PS 16
+#define TW_VS 8
+#define TW_CBN 14
+typedef struct {
+    UINT nrt; ID3D11RenderTargetView *rt[8], *trt[8]; ID3D11DepthStencilView *ds, *tds; int rt_sw;
+    ID3D11ShaderResourceView *ps[TW_PS], *vs[TW_VS]; int ps_sw, vs_sw;
+    ID3D11Buffer *cb[5][TW_CBN]; int cb_have, cb_sw[5];
+    LONG mode;
+    LARGE_INTEGER q0;
+} TwDraw;
+static __thread TwDraw t_td;
+typedef void (STDMETHODCALLTYPE *PFN_SetSRV)(ID3D11DeviceContext *, UINT, UINT, ID3D11ShaderResourceView *const *);
+typedef void (STDMETHODCALLTYPE *PFN_SetCBs)(ID3D11DeviceContext *, UINT, UINT, ID3D11Buffer *const *);
+
+static void tw_set_rt(ID3D11DeviceContext *c, ID3D11RenderTargetView **rt, ID3D11DepthStencilView *ds)
+{
+    TwDraw *s = &t_td;
+    ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews(c, s->nrt, s->nrt ? rt : NULL, ds,
+        s->nrt, D3D11_KEEP_UNORDERED_ACCESS_VIEWS, NULL, NULL);
+}
+static void tw_drop_rt(void)
+{
+    TwDraw *s = &t_td;
+    for (int i = 0; i < 8; i++) if (s->rt[i]) { ID3D11RenderTargetView_Release(s->rt[i]); s->rt[i] = NULL; }
+    if (s->ds) { ID3D11DepthStencilView_Release(s->ds); s->ds = NULL; }
+}
+/* 0 = dibujo normal; 1 = SOLO en las copias (modo prueba); 2 = normal y luego otra vez en las copias */
+static int tw_begin(ID3D11DeviceContext *c)
+{
+    LONG mode = g_twin_on;
+    if (!mode || g_mode != 1 || t_tw_raw) return 0;
+    TwDraw *s = &t_td;
+    QueryPerformanceCounter(&s->q0);
+    memset(s, 0, offsetof(TwDraw, q0));
+    s->mode = mode;
+    ID3D11DeviceContext_OMGetRenderTargets(c, 8, s->rt, &s->ds);
+    int any = 0;
+    for (int i = 0; i < 8; i++) if (s->rt[i]) {
+        s->nrt = i + 1;
+        s->trt[i] = (ID3D11RenderTargetView *)tw_view(c, (ID3D11View *)s->rt[i], 0);
+        if (s->trt[i]) any = 1;
+    }
+    for (UINT i = 0; i < s->nrt; i++) if (!s->trt[i]) s->trt[i] = s->rt[i];
+    if (s->ds) { s->tds = (ID3D11DepthStencilView *)tw_view(c, (ID3D11View *)s->ds, 1); if (s->tds) any = 1; else s->tds = s->ds; }
+    s->rt_sw = any;
+    if (mode == 2 && !any) { tw_drop_rt(); return 0; }   /* sombras y demas: valen para los dos ojos */
+    if (ID3D11DeviceContext_GetType(c) != D3D11_DEVICE_CONTEXT_IMMEDIATE) InterlockedIncrement(&g_tw_defer);
+    if (mode == 1) {
+        /* prueba: aunque la pizarra no tenga copia, si LEE algo que si la tiene, que lea la copia (el original esta vacio) */
+        ID3D11DeviceContext_PSGetShaderResources(c, 0, TW_PS, s->ps);
+        ID3D11DeviceContext_VSGetShaderResources(c, 0, TW_VS, s->vs);
+        for (int i = 0; i < TW_PS && !s->ps_sw; i++) if (s->ps[i] && tw_view(c, (ID3D11View *)s->ps[i], 2)) s->ps_sw = 1;
+        for (int i = 0; i < TW_VS && !s->vs_sw; i++) if (s->vs[i] && tw_view(c, (ID3D11View *)s->vs[i], 2)) s->vs_sw = 1;
+        s->cb_have = 0;
+        if (!any && !s->ps_sw && !s->vs_sw) {
+            for (int i = 0; i < TW_PS; i++) if (s->ps[i]) ID3D11ShaderResourceView_Release(s->ps[i]);
+            for (int i = 0; i < TW_VS; i++) if (s->vs[i]) ID3D11ShaderResourceView_Release(s->vs[i]);
+            tw_drop_rt(); return 0;
+        }
+        return 1;
+    }
+    return 2;
+}
+static void tw_swap(ID3D11DeviceContext *c)
+{
+    TwDraw *s = &t_td;
+    LONG mode = s->mode;
+    if (s->rt_sw) tw_set_rt(c, s->trt, s->tds);
+    if (mode == 2) {
+        ID3D11DeviceContext_PSGetShaderResources(c, 0, TW_PS, s->ps);
+        ID3D11DeviceContext_VSGetShaderResources(c, 0, TW_VS, s->vs);
+        s->ps_sw = s->vs_sw = 1;
+    }
+    ID3D11ShaderResourceView *t[TW_PS]; int ch;
+    if (s->ps_sw) {
+        ch = 0;
+        for (int i = 0; i < TW_PS; i++) { t[i] = s->ps[i]; void *v = s->ps[i] ? tw_view(c, (ID3D11View *)s->ps[i], 2) : NULL; if (v) { t[i] = v; ch = 1; } }
+        if (ch) { ID3D11DeviceContext_PSSetShaderResources(c, 0, TW_PS, t); InterlockedIncrement(&g_tw_srvsw); } else s->ps_sw = 2;
+    }
+    if (s->vs_sw) {
+        ch = 0;
+        for (int i = 0; i < TW_VS; i++) { t[i] = s->vs[i]; void *v = s->vs[i] ? tw_view(c, (ID3D11View *)s->vs[i], 2) : NULL; if (v) { t[i] = v; ch = 1; } }
+        if (ch) ID3D11DeviceContext_VSSetShaderResources(c, 0, TW_VS, t); else s->vs_sw = 2;
+    }
+    if (mode == 2) {
+        /* cajones de camara/objeto del ojo derecho, en todas las etapas (vertices, pixeles, teselado, geometria) */
+        ID3D11DeviceContext_VSGetConstantBuffers(c, 0, TW_CBN, s->cb[0]);
+        ID3D11DeviceContext_PSGetConstantBuffers(c, 0, TW_CBN, s->cb[1]);
+        ID3D11DeviceContext_HSGetConstantBuffers(c, 0, TW_CBN, s->cb[2]);
+        ID3D11DeviceContext_DSGetConstantBuffers(c, 0, TW_CBN, s->cb[3]);
+        ID3D11DeviceContext_GSGetConstantBuffers(c, 0, TW_CBN, s->cb[4]);
+        s->cb_have = 1;
+        ID3D11Buffer *nb[5][TW_CBN];
+        LONG ep = g_tw_epoch;
+        AcquireSRWLockShared(&g_tw_lock);
+        for (int st = 0; st < 5; st++) {
+            s->cb_sw[st] = 0;
+            for (int i = 0; i < TW_CBN; i++) {
+                nb[st][i] = s->cb[st][i];
+                if (!s->cb[st][i]) continue;
+                TwEnt *e = tw_find(TWT_CB, s->cb[st][i]);
+                if (e && e->v && e->v != TW_NONE && e->stamp == ep) { nb[st][i] = (ID3D11Buffer *)e->v; s->cb_sw[st] = 1; }
+            }
+        }
+        ReleaseSRWLockShared(&g_tw_lock);
+        if (s->cb_sw[0]) ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, 0, TW_CBN, nb[0]);
+        if (s->cb_sw[1]) ((PFN_SetCBs)TW_CALL(c, PSSetConstantBuffers, hk_PSSetCB, g_orig_PSSetCB))(c, 0, TW_CBN, nb[1]);
+        if (s->cb_sw[2]) ID3D11DeviceContext_HSSetConstantBuffers(c, 0, TW_CBN, nb[2]);
+        if (s->cb_sw[3]) ID3D11DeviceContext_DSSetConstantBuffers(c, 0, TW_CBN, nb[3]);
+        if (s->cb_sw[4]) ID3D11DeviceContext_GSSetConstantBuffers(c, 0, TW_CBN, nb[4]);
+        if (s->cb_sw[0] || s->cb_sw[1] || s->cb_sw[2] || s->cb_sw[3] || s->cb_sw[4]) InterlockedIncrement(&g_tw_cbsw);
+    }
+}
+static void tw_end(ID3D11DeviceContext *c, int act)
+{
+    TwDraw *s = &t_td;
+    if (s->rt_sw) tw_set_rt(c, s->rt, s->ds);
+    if (s->ps_sw == 1) ID3D11DeviceContext_PSSetShaderResources(c, 0, TW_PS, s->ps);
+    if (s->vs_sw == 1) ID3D11DeviceContext_VSSetShaderResources(c, 0, TW_VS, s->vs);
+    if (s->cb_have) {
+        if (s->cb_sw[0]) ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, 0, TW_CBN, s->cb[0]);
+        if (s->cb_sw[1]) ((PFN_SetCBs)TW_CALL(c, PSSetConstantBuffers, hk_PSSetCB, g_orig_PSSetCB))(c, 0, TW_CBN, s->cb[1]);
+        if (s->cb_sw[2]) ID3D11DeviceContext_HSSetConstantBuffers(c, 0, TW_CBN, s->cb[2]);
+        if (s->cb_sw[3]) ID3D11DeviceContext_DSSetConstantBuffers(c, 0, TW_CBN, s->cb[3]);
+        if (s->cb_sw[4]) ID3D11DeviceContext_GSSetConstantBuffers(c, 0, TW_CBN, s->cb[4]);
+        for (int st = 0; st < 5; st++) for (int i = 0; i < TW_CBN; i++) if (s->cb[st][i]) ID3D11Buffer_Release(s->cb[st][i]);
+    }
+    for (int i = 0; i < TW_PS; i++) if (s->ps[i]) { ID3D11ShaderResourceView_Release(s->ps[i]); s->ps[i] = NULL; }
+    for (int i = 0; i < TW_VS; i++) if (s->vs[i]) { ID3D11ShaderResourceView_Release(s->vs[i]); s->vs[i] = NULL; }
+    tw_drop_rt();
+    InterlockedIncrement(act == 2 ? &g_tw_dbl : &g_tw_one);
+    LARGE_INTEGER q1; QueryPerformanceCounter(&q1);
+    InterlockedExchangeAdd(&g_tw_us, (LONG)((q1.QuadPart - s->q0.QuadPart) * 1000000 / g_qpf));
+}
+/* el dibujo "call" una o dos veces segun toque */
+#define TW_DRAW(c, call) do { int tw_ = tw_begin(c);                       \
+        if (tw_ == 2) { call; tw_swap(c); call; tw_end(c, 2); }          \
+        else if (tw_ == 1) { tw_swap(c); call; tw_end(c, 1); }           \
+        else { call; } } while (0)
+
+/* Al ENCENDER los dos ojos: las copias se ponen al dia con su original (pudo cambiar mientras estaba apagado) */
+static void tw_resync(ID3D11DeviceContext *c)
+{
+    enum { MAXR = 4096 };
+    static ID3D11Resource *o[MAXR], *t[MAXR];
+    int n = 0;
+    AcquireSRWLockShared(&g_tw_lock);
+    for (int i = 0; i < TW_N && n < MAXR; i++) {
+        TwEnt *e = &g_tw[TWT_RES][i];
+        if (e->k && e->v && e->v != TW_NONE && e->tag) {
+            o[n] = (ID3D11Resource *)e->k; t[n] = (ID3D11Resource *)e->v;
+            ID3D11Resource_AddRef(o[n]); ID3D11Resource_AddRef(t[n]); n++;
+        }
+    }
+    ReleaseSRWLockShared(&g_tw_lock);
+    t_tw_raw++;
+    for (int i = 0; i < n; i++) ID3D11DeviceContext_CopyResource(c, t[i], o[i]);
+    t_tw_raw--;
+    for (int i = 0; i < n; i++) { ID3D11Resource_Release(t[i]); ID3D11Resource_Release(o[i]); }
+    if (n) vr_log("DOS OJOS: %d copias puestas al dia con su original", n);
+}
+static void tw_update_mode(IDXGISwapChain *sc)
+{
+    LONG want = (cfg_dosojos && g_mode == 1 && vr_active() && cfg_stereo && cfg_fov && g_fov_ok && g_vr_tex2) ? cfg_dosojos : 0;
+    if (want == g_twin_on) return;
+    if (want) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext *ctx = NULL;
+        if (SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dev)) && dev) {
+            ID3D11Device_GetImmediateContext(dev, &ctx);
+            InterlockedIncrement(&g_tw_epoch);          /* las copias de los cajones de antes ya no valen */
+            if (ctx) { tw_resync(ctx); ID3D11DeviceContext_Release(ctx); }
+            ID3D11Device_Release(dev);
+        }
+    }
+    vr_log(">>> DOS OJOS: %s", want == 2 ? "LOS DOS OJOS EN CADA FOTOGRAMA" : want == 1 ? "PRUEBA (todo a las copias, un ojo por fotograma)" : "apagado");
+    g_twin_on = want;
+}
+
+/* --- borrar, copiar, resolver, mipmaps: lo mismo en la copia (MinHook, como los dibujos) --- */
+typedef void (STDMETHODCALLTYPE *PFN_ClrRTV)(ID3D11DeviceContext *, ID3D11RenderTargetView *, const FLOAT[4]);
+typedef void (STDMETHODCALLTYPE *PFN_ClrDSV)(ID3D11DeviceContext *, ID3D11DepthStencilView *, UINT, FLOAT, UINT8);
+typedef void (STDMETHODCALLTYPE *PFN_Resolve)(ID3D11DeviceContext *, ID3D11Resource *, UINT, ID3D11Resource *, UINT, DXGI_FORMAT);
+typedef void (STDMETHODCALLTYPE *PFN_GenMips)(ID3D11DeviceContext *, ID3D11ShaderResourceView *);
+typedef void (STDMETHODCALLTYPE *PFN_Dispatch)(ID3D11DeviceContext *, UINT, UINT, UINT);
+static inline int tw_live(void) { return g_twin_on && g_mode == 1 && !t_tw_raw; }
+static void tw_clr_rtv(PFN_ClrRTV tr, ID3D11DeviceContext *c, ID3D11RenderTargetView *v, const FLOAT col[4])
+{
+    void *t = (tw_live() && v) ? tw_view(c, (ID3D11View *)v, 0) : NULL;
+    if (!t) { tr(c, v, col); return; }
+    t_tw_raw++;
+    if (g_twin_on == 2) tr(c, v, col);
+    tr(c, (ID3D11RenderTargetView *)t, col);
+    t_tw_raw--;
+    InterlockedIncrement(&g_tw_clr);
+}
+static void tw_clr_dsv(PFN_ClrDSV tr, ID3D11DeviceContext *c, ID3D11DepthStencilView *v, UINT fl, FLOAT d, UINT8 st)
+{
+    void *t = (tw_live() && v) ? tw_view(c, (ID3D11View *)v, 1) : NULL;
+    if (!t) { tr(c, v, fl, d, st); return; }
+    t_tw_raw++;
+    if (g_twin_on == 2) tr(c, v, fl, d, st);
+    tr(c, (ID3D11DepthStencilView *)t, fl, d, st);
+    t_tw_raw--;
+    InterlockedIncrement(&g_tw_clr);
+}
+/* copias: si el origen tiene copia, el destino tambien la tendra (p. ej. una foto de la escena para el agua o el cristal) */
+static void tw_copy(PFN_CopyRes tr, ID3D11DeviceContext *c, ID3D11Resource *dst, ID3D11Resource *src)
+{
+    if (!tw_live()) { tr(c, dst, src); return; }
+    ID3D11Resource *ts = tw_res(c, src, 0);
+    ID3D11Resource *td = tw_res(c, dst, ts ? 2 : 0);
+    t_tw_raw++;
+    if (td) { if (g_twin_on == 2) tr(c, dst, src); tr(c, td, ts ? ts : src); InterlockedIncrement(&g_tw_cpy); }
+    else tr(c, dst, (g_twin_on == 1 && ts) ? ts : src);
+    t_tw_raw--;
+}
+static void tw_copysub(PFN_CopySub tr, ID3D11DeviceContext *c, ID3D11Resource *dst, UINT ds, UINT x, UINT y, UINT z,
+                       ID3D11Resource *src, UINT ss, const D3D11_BOX *box)
+{
+    if (!tw_live()) { tr(c, dst, ds, x, y, z, src, ss, box); return; }
+    ID3D11Resource *ts = tw_res(c, src, 0);
+    ID3D11Resource *td = tw_res(c, dst, ts ? 2 : 0);
+    t_tw_raw++;
+    if (td) { if (g_twin_on == 2) tr(c, dst, ds, x, y, z, src, ss, box); tr(c, td, ds, x, y, z, ts ? ts : src, ss, box); InterlockedIncrement(&g_tw_cpy); }
+    else tr(c, dst, ds, x, y, z, (g_twin_on == 1 && ts) ? ts : src, ss, box);
+    t_tw_raw--;
+}
+static void tw_resolve(PFN_Resolve tr, ID3D11DeviceContext *c, ID3D11Resource *dst, UINT ds, ID3D11Resource *src, UINT ss, DXGI_FORMAT f)
+{
+    if (!tw_live()) { tr(c, dst, ds, src, ss, f); return; }
+    ID3D11Resource *ts = tw_res(c, src, 0);
+    ID3D11Resource *td = tw_res(c, dst, ts ? 2 : 0);
+    t_tw_raw++;
+    if (td) { if (g_twin_on == 2) tr(c, dst, ds, src, ss, f); tr(c, td, ds, ts ? ts : src, ss, f); InterlockedIncrement(&g_tw_cpy); }
+    else tr(c, dst, ds, (g_twin_on == 1 && ts) ? ts : src, ss, f);
+    t_tw_raw--;
+}
+static void tw_mips(PFN_GenMips tr, ID3D11DeviceContext *c, ID3D11ShaderResourceView *v)
+{
+    void *t = (tw_live() && v) ? tw_view(c, (ID3D11View *)v, 2) : NULL;
+    if (!t) { tr(c, v); return; }
+    t_tw_raw++;
+    if (g_twin_on == 2) tr(c, v);
+    tr(c, (ID3D11ShaderResourceView *)t);
+    t_tw_raw--;
+}
+/* calculo (compute): de momento NO se repite; solo se cuenta si escribe en algo con copia (si pasa, habra que hacerlo) */
+static void tw_dispatch(PFN_Dispatch tr, ID3D11DeviceContext *c, UINT x, UINT y, UINT z)
+{
+    tr(c, x, y, z);
+    if (!tw_live()) return;
+    ID3D11UnorderedAccessView *u[8] = { 0 };
+    ID3D11DeviceContext_CSGetUnorderedAccessViews(c, 0, 8, u);
+    int hit = 0;
+    for (int i = 0; i < 8; i++) if (u[i]) {
+        ID3D11Resource *r = NULL; ID3D11View_GetResource((ID3D11View *)u[i], &r);
+        if (r) { if (tw_res_look(r, NULL)) hit = 1; ID3D11Resource_Release(r); }
+        ID3D11UnorderedAccessView_Release(u[i]);
+    }
+    if (hit) InterlockedIncrement(&g_tw_cs);
+}
+
 static DWORD WINAPI stats_thread(LPVOID unused)
 {
     (void)unused;
@@ -4505,6 +5109,15 @@ static DWORD WINAPI stats_thread(LPVOID unused)
                    (long)(InterlockedExchange(&g_prof_present_us, 0) / 1000), (long)(InterlockedExchange(&g_prof_mod_us, 0) / 1000),
                    (long)cb0n, (long)(cb0us / 1000), cb0n ? (double)cb0us / cb0n : 0.0,
                    InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h, (long)InterlockedExchange(&g_shadow_n, 0), (long)InterlockedExchange(&g_saltos, 0));
+            }
+            if (cfg_dosojos) {   /* (E27) */
+                LONG dbl = InterlockedExchange(&g_tw_dbl, 0), one = InterlockedExchange(&g_tw_one, 0), us = InterlockedExchange(&g_tw_us, 0);
+                vr_log("DOS OJOS: modo=%ld dibujos_dobles=%ld/s solo_copia=%ld/s (en_diferido=%ld) cajones_ojo_der=%ld/s cambios_de_cajones=%ld/s lecturas_cambiadas=%ld/s "
+                       "borrados=%ld/s copias=%ld/s calculo_con_copia=%ld/s | coste_mod=%ldms/s (%.1fus por dibujo) | copias: texturas=%ld (%ld MB) vistas=%ld cajones=%ld fallos=%ld",
+                       (long)g_twin_on, (long)dbl, (long)one, (long)InterlockedExchange(&g_tw_defer, 0), (long)InterlockedExchange(&g_tw_cbup, 0),
+                       (long)InterlockedExchange(&g_tw_cbsw, 0), (long)InterlockedExchange(&g_tw_srvsw, 0), (long)InterlockedExchange(&g_tw_clr, 0),
+                       (long)InterlockedExchange(&g_tw_cpy, 0), (long)InterlockedExchange(&g_tw_cs, 0), (long)(us / 1000), (dbl + one) ? (double)us / (dbl + one) : 0.0,
+                       (long)g_tw_ntex, (long)(g_tw_kb / 1024), (long)g_tw_nview, (long)g_tw_ncb, (long)g_tw_fail);
             }
             if (g_ft_n > 0) {   /* (E12) */
                 vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
@@ -4654,30 +5267,49 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
     PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, sv); return; }                                                       \
-    t_in_draw = 1; { int h = hud_pre(c, vc == 3); tr(c, vc, sv); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; { int h = hud_pre(c, vc == 3); TW_DRAW(c, tr(c, vc, sv)); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
-    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, si, bv); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
-    t_in_draw = 1; { int h = hud_pre(c, vc == 3 && ni == 1); tr(c, vc, ni, sv, si); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; { int h = hud_pre(c, vc == 3 && ni == 1); TW_DRAW(c, tr(c, vc, ni, sv, si)); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
-    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, ni, si, bv, sinst); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
+/* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
+#define MH_CR(v) static void STDMETHODCALLTYPE mh_CR##v(ID3D11DeviceContext *c, ID3D11RenderTargetView *rv, const FLOAT col[4]) \
+    { tw_clr_rtv((PFN_ClrRTV)g_mh_tr[5][v], c, rv, col); }
+#define MH_CD(v) static void STDMETHODCALLTYPE mh_CD##v(ID3D11DeviceContext *c, ID3D11DepthStencilView *dv, UINT fl, FLOAT d, UINT8 st) \
+    { tw_clr_dsv((PFN_ClrDSV)g_mh_tr[6][v], c, dv, fl, d, st); }
+#define MH_CP(v) static void STDMETHODCALLTYPE mh_CP##v(ID3D11DeviceContext *c, ID3D11Resource *d, ID3D11Resource *s) \
+    { tw_copy((PFN_CopyRes)g_mh_tr[7][v], c, d, s); }
+#define MH_CS(v) static void STDMETHODCALLTYPE mh_CS##v(ID3D11DeviceContext *c, ID3D11Resource *d, UINT ds, UINT x, UINT y, UINT z, ID3D11Resource *s, UINT ss, const D3D11_BOX *b) \
+    { tw_copysub((PFN_CopySub)g_mh_tr[8][v], c, d, ds, x, y, z, s, ss, b); }
+#define MH_RS(v) static void STDMETHODCALLTYPE mh_RS##v(ID3D11DeviceContext *c, ID3D11Resource *d, UINT ds, ID3D11Resource *s, UINT ss, DXGI_FORMAT f) \
+    { tw_resolve((PFN_Resolve)g_mh_tr[9][v], c, d, ds, s, ss, f); }
+#define MH_GM(v) static void STDMETHODCALLTYPE mh_GM##v(ID3D11DeviceContext *c, ID3D11ShaderResourceView *sv) \
+    { tw_mips((PFN_GenMips)g_mh_tr[10][v], c, sv); }
+#define MH_DP(v) static void STDMETHODCALLTYPE mh_DP##v(ID3D11DeviceContext *c, UINT x, UINT y, UINT z) \
+    { tw_dispatch((PFN_Dispatch)g_mh_tr[11][v], c, x, y, z); }
 #define MH_ALL(M) M(0) M(1) M(2) M(3) M(4) M(5)
 MH_ALL(MH_D) MH_ALL(MH_DI) MH_ALL(MH_DN) MH_ALL(MH_DII) MH_ALL(MH_US)
-static void *const g_mh_det[5][MHVAR] = {
+MH_ALL(MH_CR) MH_ALL(MH_CD) MH_ALL(MH_CP) MH_ALL(MH_CS) MH_ALL(MH_RS) MH_ALL(MH_GM) MH_ALL(MH_DP)
+#define MH_ROW(p) { (void *)p##0, (void *)p##1, (void *)p##2, (void *)p##3, (void *)p##4, (void *)p##5 }
+static void *const g_mh_det[MHK][MHVAR] = {
     { (void *)mh_D0,   (void *)mh_D1,   (void *)mh_D2,   (void *)mh_D3,   (void *)mh_D4,   (void *)mh_D5 },
     { (void *)mh_DI0,  (void *)mh_DI1,  (void *)mh_DI2,  (void *)mh_DI3,  (void *)mh_DI4,  (void *)mh_DI5 },
     { (void *)mh_DN0,  (void *)mh_DN1,  (void *)mh_DN2,  (void *)mh_DN3,  (void *)mh_DN4,  (void *)mh_DN5 },
     { (void *)mh_DII0, (void *)mh_DII1, (void *)mh_DII2, (void *)mh_DII3, (void *)mh_DII4, (void *)mh_DII5 },
-    { (void *)mh_US0,  (void *)mh_US1,  (void *)mh_US2,  (void *)mh_US3,  (void *)mh_US4,  (void *)mh_US5 } };
-static const char *const g_mh_name[5] = { "Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "UpdateSubresource" };
+    { (void *)mh_US0,  (void *)mh_US1,  (void *)mh_US2,  (void *)mh_US3,  (void *)mh_US4,  (void *)mh_US5 },
+    MH_ROW(mh_CR), MH_ROW(mh_CD), MH_ROW(mh_CP), MH_ROW(mh_CS), MH_ROW(mh_RS), MH_ROW(mh_GM), MH_ROW(mh_DP) };
+static const char *const g_mh_name[MHK] = { "Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "UpdateSubresource",
+    "ClearRenderTargetView", "ClearDepthStencilView", "CopyResource", "CopySubresourceRegion", "ResolveSubresource", "GenerateMips", "Dispatch" };
 /* (E20c) CHIVATO: si el juego no consigue crear un cajon o una textura, se apunta (y si la grafica se ha "caido") */
 typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateBuf)(ID3D11Device *, const D3D11_BUFFER_DESC *, const D3D11_SUBRESOURCE_DATA *, ID3D11Buffer **);
 typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateTex2D)(ID3D11Device *, const D3D11_TEXTURE2D_DESC *, const D3D11_SUBRESOURCE_DATA *, ID3D11Texture2D **);
@@ -4727,18 +5359,23 @@ static void mh_scan(ID3D11DeviceContext *c)
 {
     if (!c || !g_mh_ok) return;
     ID3D11DeviceContextVtbl *vt = c->lpVtbl;
-    void *p4[5] = { (void *)vt->Draw, (void *)vt->DrawIndexed, (void *)vt->DrawInstanced, (void *)vt->DrawIndexedInstanced, (void *)vt->UpdateSubresource };
+    void *p4[MHK] = { (void *)vt->Draw, (void *)vt->DrawIndexed, (void *)vt->DrawInstanced, (void *)vt->DrawIndexedInstanced, (void *)vt->UpdateSubresource,
+                      (void *)vt->ClearRenderTargetView, (void *)vt->ClearDepthStencilView, (void *)vt->CopyResource, (void *)vt->CopySubresourceRegion,
+                      (void *)vt->ResolveSubresource, (void *)vt->GenerateMips, (void *)vt->Dispatch };
     if (g_orig_UpdateSub && (void *)vt->UpdateSubresource == (void *)hk_UpdateSub) p4[4] = (void *)g_orig_UpdateSub;
-    for (int k = 0; k < 5; k++) {
+    if (g_orig_CopyRes && (void *)vt->CopyResource == (void *)hk_CopyRes) p4[7] = (void *)g_orig_CopyRes;   /* (E27) por tabla ya estaba el nuestro */
+    if (g_orig_CopySub && (void *)vt->CopySubresourceRegion == (void *)hk_CopySub) p4[8] = (void *)g_orig_CopySub;
+    for (int k = 0; k < MHK; k++) {
         void *p = p4[k];
-        if (!p || p == (void *)hk_UpdateSub) continue;
-        if (k < 4 && !(cfg_hud || cfg_brazos)) continue;
+        if (!p || p == (void *)hk_UpdateSub || p == (void *)hk_CopyRes || p == (void *)hk_CopySub) continue;
+        if (k < 4 && !(cfg_hud || cfg_brazos || cfg_dosojos)) continue;
+        if (k >= 5 && !cfg_dosojos) continue;
         int known = 0;
         for (int i = 0; i < g_mh_n[k]; i++) if (g_mh_fn[k][i] == p) { known = 1; break; }
         for (int i = 0; i < MHVAR && !known; i++) if (g_mh_det[k][i] == p) known = 1;   /* (por si acaso) uno nuestro */
         if (known) continue;
         if (g_mh_n[k] >= MHVAR) {
-            static int said[4]; if (said[k] < 3) { said[k]++; vr_log("MINHOOK %s: demasiadas versiones (%p sin enganchar)", g_mh_name[k], p); }
+            static int said[MHK]; if (said[k] < 3) { said[k]++; vr_log("MINHOOK %s: demasiadas versiones (%p sin enganchar)", g_mh_name[k], p); }
             continue;
         }
         int v = g_mh_n[k];
@@ -4838,7 +5475,7 @@ static void draw_hooks_check(void)
     ID3D11DeviceContext *c = g_hud_ctx;
     if (!c) return;
     mh_scan(c);
-    if (!(cfg_hud || cfg_brazos)) return;
+    if (!(cfg_hud || cfg_brazos || cfg_dosojos)) return;
     ID3D11DeviceContextVtbl *vt = c->lpVtbl;
     if ((void *)vt != g_vt_seen) {
         if (g_vt_seen) vr_log("VTABLE: el contexto tiene OTRA tabla de funciones (%p -> %p)", g_vt_seen, (void *)vt);
@@ -4881,7 +5518,7 @@ static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
             PATCH(&ctx->lpVtbl->CopyResource, hk_CopyRes, g_orig_CopyRes, "CopyResource");
             PATCH(&ctx->lpVtbl->CopySubresourceRegion, hk_CopySub, g_orig_CopySub, "CopySubresourceRegion");
         }
-        if (cfg_hud || cfg_brazos) {   /* (E11) HUD, (E17) piezas del arma */
+        if (cfg_hud || cfg_brazos || cfg_dosojos) {   /* (E11) HUD, (E17) piezas del arma, (E27) dos ojos */
             g_hud_ctx = ctx;
             PATCH(&ctx->lpVtbl->OMSetRenderTargets, hk_OMSetRT, g_orig_OMSetRT, "OMSetRenderTargets");
             PATCH(&ctx->lpVtbl->RSSetViewports, hk_RSSetVP, g_orig_RSSetVP, "RSSetViewports");
@@ -5016,7 +5653,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E26: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E27: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,22 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E27 (rama `manos`) — Los dos ojos en el mismo fotograma (opción `dos_ojos`, apagada por defecto)
+- Lo que dice la E25/E26: los tirones son del **propio juego** (el procesador va al límite). Hasta ahora el juego "pensaba" (física, enemigos, cámara…) **dos veces por pareja**, una por ojo. Con esto piensa **una** y solo se repite el pintado, como hace D-Rey86 en su mod de Metro 2033 (idea y datos de sus `docs/history/17-21`; el código es nuestro, no copiado).
+- Cómo va (símil: un PC con dos monitores): cada "pizarra" del juego que depende del ojo (la escena, la profundidad, el brillo, la imagen final…) tiene una **copia** para el ojo derecho. Cada dibujo que va a una pizarra con copia se hace dos veces: en la del juego (ojo izquierdo) y en la copia (ojo derecho), con los cajones de cámara del ojo derecho. Las **sombras** (pizarras cuadradas) se pintan una sola vez y valen para los dos.
+  - El juego monta la cámara en el **centro de la cabeza**; cada ojo se aparta en H (igual que ya se hacía con el arma).
+  - Cajones (cámara 352, objeto 208, luces 144/272): en el Unmap se guarda lo que escribió el juego y se calcula también la versión del ojo derecho, que va a una copia del cajón. En el dibujo del ojo derecho se ponen esas copias en todas las etapas (vértices, píxeles, teselado, geometría).
+  - Borrar, copiar, resolver y mipmaps también se repiten en las copias (MinHook, como los dibujos). Si se copia algo con copia a otra textura, esa también tiene copia (fotos de la escena para el agua/cristal).
+  - Las copias se crean la primera vez que se usan y se sueltan solas cuando el juego suelta la suya (una "etiqueta" pegada a cada objeto del juego).
+  - A las gafas se mandan los dos ojos en cada fotograma, sin parar el reloj.
+- Config `dos_ojos` en `metro_vr_config.txt`:
+  - `0` = como la E26 (por defecto).
+  - `1` = **PRUEBA**: todo lo que depende del ojo se pinta SOLO en las copias y a las gafas se manda la copia (un ojo por fotograma, como siempre). Mismo coste; **la imagen debería ser igual que con 0**. Si se ve igual, las copias funcionan. (En el monitor se puede ver negro o congelado: normal en esta prueba.)
+  - `2` = **de verdad**: los dos ojos en cada fotograma.
+- Log nuevo cada segundo: `DOS OJOS: modo= dibujos_dobles= solo_copia= (en_diferido=) cajones_ojo_der= cambios_de_cajones= lecturas_cambiadas= borrados= copias= calculo_con_copia= | coste_mod= | copias: texturas= (MB) vistas= cajones= fallos=`. Al crear cada copia: `DOS OJOS: copia N: AnchoxAlto formato=…`.
+  - Si `calculo_con_copia` no es 0, el juego usa "compute" en algo del ojo y eso aún no se repite (siguiente versión).
+- Sin probar. Riesgos: objetos que el juego no pinte para el ojo derecho (los quita por estar fuera de su vista), luces o sombras algo corridas en un ojo, o que la gráfica (RX 580) no llegue con el doble de pintado. Mirar `TIEMPOS`, `STEAMVR` y `SALTITO`.
+
 ## E26 (rama `manos`) — Borrador también para la cámara
 - Chivato de la E25 (usuario a 1280x720): los fotogramas lentos (9-15 ms) son **casi todo del propio juego**; el mod pone 1-2 ms dentro de ellos; el envío a las gafas, el Present y la espera a SteamVR, ~0. En esa zona el juego iba a 72-138 fotogramas/s (no 144 fijos).
 - Se recorta lo que queda del mod: el cajón de la cámara (352 B, unas 20 veces por fotograma) también usa el borrador en memoria normal, en vez de leerse de la memoria de la gráfica.
