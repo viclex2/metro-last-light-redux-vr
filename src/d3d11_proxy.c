@@ -217,6 +217,7 @@ static volatile int g_isl_hide = -1;
 /* (E30) solo las MANOS: de la pieza grande se pintan las islas de las manos y no las de los antebrazos.
  * Numeros = orden de la tecla Fin (de mayor a menor): en la prueba de la E29, n.1 mano izq, n.2 mano der, n.3 y n.4 antebrazos */
 static int cfg_manos = 1, cfg_mano_izq = 1, cfg_isla_der = 2, cfg_isla_izq = 1;
+static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
 static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
 static void isl_default_mask(void)
 {
@@ -425,6 +426,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "mano_izq"))         cfg_mano_izq = v;
     else if (!strcmp(s, "isla_mano_der"))    cfg_isla_der = v;
     else if (!strcmp(s, "isla_mano_izq"))    cfg_isla_izq = v;
+    else if (!strcmp(s, "mano_izq_mando"))   cfg_mano_izq_mando = v;   /* (E31) */
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
@@ -1097,6 +1099,33 @@ static int is_main_cam(const float *f)
     if (fabsf(p00 - g_main_p00) <= g_main_p00 * 0.15f) { g_main_p00 = p00; g_main_seen = now; return 1; }
     return 0;    /* lente mucho mas estrecha de golpe: el arma */
 }
+/* (E31) MANO IZQUIERDA EN EL MANDO IZQUIERDO. La mano izq. es una isla de la pieza de los brazos (E29/E30). Se pinta
+ * con su PROPIA camara del arma: la misma que la del arma, pero movida con el mando izquierdo en vez del derecho
+ * (G_izq = mando_izq_ahora * mando_izq_calibrado^-1). Calibrar: mantener el clic del stick IZQUIERDO; mientras se
+ * mantiene, la mano izq. vuelve a donde la pone el juego; pon el mando ahi y a los 1,5 s se guarda. */
+static volatile LONG g_lhand_ok = 0, g_lhand_req = 0, g_lhand_hold = 0, g_lh_n = 0, g_lh_draw = 0, g_lh_nocam = 0;
+static float g_lhand_G[4][4], g_lhand_C0[4][4]; static int g_lhand_cal = 0;
+#define LH_N 8
+typedef struct { void *r; int have[2]; float d[2][CAM_BYTES / 4]; } LhCam;
+static LhCam g_lh[LH_N]; static int g_lh_next = 0;
+static SRWLOCK g_lh_lock = SRWLOCK_INIT;
+static void lh_store(void *r, int twin, const float *d)
+{
+    AcquireSRWLockExclusive(&g_lh_lock);
+    int k = -1;
+    for (int i = 0; i < LH_N; i++) if (g_lh[i].r == r) { k = i; break; }
+    if (k < 0) { k = g_lh_next; g_lh_next = (g_lh_next + 1) % LH_N; g_lh[k].r = r; g_lh[k].have[0] = g_lh[k].have[1] = 0; }
+    memcpy(g_lh[k].d[twin], d, CAM_BYTES); g_lh[k].have[twin] = 1;
+    ReleaseSRWLockExclusive(&g_lh_lock);
+}
+static int lh_get(void *r, int twin, float *out)
+{
+    int ok = 0;
+    AcquireSRWLockShared(&g_lh_lock);
+    for (int i = 0; i < LH_N; i++) if (g_lh[i].r == r && g_lh[i].have[twin]) { memcpy(out, g_lh[i].d[twin], CAM_BYTES); ok = 1; break; }
+    ReleaseSRWLockShared(&g_lh_lock);
+    return ok;
+}
 static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT mapType, const char *via)
 {
     float f[CAM_BYTES / 4];
@@ -1183,6 +1212,15 @@ modo:;
                 if (eye_in_H()) for (int r = 0; r < 3; r++) Hc[r][3] += t[r];   /* (E27) H ya traia el ojo: se quita (va abajo) */
                 /* (E17d) ESTA es la camara con la que se pinta el arma que ves (la E15 solo movia las piezas del
                  * cajon 0, que eran otras). Se le aplica la mano: vista_arma = T(-ojo) * G_mano * vista */
+                if (cfg_mano_izq_mando && g_lhand_ok && res) {   /* (E31) la misma camara, movida con el mando izquierdo */
+                    float HL[4][4], HLi[4][4], gl[CAM_BYTES / 4];
+                    mul4(g_lhand_G, Hc, HL);
+                    for (int r = 0; r < 3; r++) HL[r][3] -= t[r];
+                    if (inv4(HL, HLi)) {
+                        memcpy(gl, f, CAM_BYTES);
+                        if (apply_view_yaw_cam(gl, HL, HLi)) { lh_store(res, t_eye == 1, gl); InterlockedIncrement(&g_lh_n); }
+                    }
+                }
                 if (cfg_mano && g_hand_ok) {
                     float Hg[4][4]; mul4(g_hand_G, Hc, Hg); memcpy(Hc, Hg, sizeof(Hg));
                     InterlockedIncrement(&g_hand_cam);
@@ -2492,6 +2530,7 @@ typedef unsigned char (*PFN_PollEvent)(void *ev, uint32_t size);
 static PFN_PollEvent    p_PollEvent = NULL;
 static int head_apply(const OvrPose *pz);
 static void hand_update(const OvrPose *rp);
+static void lhand_update(const OvrPose *rp);
 static void raton_step(void);
 static OvrMat34 g_frame_pose;              /* postura con la que se esta dibujando este fotograma */
 static OvrMat34 g_eye_pose[2];             /* postura con la que se dibujo la ultima imagen de cada ojo */
@@ -3081,6 +3120,7 @@ static void vr_after_present(void)
     LARGE_INTEGER q0, q1, qf; QueryPerformanceCounter(&q0);
     p_WaitGetPoses(rp, 16, NULL, 0);
     hand_update(rp);
+    lhand_update(rp);   /* (E31) */
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
     InterlockedExchangeAdd(&g_wait_us, (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart));
     g_fr_wait_us = (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart);   /* (E25) */
@@ -3202,6 +3242,60 @@ static void hand_update(const OvrPose *rp)
     mul4(A, C0i, G);
     memcpy(g_hand_G, G, sizeof(G));
     g_hand_ok = 1;
+}
+/* (E31) mando izquierdo: igual que la mano derecha, con su propio archivo metro_vr_mano_izq.txt */
+static void lhand_path(char *path) { GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_mano_izq.txt"); }
+static void lhand_update(const OvrPose *rp)
+{
+    static int loaded = 0;
+    if (!loaded) {
+        loaded = 1;
+        memset(g_lhand_C0, 0, sizeof(g_lhand_C0));
+        for (int i = 0; i < 4; i++) g_lhand_C0[i][i] = 1.0f;
+        g_lhand_C0[0][3] = -0.10f; g_lhand_C0[1][3] = -0.25f; g_lhand_C0[2][3] = 0.40f;   /* sin calibrar */
+        char path[MAX_PATH]; lhand_path(path);
+        FILE *fp = fopen(path, "r"); int ok = 0;
+        if (fp) { ok = 1; for (int i = 0; i < 3 && ok; i++) if (fscanf(fp, "%f %f %f %f", &g_lhand_C0[i][0], &g_lhand_C0[i][1], &g_lhand_C0[i][2], &g_lhand_C0[i][3]) != 4) ok = 0; fclose(fp); }
+        if (!ok) { memset(g_lhand_C0, 0, sizeof(g_lhand_C0)); for (int i = 0; i < 4; i++) g_lhand_C0[i][i] = 1.0f;
+                   g_lhand_C0[0][3] = -0.10f; g_lhand_C0[1][3] = -0.25f; g_lhand_C0[2][3] = 0.40f; }
+        g_lhand_cal = ok;
+        vr_log("MANO IZQ: %s (%s)", ok ? "calibracion cargada" : "sin calibrar (mantener el clic del stick izquierdo 1,5 s con el mando donde ves la mano)", path);
+    }
+    if (!cfg_mano_izq_mando || !p_RoleIdx || !rp[0].valid) { g_lhand_ok = 0; return; }
+    static uint32_t last_li = 0xFFFFFFFFu;
+    uint32_t li = p_RoleIdx(1);
+    if (li >= 16 && p_RoleOf) for (uint32_t k = 1; k < 16; k++) if (rp[k].valid && p_RoleOf(k) == 1) { li = k; break; }
+    if (li >= 16 && last_li < 16 && rp[last_li].valid) li = last_li;
+    if (li >= 16 || !rp[li].valid) { g_lhand_ok = 0; return; }
+    last_li = li;
+    const OvrMat34 *Hm = &rp[0].mat, *Mm = &rp[li].mat;
+    float d[3] = { Mm->m[0][3] - Hm->m[0][3], Mm->m[1][3] - Hm->m[1][3], Mm->m[2][3] - Hm->m[2][3] };
+    float R[3][3], t[3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) R[i][j] = Hm->m[0][i] * Mm->m[0][j] + Hm->m[1][i] * Mm->m[1][j] + Hm->m[2][i] * Mm->m[2][j];
+        t[i] = Hm->m[0][i] * d[0] + Hm->m[1][i] * d[1] + Hm->m[2][i] * d[2];
+    }
+    float A[4][4]; memset(A, 0, sizeof(A)); A[3][3] = 1.0f;
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) A[i][j] = R[i][j] * ((i == 2) != (j == 2) ? -1.0f : 1.0f);
+    A[0][3] = t[0]; A[1][3] = t[1]; A[2][3] = -t[2];
+    if (g_lhand_req) {
+        g_lhand_req = 0;
+        memcpy(g_lhand_C0, A, sizeof(A)); g_lhand_cal = 1;
+        char path[MAX_PATH]; lhand_path(path);
+        FILE *fp = fopen(path, "w");
+        if (fp) { for (int i = 0; i < 3; i++) fprintf(fp, "%.6f %.6f %.6f %.6f\n", A[i][0], A[i][1], A[i][2], A[i][3]); fclose(fp); }
+        vr_log("MANO IZQ: calibrada (mando a %.2f %.2f %.2f m de la cabeza)", A[0][3], A[1][3], A[2][3]);
+        Beep(900, 80); Beep(1300, 120);
+    }
+    float C0i[4][4], G[4][4];
+    if (g_lhand_hold) {   /* calibrando: la mano vuelve a donde la pone el juego */
+        memset(G, 0, sizeof(G)); for (int i = 0; i < 4; i++) G[i][i] = 1.0f;
+    } else {
+        if (!inv4(g_lhand_C0, C0i)) { g_lhand_ok = 0; return; }
+        mul4(A, C0i, G);
+    }
+    memcpy(g_lhand_G, G, sizeof(G));
+    g_lhand_ok = 1;
 }
 /* Lee el visor y deja preparada g_headH. Devuelve 1 si ha cambiado algo. */
 static int head_update(void)
@@ -3631,6 +3725,13 @@ static void mandos_step(float dt)
     }
     static int sprint = 0, lclick_prev = 0;
     int lclick = lok && BTN(L, 32);
+    {   /* (E31) mantener el clic del stick izq: la mano izq vuelve a su sitio del juego; a los 1,5 s se calibra */
+        static ULONGLONG ldown = 0; static int lcal = 0;
+        if (lclick && !ldown) { ldown = GetTickCount64(); lcal = 0; }
+        if (lclick && GetTickCount64() - ldown > 300) g_lhand_hold = 1;
+        if (lclick && !lcal && GetTickCount64() - ldown > 1500) { g_lhand_req = 1; lcal = 1; }
+        if (!lclick) { ldown = 0; g_lhand_hold = 0; }
+    }
     if (lclick && !lclick_prev) sprint = !sprint;
     if (lx * lx + ly * ly < 0.04f) sprint = 0;          /* stick suelto: deja de correr */
     lclick_prev = lclick;
@@ -5406,13 +5507,66 @@ static int isl_is_big(UINT ic, UINT si)
     for (int i = 0; i < g_nhide; i++) if (g_hide[i].ic > bic) { bic = g_hide[i].ic; bsi = g_hide[i].si; }
     return bic > 1000 && ic == bic && si == bsi;
 }
+/* (E31) la mano izq va con su propia camara */
+static int lh_active(void) { return cfg_mano_izq_mando && cfg_mano_izq && g_lhand_ok && g_isl_state == 2; }
+static __thread ID3D11Buffer *t_lh_orig[2][14]; static __thread int t_lh_have = 0;
+static ID3D11Buffer *g_lh_buf[2];
+static void lh_unbind(ID3D11DeviceContext *c);
+/* pone, en vez de la camara del arma, su version de la mano izq (twin = 1: la del ojo derecho). 0 = no hay */
+static int lh_bind(ID3D11DeviceContext *c, int twin)
+{
+    if (!t_lh_have) {
+        ID3D11DeviceContext_VSGetConstantBuffers(c, 0, 14, t_lh_orig[0]);
+        ID3D11DeviceContext_PSGetConstantBuffers(c, 0, 14, t_lh_orig[1]);
+        t_lh_have = 1;
+    }
+    __attribute__((aligned(16))) float d[CAM_BYTES / 4];
+    int found = 0, mark[2][14]; memset(mark, 0, sizeof(mark));
+    for (int st = 0; st < 2; st++) for (int i = 0; i < 14; i++)
+        if (t_lh_orig[st][i] && lh_get(t_lh_orig[st][i], twin, d)) { mark[st][i] = 1; found = 1; }
+    if (!found) { InterlockedIncrement(&g_lh_nocam); return 0; }
+    if (!g_lh_buf[twin]) {
+        D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
+        bd.ByteWidth = CAM_BYTES; bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (!dev) return 0;
+        ID3D11Buffer *nb = NULL;
+        if (FAILED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &nb))) nb = NULL;
+        ID3D11Device_Release(dev);
+        if (!nb) return 0;
+        if (InterlockedCompareExchangePointer((PVOID *)&g_lh_buf[twin], nb, NULL) != NULL) ID3D11Buffer_Release(nb);
+    }
+    ID3D11Buffer *b = g_lh_buf[twin];
+    PFN_Map mp = TW_CALL(c, Map, hk_Map, g_orig_Map);
+    PFN_Unmap up = TW_CALL(c, Unmap, hk_Unmap, g_orig_Unmap);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (FAILED(mp(c, (ID3D11Resource *)b, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)) || !m.pData) return 0;
+    memcpy(m.pData, d, CAM_BYTES);
+    up(c, (ID3D11Resource *)b, 0);
+    ID3D11Buffer *nb[2][14];
+    for (int st = 0; st < 2; st++) for (int i = 0; i < 14; i++) nb[st][i] = mark[st][i] ? b : t_lh_orig[st][i];
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, 0, 14, nb[0]);
+    ((PFN_SetCBs)TW_CALL(c, PSSetConstantBuffers, hk_PSSetCB, g_orig_PSSetCB))(c, 0, 14, nb[1]);
+    InterlockedIncrement(&g_lh_draw);
+    return 1;
+}
+static void lh_unbind(ID3D11DeviceContext *c)
+{
+    if (!t_lh_have) return;
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, 0, 14, t_lh_orig[0]);
+    ((PFN_SetCBs)TW_CALL(c, PSSetConstantBuffers, hk_PSSetCB, g_orig_PSSetCB))(c, 0, 14, t_lh_orig[1]);
+    for (int st = 0; st < 2; st++) for (int i = 0; i < 14; i++) if (t_lh_orig[st][i]) { ID3D11Buffer_Release(t_lh_orig[st][i]); t_lh_orig[st][i] = NULL; }
+    t_lh_have = 0;
+}
 /* tramos a pintar: con las islas listas, los suyos (0 = ese tramo no se pinta); si no, la pieza entera */
 static int isl_nranges(void) { return g_isl_state == 2 ? g_nisr : 1; }
 static int isl_range(int r, UINT ic, UINT si, UINT *s, UINT *n)
 {
     if (g_isl_state != 2) { *s = si; *n = ic; return 1; }
     if (!g_isl_show[g_isr[r].isl]) return 0;
-    *s = si + g_isr[r].start; *n = g_isr[r].count; return 1;
+    *s = si + g_isr[r].start; *n = g_isr[r].count;
+    if (lh_active() && cfg_isla_izq >= 1 && cfg_isla_izq <= g_nisl && g_isr[r].isl == g_isl_order[cfg_isla_izq - 1]) return 2;   /* (E31) */
+    return 1;
 }
 /* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
@@ -5457,6 +5611,19 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
  * engancha cada version distinta que aparezca en la tabla (hasta MHVAR por funcion), cada una con su propio "puente". */
 static int g_mh_ok = 0;
 static __thread int t_in_draw = 0;                   /* una version puede llamar a otra por dentro: solo cuenta la de fuera */
+/* (E29-E31) la pieza de los brazos por trozos: las islas normales con la camara del arma; la mano izq con la suya */
+#define LH_RANGES(c, ic, si, CALL) for (int q_ = 0; q_ < nr_; q_++) { UINT s_, n_; if (isl_range(q_, ic, si, &s_, &n_) == 2) { CALL; } }
+#define ISL_DRAW(c, ic, si, CALL) do { int nr_ = isl_nranges(), lh_ = 0;                                         \
+        for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_; int k_ = isl_range(r_, ic, si, &s_, &n_);               \
+            if (k_ == 1) TW_DRAW(c, CALL); else if (k_ == 2) lh_ = 1; }                                         \
+        if (lh_) {                                                                                               \
+            if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
+                if (tw2_ == 2) { LH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
+                else if (tw2_ == 1) { tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 1); }                    \
+                else { LH_RANGES(c, ic, si, CALL); }                                                             \
+                lh_unbind(c); }                                                                                  \
+            else { lh_unbind(c); LH_RANGES(c, ic, si, TW_DRAW(c, CALL)); } }                                     \
+    } while (0)
 #define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
     PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, sv); return; }                                                       \
@@ -5466,8 +5633,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                      \
       if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); }          \
-      else if (ps_ == 2) { int nr_ = isl_nranges(); for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_;         \
-          if (isl_range(r_, ic, si, &s_, &n_)) TW_DRAW(c, tr(c, n_, s_, bv)); } } } t_in_draw = 0; }
+      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv)); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
@@ -5477,8 +5643,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                                   \
       if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); }           \
-      else if (ps_ == 2) { int nr_ = isl_nranges(); for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_;                      \
-          if (isl_range(r_, ic, si, &s_, &n_)) TW_DRAW(c, tr(c, n_, ni, s_, bv, sinst)); } } } t_in_draw = 0; }
+      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst)); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 /* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
@@ -5618,6 +5783,15 @@ static int sig_cmp(const void *a, const void *b)
 static void pieces_frame(void)
 {
     brazos_load();
+    {   /* (E31) chivato de la mano izquierda, cada 2 s */
+        static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
+        if (now - t0 > 2000) {
+            t0 = now;
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld",
+                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)InterlockedExchange(&g_lh_n, 0),
+                                    (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state);
+        }
+    }
     while (InterlockedCompareExchange(&g_pc_lock, 1, 0) != 0) YieldProcessor();
     if (g_pc_ncur == 0) { InterlockedExchange(&g_pc_lock, 0); return; }
     qsort(g_pc_cur, g_pc_ncur, sizeof(PieceSig), sig_cmp);
@@ -5877,7 +6051,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E30: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E31: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E31 (rama `manos`) — La mano izquierda en el mando izquierdo
+- Prueba de la E30 (usuario, 11/11): **bien**, se ven solo las manos. En el corte de la muñeca se ve "hueco" (el juego no pinta la cara de dentro de la malla). Agarre por arma con el revólver: "más o menos" bien.
+- La isla de la mano izquierda se pinta con su **propia cámara del arma**: la misma que la del arma, pero movida con el **mando izquierdo** (G_izq = mando_izq_ahora · mando_izq_calibrado⁻¹) en vez del derecho. Se calcula en el Unmap junto a la del arma (también la del ojo derecho con `dos_ojos=2`) y, al pintar la mano izq, se pone en su lugar (VS y PS) y luego se devuelve la del juego.
+- **Calibrar la mano izq**: mantener el **clic del stick izquierdo**. A los 0,3 s la mano izq vuelve a donde la pinta el juego; pon el mando ahí (como si la agarraras) y a los 1,5 s pita y se guarda en `%TEMP%\metro_vr_mano_izq.txt`. (Un toque corto sigue siendo correr.)
+- Config: `mano_izq_mando=1` (0 = la mano izq con el arma, como la E30).
+- Log cada 2 s: `MANO IZQ: mando= calibrada= calibrando= | camaras= dibujos= sin_camara= | islas=`. Si `sin_camara` sube, la mano izq no encuentra su cámara y se pinta con el arma.
+- Pendiente: agarrar el arma con las dos manos; postura fija de la mano izq (ahora sigue la animación del juego: al recargar se mueve); tapar el hueco de la muñeca. Sin probar.
+
 ## E30 (rama `manos`) — Solo las manos (sin antebrazos)
 - Prueba de la E29 (usuario, 11/11): la pieza grande tiene **4 islas**. Con la tecla Fin (de mayor a menor): **n.1 = mano izquierda, n.2 = mano derecha, n.3 = antebrazo izquierdo, n.4 = antebrazo derecho**. Pintada por trozos se ve igual que entera.
 - Ahora, en cuanto se encuentran las islas, de la pieza grande **solo se pintan las dos manos**; los antebrazos y el reloj siguen ocultos. Las manos van con el arma (la izquierda, donde la pone el juego). El siguiente paso es llevar la izquierda al mando izquierdo.
