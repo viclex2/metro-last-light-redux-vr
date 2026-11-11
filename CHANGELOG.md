@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20f (rama `manos`) — La intro ya no es "partida", y mirar abajo/derecha ya no quita el VR
+- Prueba de la E20e (usuario): el menú principal y la pausa (Esc) van bien, pero: (1) en la intro (el tren con los logos hasta el vagón del menú) se ponía en VR, porque tiene escenario 3D, cámara y **movimiento**; (2) jugando, al mirar mucho hacia abajo o a la derecha se quitaba el VR.
+- (1) Log: en la intro los **brazos de Artyom** (las piezas guardadas con F6) no se pintan nunca (`ocultas=0`); jugando, unas 900/s. Ahora, para **entrar** en VR hace falta haber visto los brazos en el último segundo (para seguir en VR no). Si no hay brazos guardados, no se pide.
+- (2) Log: al mirar a ciertos sitios los dibujos en la imagen final suben a ~14-15 y el límite era 12. La pausa da 25+ y el submenú de opciones 13-14. Ahora se **entra** en menú con 20 (`menu_dibujos=20`) y se **sigue** en él mientras haya 10 o más (`menu_dibujos_seguir=10`).
+
 ## E20e (rama `manos`) — Modo VR solo con la partida cargada
 - Prueba de la E20d (usuario): **pantalla flotante perfecta**, **gira bien sobre uno mismo** y **ya no peta al cambiar gráficos** (varias veces seguidas). Falla una cosa: el VR se ponía en el menú principal.
 - Log: el menú principal tiene un escenario 3D que usa la cámara del jugador, así que "hay cámara" no basta. Pero la función que **mueve al jugador** (`+0x28D110`, la de andar) no se llama en el menú (`andar=0`) y en la partida va a ~100 veces/s; además se para en la pausa.

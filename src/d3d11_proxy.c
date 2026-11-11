@@ -202,7 +202,9 @@ static int cfg_pivote = 1;                   /* (E20) al girar con el stick, gir
 static int cfg_cine = 1;                         /* 1 = fuera de la partida, pantalla flotante */
 static float cfg_cine_dist = 2.0f, cfg_cine_ancho = 2.6f;
 static int cfg_auto = 1;                         /* 1 = el modo VR (F9) se pone y quita solo segun haya partida */
-static int cfg_menu_draws = 12;                  /* (E20d) con tantos dibujos en la imagen final, hay un menu encima */
+static int cfg_menu_draws = 20;                  /* (E20d) con tantos dibujos en la imagen final, hay un menu encima (E20f: 20) */
+static int cfg_menu_stay = 10;                   /* (E20f) y se sigue en el menu mientras haya al menos estos */
+static volatile ULONGLONG g_arm_seen = 0;        /* (E20f) ultima vez que se oculto un brazo guardado (= se pintan los brazos de Artyom) */
 static volatile ULONGLONG g_mov_seen = 0;        /* (E20e) ultima vez que el juego movio al jugador (solo existe en la partida) */
 static volatile ULONGLONG g_cam_seen = 0;        /* ultima vez que el juego monto la camara del jugador */
 static int g_auto_manual = 0;                    /* se ha pulsado F9: el automatico se aparta */
@@ -372,6 +374,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
     else if (!strcmp(s, "vr_automatico"))    cfg_auto = v;
     else if (!strcmp(s, "menu_dibujos"))     cfg_menu_draws = iv;
+    else if (!strcmp(s, "menu_dibujos_seguir")) cfg_menu_stay = iv;
     else if (!strcmp(s, "detective"))        cfg_detective = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
     else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
@@ -1960,14 +1963,19 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         if (cfg_auto && !g_auto_manual && g_nat_installed == 1) {   /* (E20) modo VR solo con partida */
             static ULONGLONG since = 0, gone = 0, menu_t = 0;
             ULONGLONG now = GetTickCount64();
-            if (g_bb_last >= cfg_menu_draws) menu_t = now;       /* (E20d) hay menu encima (pausa, opciones...) */
+            /* (E20f) entrar en "menu" con muchos dibujos (pausa: 25+); seguir en el mientras haya bastantes (opciones: 13-14).
+             * Jugando son 1-4, y al mirar a ciertos sitios suben a ~14: con 20 para entrar ya no salta. */
+            if (g_bb_last >= cfg_menu_draws || (menu_t && now - menu_t < 400 && g_bb_last >= cfg_menu_stay)) menu_t = now;
             int menu = menu_t && now - menu_t < 400;
             /* (E20e) el menu principal tiene un escenario 3D con la camara del jugador: no basta con la camara.
              * La funcion que mueve al jugador solo se llama con una partida cargada (y se para en la pausa). */
             int cam = g_cam_seen && now - g_cam_seen < 250 && g_mov_seen && now - g_mov_seen < 300 && !menu;
             if (cam) { if (!since) since = now; gone = 0; } else { since = 0; if (!gone) gone = now; }
             LONG want = g_mode;
-            if (cam && now - since > 1000) want = 1;            /* la partida lleva 1 s cargada */
+            /* (E20f) para ENTRAR en VR hace falta ver los brazos de Artyom (los guardados con F6): la intro tiene
+             * escenario 3D, camara y hasta movimiento (el tren), pero no brazos. Para seguir en VR no hace falta. */
+            int arms = g_nhide == 0 || (g_arm_seen && now - g_arm_seen < 1000);
+            if (cam && now - since > 1000 && (g_mode == 1 || arms)) want = 1;
             else if (!cam && gone && now - gone > 150) want = 0;
             if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s (dibujos en pantalla=%ld)", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA / PAUSA -> pantalla flotante", (long)g_bb_last); }
         }
@@ -4396,7 +4404,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
-        if (g_hide[i].ic == ic && g_hide[i].si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
+        if (g_hide[i].ic == ic && g_hide[i].si == si) { InterlockedIncrement(&g_pc_hidden); g_arm_seen = GetTickCount64(); return 1; }
     InterlockedIncrement(&g_pc_drawn);
     return 0;
 }
@@ -4771,7 +4779,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20e: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20f: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
