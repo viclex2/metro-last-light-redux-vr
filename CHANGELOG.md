@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E19 (rama `manos`) — Las balas salen del arma, hacia donde apunta
+- Antes la bala salía de la cabeza hacia donde mirabas, aunque el arma estuviera en otro sitio.
+- Gancho (con MinHook) en `metro.exe+0x3D7FF0`, la función que crea cada bala (RDX = origen, R8 = dirección; idea de D-Rey86 en 2033). Antes de engancharla se comprueba que dentro llame al constructor de la bala (`+0x3D6970`).
+- A la bala del jugador se le aplica **el mismo movimiento que al arma que ves** (mano ahora × mano calibrada⁻¹, en los ejes de la cámara): sale del arma y va hacia donde apunta su cañón. Se conserva la dispersión del juego. Si la mano está donde se calibró, la bala no cambia.
+- Bala del jugador = sale a menos de 1,5 m de tu cabeza y va a menos de 20° de donde mira la cámara. Las de los enemigos no se tocan.
+- Config `balas_mano=1` (0 = como antes). Log: `BALAS: gancho en metro.exe+0x3D7FF0 … -> MH_OK`, las primeras `BALA: del jugador. origen … -> … | direccion … -> … (N grados)` y cada segundo `balas: jugador= otras= ultima_desviada=`.
+
 ## E18 (rama `manos`) — MinHook: el mod por fin ve los dibujos (para quitar los brazos con F6)
 - Prueba de la E17d (vídeo + log): **el arma y los brazos siguen al mando derecho** (`mano: ok=1 calibrada=1`). Los brazos van rígidos pegados al arma y se ven las mangas flotando: hay que quitarlos.
 - El log de la E17d enseña por qué no se veían los dibujos: Windows **alterna dos versiones** de cada función de dibujo (p. ej. Draw `…3540` y `…3610`) y va cambiando la casilla de la tabla entre ellas en cada fotograma.

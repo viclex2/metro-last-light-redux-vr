@@ -198,6 +198,7 @@ static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apa
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
 /* (E17) piezas del arma/brazos: censo y ocultar */
+static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
 static volatile LONG g_pc_lock = 0, g_draws_seen = 0;
@@ -218,6 +219,8 @@ static int nat_pos_match(const float *f, LONG *eye);
 static volatile LONG g_nat_armaojo = 0, g_nat_otras = 0;
 static volatile LONG g_nat_flip = 1, g_nat_eok = 0, g_nat_ebad = 0, g_nat_enone = 0;
 static void nat_install(void);
+static void mh_start(void);
+static void bul_install(void);
 static void ocl_update(void);
 static void mandos_step(float dt);
 static int nat_active(void);
@@ -352,6 +355,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
     else if (!strcmp(s, "ocultar_brazos"))   cfg_brazos = v;
+    else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "detective"))        cfg_detective = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
     else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
@@ -3019,6 +3023,10 @@ static void nat_eye_check(const float *f)
     if (be == g_eye) InterlockedIncrement(&g_nat_eok); else InterlockedIncrement(&g_nat_ebad);
 }
 static void *g_nat_tramp = NULL; static BYTE *g_nat_ret = NULL;
+/* (E19) balas hacia donde apunta el arma */
+static float g_bul_C[3][3], g_bul_hc[3]; static volatile ULONGLONG g_bul_t = 0;
+static volatile LONG g_bul_mine = 0, g_bul_other = 0, g_bul_inst = 0;
+static float g_bul_lastdev = 0;
 static void nat_hook(void *mgr, const float *pos, const float *a, const float *b, void *a5, void *a6)
 {
     nat_fn_t orig = (nat_fn_t)g_nat_tramp;
@@ -3053,6 +3061,13 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
         for (int i = 0; i < 3; i++) hl[i] = g_rt_dg[i] + g_rt_Rg[i][0] * ev[0] + g_rt_Rg[i][1] * ev[1] + g_rt_Rg[i][2] * ev[2];
         for (int i = 0; i < 3; i++) off[i] = B[i][0] * hl[0] + B[i][1] * hl[1] + B[i][2] * hl[2];
         for (int i = 0; i < 3; i++) { fwd[i] = C[i][2]; up[i] = C[i][1]; npos[i] = pos[i] + off[i]; }
+        {   /* (E19) para las balas: giro de la camara y centro de la cabeza (sin el ojo), en el mundo */
+            for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) g_bul_C[i][j] = C[i][j];
+            float hc[3];
+            for (int i = 0; i < 3; i++) hc[i] = B[i][0] * g_rt_dg[0] + B[i][1] * g_rt_dg[1] + B[i][2] * g_rt_dg[2];
+            for (int i = 0; i < 3; i++) g_bul_hc[i] = pos[i] + hc[i];
+            g_bul_t = GetTickCount64();
+        }
         LONG k = InterlockedIncrement(&g_nat_ri) & 7;
         g_nat_ring[k][0] = npos[0]; g_nat_ring[k][1] = npos[1]; g_nat_ring[k][2] = npos[2]; g_nat_ringe[k] = e;
     }
@@ -3060,6 +3075,77 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
     g_nat_last = GetTickCount64();
     InterlockedIncrement(&g_nat_hits);
     orig(mgr, cfg_natfull ? npos : pos, fwd, up, a5, a6);
+}
+
+/* (E19) BALAS. metro.exe+0x3D7FF0 crea cada bala (la del jugador y las de los enemigos): RCX = dueno, RDX = origen,
+ * R8 = direccion (ya con la dispersion del juego). Llama al constructor +0x3D6970, que copia la direccion a la bala.
+ * (Encontrado por D-Rey86 en Metro 2033 Redux; mismas direcciones en Last Light Redux.)
+ * El arma se pinta movida por G (mano ahora x mano calibrada^-1) en los ejes de la camara. A la bala del jugador le
+ * aplicamos ese mismo movimiento: origen y direccion pasan de "como si el arma estuviera en reposo" a "con el arma
+ * en la mano". Asi sale del arma y hacia donde apunta su canon, y se conserva la dispersion del juego.
+ * Bala del jugador = sale a menos de 1,5 m del centro de la cabeza y va a menos de 20 grados de donde mira la camara
+ * (las de los enemigos salen de ellos o te apuntan a ti). */
+typedef long long (*bul_fn_t)(void *, const float *, const float *, void *, void *, void *, void *, void *, void *, void *);
+static bul_fn_t g_bul_tramp = NULL;
+static long long bul_hook(void *owner, const float *org, const float *dir, void *a4, void *a5, void *a6, void *a7, void *a8, void *a9, void *a10)
+{
+    __attribute__((aligned(16))) float no[4], nd[4];
+    int mine = 0;
+    if (cfg_balas && org && dir && g_hand_ok && g_hand_cal && nat_full() && g_nat_was && GetTickCount64() - g_bul_t < 500) {
+        float (*C)[3] = g_bul_C;
+        float rv[3], ov[3], dv[3];
+        for (int i = 0; i < 3; i++) rv[i] = org[i] - g_bul_hc[i];
+        float dist2 = rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2];
+        float dl = sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        float cosf_ = dl > 1e-4f ? (dir[0] * C[0][2] + dir[1] * C[1][2] + dir[2] * C[2][2]) / dl : -1.0f;
+        if (isfinite(dist2) && dist2 < 1.5f * 1.5f && isfinite(cosf_) && cosf_ > 0.94f) {   /* 0.94 = 20 grados */
+            /* a ejes de la camara (C^T), mover con la mano (G), y de vuelta al mundo (C) */
+            for (int i = 0; i < 3; i++) {
+                ov[i] = C[0][i] * rv[0] + C[1][i] * rv[1] + C[2][i] * rv[2];
+                dv[i] = C[0][i] * dir[0] + C[1][i] * dir[1] + C[2][i] * dir[2];
+            }
+            float og[3], dg[3];
+            for (int i = 0; i < 3; i++) {
+                og[i] = g_hand_G[i][0] * ov[0] + g_hand_G[i][1] * ov[1] + g_hand_G[i][2] * ov[2] + g_hand_G[i][3];
+                dg[i] = g_hand_G[i][0] * dv[0] + g_hand_G[i][1] * dv[1] + g_hand_G[i][2] * dv[2];
+            }
+            for (int i = 0; i < 3; i++) {
+                no[i] = g_bul_hc[i] + C[i][0] * og[0] + C[i][1] * og[1] + C[i][2] * og[2];
+                nd[i] = C[i][0] * dg[0] + C[i][1] * dg[1] + C[i][2] * dg[2];
+            }
+            no[3] = org[3]; nd[3] = dir[3];
+            float l = sqrtf(nd[0] * nd[0] + nd[1] * nd[1] + nd[2] * nd[2]);
+            if (isfinite(l) && l > 1e-4f && isfinite(no[0]) && isfinite(no[1]) && isfinite(no[2])) {
+                for (int i = 0; i < 3; i++) nd[i] *= dl / l;     /* mismo largo que la del juego */
+                mine = 1;
+                g_bul_lastdev = acosf(clampf((nd[0] * dir[0] + nd[1] * dir[1] + nd[2] * dir[2]) / (dl * dl), -1.0f, 1.0f)) * 57.29578f;
+                static int said = 0;
+                if (said < 12) {
+                    said++;
+                    vr_log("BALA: del jugador. origen %.2f %.2f %.2f -> %.2f %.2f %.2f | direccion %.3f %.3f %.3f -> %.3f %.3f %.3f (%.1f grados)",
+                           org[0], org[1], org[2], no[0], no[1], no[2], dir[0], dir[1], dir[2], nd[0], nd[1], nd[2], g_bul_lastdev);
+                }
+            }
+        }
+    }
+    if (mine) InterlockedIncrement(&g_bul_mine); else InterlockedIncrement(&g_bul_other);
+    return g_bul_tramp(owner, mine ? no : org, mine ? nd : dir, a4, a5, a6, a7, a8, a9, a10);
+}
+static void bul_install(void)
+{
+    if (g_bul_inst || !cfg_balas) return;
+    g_bul_inst = -1;
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    BYTE *fn = base + 0x3D7FF0, *ctor = base + 0x3D6970;
+    int found = 0;   /* comprobacion: dentro de la funcion tiene que haber una llamada al constructor de la bala */
+    for (int i = 0; i < 0x400 && !found; i++) if (fn[i] == 0xE8 && fn + i + 5 + *(INT32 *)(fn + i + 1) == ctor) found = 1;
+    char line[64]; int L = 0; for (int q = 0; q < 16; q++) L += snprintf(line + L, sizeof(line) - L, "%02X ", fn[q]);
+    if (!found) { vr_log("BALAS: no encuentro la funcion que crea la bala (%s); las balas iran hacia donde miras", line); return; }
+    mh_start();
+    MH_STATUS st = MH_CreateHook(fn, (void *)bul_hook, (void **)&g_bul_tramp);
+    if (st == MH_OK) st = MH_EnableHook(fn);
+    vr_log("BALAS: gancho en metro.exe+0x3D7FF0 (%s) -> %s", line, MH_StatusToString(st));
+    if (st == MH_OK) g_bul_inst = 1;
 }
 
 /* Parcheo seguro con el juego en marcha: primero un "espera aqui" de 2 bytes (EB FE) escrito de golpe, para que
@@ -3145,6 +3231,7 @@ static void nat_install(void)
     if (!patch_bytes(fn, j, 18)) { g_nat_installed = -1; vr_log("NATIVA: no pude parchear la funcion"); return; }
     g_nat_installed = 1;
     mov_install();
+    bul_install();
     vr_log("NATIVA: gancho puesto en metro.exe+0x69B900 (llamada de la camara del jugador en +0x1F3960)");
 }
 
@@ -3908,12 +3995,13 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld | balas: jugador=%ld otras=%ld ultima_desviada=%.1fgrados", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_cam, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
                                        (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0),
-                                       g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0));
+                                       g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0),
+                                       (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev);
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4349,7 +4437,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E18: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E19: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
