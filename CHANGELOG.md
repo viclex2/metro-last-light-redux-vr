@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E23 (rama `manos`) — Fluidez: el mod gastaba ~3 ms por fotograma leyendo "con red"
+- Usuario: la fluidez sigue igual; en el monitor va fluido, en VR no; "le sobran fps pero está capado". `estereo=1` mareó mucho (no repetir).
+- Lo que dicen los números (log de la E22): 73 fotogramas/s = 36 parejas; a 72 Hz cada pareja tiene que salir en 13,9 ms, y cuando se pasa aunque sea un poco SteamVR la deja en la mitad (36). Por eso va "clavado": es un escalón, no un tope (D-Rey llegó a lo mismo: "an exact 72/36 plateau is not proof of a limiter"). Cada fotograma cuesta ~10,4 ms; para 72 parejas hacen falta ~6,9.
+- **El propio mod se comía 190-250 ms de cada segundo** del hilo que dibuja (~3 ms por fotograma), casi todo al cambiar la lente de cada objeto (~25.000/s): leía su cajón con `ReadProcessMemory`, que es una llamada a Windows por objeto. Entre Map y Unmap el puntero es válido seguro, así que ahora se copia directamente (`lectura_rapida=1`; 0 = como antes).
+- Log más fino: `TIEMPOS: … en_el_mod=… (objetos: N/s, ms/s, us cada uno) … esperando_steamvr= fotogramas= imagen=AnchoxAlto`.
+- D-Rey (Metro 2033 VR) pinta los dos ojos en el mismo fotograma (duplica los dibujos); su gran ganancia fue la resolución interna del juego (la calidad "Muy alta" dibuja a 1,41x). Apuntado para más adelante.
+
 ## E22 (rama `manos`) — Cambio de arma sin salir del VR, y menos "rebote" al mover la cabeza
 - Prueba de la E21 (usuario): **controles bien** (mando de Xbox de mentira: `xinput1_4` y `xinput1_3` enganchadas). Falta: al cambiar de arma a veces aún se quita el VR; y la cabeza va con algo de retraso o "rebote" (el arma no).
 - **Cambio de arma**: log de la E21: en la **pausa de verdad** el jugador deja de actualizarse (`jugador=0/s`); en los "falsos menús" (cambio de arma, 20-38 dibujos) sigue a ~70/s. Ahora **solo cuenta como menú con el juego parado**. Se quita lo de mirar abajo y los 3 s tras cambiar de arma, que ya no hacen falta.

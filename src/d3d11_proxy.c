@@ -197,6 +197,7 @@ static volatile LONG g_hand_req = 0, g_hand_n = 0, g_hand_cam = 0;
 static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apagado, 2 sin funcion, 3 indice, 4 visor no valido, 5 mando no valido */
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
+static volatile LONG g_prof_cb0_us = 0, g_prof_cb0_n = 0, g_prof_frames = 0, g_prof_draw_us = 0;   /* (E23) */
 /* (E17) piezas del arma/brazos: censo y ocultar */
 static int cfg_pivote = 1;                   /* (E20) al girar con el stick, girar sobre la cabeza (no alrededor del centro de la habitacion) */
 static int cfg_cine = 1;                         /* 1 = fuera de la partida, pantalla flotante */
@@ -218,6 +219,7 @@ static int cfg_xinput = 1;                   /* (E21) los mandos VR tambien como
 static void xinput_hook_try(void);
 static int cfg_pose_cam = 1;                 /* (E22) mandar cada imagen con la postura con la que se monto su camara */
 static int g_cine_on; static void cine_hide(void);
+static int cfg_fastread = 1;                 /* (E23) leer los cajones directamente (sin ReadProcessMemory) */
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -379,6 +381,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
     else if (!strcmp(s, "postura_camara"))   cfg_pose_cam = v;
+    else if (!strcmp(s, "lectura_rapida"))   cfg_fastread = v;
     else if (!strcmp(s, "pantalla_menus"))   cfg_cine = v;
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
@@ -1345,6 +1348,14 @@ static void STDMETHODCALLTYPE hk_CSSetCB(ID3D11DeviceContext *c, UINT start, UIN
     g_orig_CSSetCB(c, start, num, bufs);
 }
 static int slot_of(void *res);
+/* (E23) LECTURA RAPIDA. Entre Map y Unmap el puntero del juego es valido seguro: se copia directamente.
+ * ReadProcessMemory (lectura "con red") es una llamada a Windows por cada objeto: ~25.000 por segundo, y era
+ * la mayor parte de los ~250 ms/s que gastaba el mod. */
+static int cb_read(const void *src, void *dst, SIZE_T n)
+{
+    if (cfg_fastread) { memcpy(dst, src, n); return 1; }
+    SIZE_T got = 0; return ReadProcessMemory(GetCurrentProcess(), src, dst, n, &got) && got == n;
+}
 static int slot_in(void * volatile *arr, void *res) { for (int i = 0; i < NSLOT; i++) if (arr[i] == res) return i; return -1; }
 
 /* DETECTIVE: busca en cada cajon que escribe el juego los numeros de su lente (P00, P11, sus inversas...).
@@ -1673,12 +1684,12 @@ static void slot_stuff(void *res, const Pending *p)
     if (g_mode == 1 && cfg_previo && cfg_porobjeto && cfg_modoh == 0 && raton_active() && g_oc_have && g_orig_P00 > 0) {
         if (slot == 7 && p->bw == 144) {
             float f[36]; SIZE_T got = 0;
-            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 144, &got) && got == 144 && fix_prev_s7(f)) {
+            (void)got; if (cb_read(p->p, f, 144) && fix_prev_s7(f)) {
                 memcpy((void *)p->p, f, 128); _mm_sfence(); InterlockedIncrement(&g_l7);
             }
         } else if (slot == 3 && p->bw == 272) {
             float f[68]; SIZE_T got = 0;
-            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 272, &got) && got == 272 && fix_prev_s3(f)) {
+            (void)got; if (cb_read(p->p, f, 272) && fix_prev_s3(f)) {
                 memcpy((char *)p->p + 36 * 4, f + 36, 16 * 4); _mm_sfence(); InterlockedIncrement(&g_l3);
             }
         }
@@ -1686,12 +1697,12 @@ static void slot_stuff(void *res, const Pending *p)
     if (g_mode == 1 && cfg_lights && cfg_fov && g_fov_ok && g_orig_P00 > 0) {
         if (slot == 7 && p->bw == 144) {
             float f[36]; SIZE_T got = 0;
-            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 144, &got) && got == 144 && fix_slot7(f)) {
+            (void)got; if (cb_read(p->p, f, 144) && fix_slot7(f)) {
                 memcpy((void *)p->p, f, 128); _mm_sfence(); InterlockedIncrement(&g_l7);
             }
         } else if (slot == 3 && p->bw == 272) {
             float f[68]; SIZE_T got = 0;
-            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 272, &got) && got == 272 && fix_slot3(f)) {
+            (void)got; if (cb_read(p->p, f, 272) && fix_slot3(f)) {
                 memcpy((char *)p->p + 36 * 4, f + 36, 8 * 4); _mm_sfence(); InterlockedIncrement(&g_l3);
             }
         }
@@ -1703,9 +1714,10 @@ static void slot_stuff(void *res, const Pending *p)
         LONG mode = g_mode;
         if (slot == 0 && p->bw == 208) InterlockedIncrement(g_ord_flag ? &g_ord_after : &g_ord_before);
         if (mode == 1 && slot == 0 && p->bw == 208) {
-            float f[52], Hc[4][4], Hic[4][4]; SIZE_T got = 0;
+            float f[52], Hc[4][4], Hic[4][4];
+            LARGE_INTEGER c0, c1; QueryPerformanceCounter(&c0);
             get_H(Hc, Hic);
-            if (ReadProcessMemory(GetCurrentProcess(), p->p, f, 208, &got) && got == 208) {
+            if (cb_read(p->p, f, 208)) {
                 if (apply_cb0_yaw(f, Hc)) {
                     memcpy((char *)p->p + 144, f + 36, 64);   /* solo m_WVP */
                     _mm_sfence();
@@ -1714,6 +1726,9 @@ static void slot_stuff(void *res, const Pending *p)
                     InterlockedIncrement(&g_cb0_skip);
                 }
             }
+            QueryPerformanceCounter(&c1);
+            InterlockedExchangeAdd(&g_prof_cb0_us, (LONG)((c1.QuadPart - c0.QuadPart) * 1000000 / g_qpf));
+            InterlockedIncrement(&g_prof_cb0_n);
         }
     }
     if (slot != 1 && g_samples_left[slot] > 0) {
@@ -4420,9 +4435,13 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             since_cam++;
             LONG fps = InterlockedExchange(&g_real_frames, 0), wus = InterlockedExchange(&g_wait_us, 0);
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
-            vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s fotograma_mas_lento=%.1fms lente_principal=%.3f",
+            {
+                LONG cb0n = InterlockedExchange(&g_prof_cb0_n, 0), cb0us = InterlockedExchange(&g_prof_cb0_us, 0);
+                vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s (objetos: %ld/s, %ldms/s, %.2fus cada uno) fotograma_mas_lento=%.1fms esperando_steamvr=%ldms/s fotogramas=%ld/s lente_principal=%.3f imagen=%ux%u",
                    (long)(InterlockedExchange(&g_prof_present_us, 0) / 1000), (long)(InterlockedExchange(&g_prof_mod_us, 0) / 1000),
-                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, g_orig_P00);
+                   (long)cb0n, (long)(cb0us / 1000), cb0n ? (double)cb0us / cb0n : 0.0,
+                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h);
+            }
             if (g_ft_n > 0) {   /* (E12) */
                 vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
                        "steamvr_esperando=%.1fms veces_mostrado=%.2f repetidos=%ld fuera_de_hora=%ld con_reproyeccion=%ld",
@@ -4933,7 +4952,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E22: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E23: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
