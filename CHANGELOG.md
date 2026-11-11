@@ -2,6 +2,9 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20g (rama `manos`) — Arreglo de la E20f antes de probarla
+- En la E20f los brazos solo se miraban con el VR ya puesto, así que la condición "ver los brazos para entrar en VR" no se cumpliría nunca. Ahora, fuera del VR, se mira si se pintan los brazos guardados (sin ocultar nada). El resto, igual que la E20f.
+
 ## E20f (rama `manos`) — La intro ya no es "partida", y mirar abajo/derecha ya no quita el VR
 - Prueba de la E20e (usuario): el menú principal y la pausa (Esc) van bien, pero: (1) en la intro (el tren con los logos hasta el vagón del menú) se ponía en VR, porque tiene escenario 3D, cámara y **movimiento**; (2) jugando, al mirar mucho hacia abajo o a la derecha se quitaba el VR.
 - (1) Log: en la intro los **brazos de Artyom** (las piezas guardadas con F6) no se pintan nunca (`ocultas=0`); jugando, unas 900/s. Ahora, para **entrar** en VR hace falta haber visto los brazos en el último segundo (para seguir en VR no). Si no hay brazos guardados, no se pide.

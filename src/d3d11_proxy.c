@@ -4396,7 +4396,13 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     g_draws_seen++;
     /* (E17b) el juego pinta tambien desde otros hilos (listas de dibujo "diferidas"): no se mira el contexto,
      * y lo de "esta pieza es del arma" se guarda por hilo */
-    if (!g_cb0_weapon || g_mode != 1) return 0;
+    if (!g_cb0_weapon || g_mode != 1) {
+        /* (E20f) fuera del VR no se oculta nada, pero se mira si se estan pintando los brazos guardados:
+         * asi se sabe que hay partida (en la intro y en los menus no salen) */
+        for (int i = 0; i < g_nhide; i++)
+            if (g_hide[i].ic == ic && g_hide[i].si == si) { g_arm_seen = GetTickCount64(); break; }
+        return 0;
+    }
     while (InterlockedCompareExchange(&g_pc_lock, 1, 0) != 0) YieldProcessor();
     int known = 0;
     for (int i = 0; i < g_pc_ncur; i++) if (g_pc_cur[i].ic == ic && g_pc_cur[i].si == si) { known = 1; break; }
@@ -4779,7 +4785,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20f: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20g: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
