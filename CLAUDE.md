@@ -71,6 +71,7 @@
 - **Lista del usuario antes de pasar a estable (11/11)**: (1) menús, intro y opciones como pantalla flotante con fondo negro, y VR solo en partida; (2) que no pete al cambiar opciones gráficas (ESTADO.md problema 4: peta en d3d11.dll+0x17206B tras SetFullscreenState(0); hay `crash_handler` que lo apunta en el log); (3) girar sobre uno mismo (E20).
 
 ## Siguientes pasos
+0. **PRÓXIMA CONVERSACIÓN: los dos ojos en el mismo fotograma** (para que el juego "piense" una vez por pareja y llegue a 72 parejas con el i5-7500). Antes de escribir código: leer en el repo de D-Rey `docs/history/17-single-pass-stereo-d3d-facts.md`, `18-where-true-stereo-time-goes.md`, `19-viewmodel-second-eye.md` y `21-*` (cómo duplica los dibujos al 2.º ojo, qué pasadas dependen del ojo, el coste medido), y su código `StereoTwin` en `ThirdParty/3Dmigoto/DirectX11/`. Ya tenemos MinHook en todos los Draw* (sitio natural para repetir cada dibujo con la cámara del otro ojo). Ojo con la licencia GPL-3 si se copia código suyo (preguntar al usuario). Hacerlo detrás de una opción de config apagada por defecto y medir con el chivato `SALTITO:`/`TIEMPOS`.
 1. Comprobar con varias armas que no queda ningún trozo de brazo (si queda, F6 + Shift+F6 con esa arma).
 2. Pasar también los ganchos del `metro.exe` (cámara, andar) a MinHook.
 3. Balas (E19): comprobar con enemigos que sus balas no se desvían. Si alguna vez no caen justo donde apunta el cañón: "poner a cero la mira", como D-Rey. Al apuntar (agarre) el juego mueve el arma a la cara: revisar.
