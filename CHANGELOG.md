@@ -7,6 +7,7 @@ Las versiones van por letra (hito) y número. La más nueva, arriba.
 - Gancho (con MinHook) en `metro.exe+0x3D7FF0`, la función que crea cada bala (RDX = origen, R8 = dirección; idea de D-Rey86 en 2033). Antes de engancharla se comprueba que dentro llame al constructor de la bala (`+0x3D6970`).
 - A la bala del jugador se le aplica **el mismo movimiento que al arma que ves** (mano ahora × mano calibrada⁻¹, en los ejes de la cámara): sale del arma y va hacia donde apunta su cañón. Se conserva la dispersión del juego. Si la mano está donde se calibró, la bala no cambia.
 - Bala del jugador = sale a menos de 1,5 m de tu cabeza y va a menos de 20° de donde mira la cámara. Las de los enemigos no se tocan.
+- **Prueba (usuario, 11/11): funciona, las balas salen del cañón.** Log: gancho `MH_OK`, 144 balas del jugador desviadas (hasta ~30°). Falta ver con enemigos disparando (`otras=0` en la prueba). Se guardó una pieza más como brazo (`252/855750`, un trocito del reloj): 14 en total.
 - Config `balas_mano=1` (0 = como antes). Log: `BALAS: gancho en metro.exe+0x3D7FF0 … -> MH_OK`, las primeras `BALA: del jugador. origen … -> … | direccion … -> … (N grados)` y cada segundo `balas: jugador= otras= ultima_desviada=`.
 
 ## E18 (rama `manos`) — MinHook: el mod por fin ve los dibujos (para quitar los brazos con F6)

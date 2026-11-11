@@ -50,13 +50,13 @@
 ## Estado (11/11/2026)
 - **Estable (main, E16)**: 3D, cabeza 6DOF, cámara nativa, andar hacia donde miras, mandos, sin HUD, apuntar sin tirones. Unos 72 fps = 36 parejas por segundo (cada ojo a 36 Hz). Es jugable.
 - **Pruebas (manos)**: E17d probada (11/11): **arma + brazos siguen al mando derecho** (`mano: ok=1`); los brazos van rígidos y se ven las mangas flotando. Calibrar: mano donde se ve el arma y mantener 1,5 s el clic del stick derecho.
-- **E18 (manos) — FUNCIONA (probada 11/11)**: MinHook (`src/minhook`, BSD-2) engancha por dentro las funciones de dibujo. Windows alterna **dos versiones** de cada Draw* (d3d11.dll+0x153540/0x153610 Draw, +0x1535a0/0x153b70 DrawIndexed, +0x14ebc0/0x1b9740 DrawInstanced, +0x1531b0/0x1a4580 DrawIndexedInstanced): las 8 enganchadas `MH_OK`, `dibujos≈85000/s`. Con F6/Shift+F6 el usuario quitó los brazos enteros: **solo se ve el arma en la mano**. 13 piezas guardadas en `metro_vr_brazos.txt` (la grande `16734/177912` y 12 pequeñas con inicio 849921–855738). Esas piezas salen igual con otras armas (en el log aparecen marcadas `(brazo)` al cambiar de arma).
-- **E19 (manos)**: balas desde el arma hacia su cañón (gancho MinHook en `+0x3D7FF0`; a la bala del jugador se le aplica el mismo G que al arma). Filtro jugador: origen a <1,5 m de la cabeza y dirección a <20° de la cámara. **Pendiente de prueba.**
+- **E18 (manos) — FUNCIONA (probada 11/11)**: MinHook (`src/minhook`, BSD-2) engancha por dentro las funciones de dibujo. Windows alterna **dos versiones** de cada Draw* (d3d11.dll+0x153540/0x153610 Draw, +0x1535a0/0x153b70 DrawIndexed, +0x14ebc0/0x1b9740 DrawInstanced, +0x1531b0/0x1a4580 DrawIndexedInstanced): las 8 enganchadas `MH_OK`, `dibujos≈85000/s`. Con F6/Shift+F6 el usuario quitó los brazos enteros: **solo se ve el arma en la mano**. 14 piezas guardadas en `metro_vr_brazos.txt` (la 14.ª, `252/855750`, un trocito del reloj) (la grande `16734/177912` y 12 pequeñas con inicio 849921–855738). Esas piezas salen igual con otras armas (en el log aparecen marcadas `(brazo)` al cambiar de arma).
+- **E19 (manos)**: balas desde el arma hacia su cañón (gancho MinHook en `+0x3D7FF0`; a la bala del jugador se le aplica el mismo G que al arma). Filtro jugador: origen a <1,5 m de la cabeza y dirección a <20° de la cámara. **FUNCIONA (probada 11/11): las balas salen del cañón** (144 balas del jugador desviadas hasta ~30°). Aún sin probar con enemigos disparando (`otras=0` en esa prueba): comprobar que sus balas no se tocan.
 
 ## Siguientes pasos
 1. Comprobar con varias armas que no queda ningún trozo de brazo (si queda, F6 + Shift+F6 con esa arma).
 2. Pasar también los ganchos del `metro.exe` (cámara, andar) a MinHook.
-3. Probar la E19 (balas). Si no caen donde apunta el cañón: puede que el arma "en reposo" del juego no apunte exactamente al centro (habría que "poner a cero la mira", como D-Rey). Al apuntar (agarre) el juego mueve el arma a la cara: revisar.
+3. Balas (E19): comprobar con enemigos que sus balas no se desvían. Si alguna vez no caen justo donde apunta el cañón: "poner a cero la mira", como D-Rey. Al apuntar (agarre) el juego mueve el arma a la cara: revisar.
 4. Mano izquierda y reloj: copiar la solución de D-Rey (sus `docs/history/31-*.md` y `32-*.md`).
 5. Rendimiento (36 Hz por ojo).
 
