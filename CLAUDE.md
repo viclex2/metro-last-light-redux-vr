@@ -50,10 +50,10 @@
 ## Estado (11/11/2026)
 - **Estable (main, E16)**: 3D, cabeza 6DOF, cámara nativa, andar hacia donde miras, mandos, sin HUD, apuntar sin tirones. Unos 72 fps = 36 parejas por segundo (cada ojo a 36 Hz). Es jugable.
 - **Pruebas (manos)**: E17d probada (11/11): **arma + brazos siguen al mando derecho** (`mano: ok=1`); los brazos van rígidos y se ven las mangas flotando. Calibrar: mano donde se ve el arma y mantener 1,5 s el clic del stick derecho.
-- **E18 (manos)**: MinHook (`src/minhook`, BSD-2) engancha por dentro las funciones de dibujo. Windows alterna **dos versiones** de cada Draw* en la tabla; se engancha cada versión nueva que aparezca (`MINHOOK … version N`). **Pendiente de prueba**: `dibujos=` debe ser > 0 y F6/Shift+F6 deben poder quitar los brazos.
+- **E18 (manos) — FUNCIONA (probada 11/11)**: MinHook (`src/minhook`, BSD-2) engancha por dentro las funciones de dibujo. Windows alterna **dos versiones** de cada Draw* (d3d11.dll+0x153540/0x153610 Draw, +0x1535a0/0x153b70 DrawIndexed, +0x14ebc0/0x1b9740 DrawInstanced, +0x1531b0/0x1a4580 DrawIndexedInstanced): las 8 enganchadas `MH_OK`, `dibujos≈85000/s`. Con F6/Shift+F6 el usuario quitó los brazos enteros: **solo se ve el arma en la mano**. 13 piezas guardadas en `metro_vr_brazos.txt` (la grande `16734/177912` y 12 pequeñas con inicio 849921–855738). Esas piezas salen igual con otras armas (en el log aparecen marcadas `(brazo)` al cambiar de arma).
 
 ## Siguientes pasos
-1. Probar la E18: log `MINHOOK` y `dibujos=`; con F6 recorrer las piezas del arma y guardar los brazos con Shift+F6.
+1. Comprobar con varias armas que no queda ningún trozo de brazo (si queda, F6 + Shift+F6 con esa arma).
 2. Pasar también los ganchos del `metro.exe` (cámara, andar) a MinHook.
 3. Balas hacia donde apunta el arma: `+0x3D7FF0` crea el proyectil (origen en RDX, dirección en R8; llama a `+0x3D6970`). Filtrar solo las del jugador (los NPC usan la misma función).
 4. Mano izquierda y reloj: copiar la solución de D-Rey (sus `docs/history/31-*.md` y `32-*.md`).

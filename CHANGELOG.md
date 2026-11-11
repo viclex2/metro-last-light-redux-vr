@@ -7,6 +7,7 @@ Las versiones van por letra (hito) y número. La más nueva, arriba.
 - El log de la E17d enseña por qué no se veían los dibujos: Windows **alterna dos versiones** de cada función de dibujo (p. ej. Draw `…3540` y `…3610`) y va cambiando la casilla de la tabla entre ellas en cada fotograma.
 - Ahora se usa **MinHook** (licencia BSD, en `src/minhook`): se engancha **por dentro** cada versión de Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced que aparezca (hasta 6 de cada). Ya no se toca la tabla para dibujar.
 - Con esto deberían funcionar **F6** (ocultar la siguiente pieza del arma), **Shift+F6** (esa pieza es un brazo: se guarda) y **Ctrl+F6** (borrar las guardadas), que estaban hechas desde la E17 pero no veían nada.
+- **Prueba (usuario, 11/11): funciona.** Las 8 versiones enganchadas (`MH_OK`), `dibujos≈85000/s`, y con F6/Shift+F6 se quitaron los brazos enteros (13 piezas): **solo queda el arma en la mano**. Las piezas de brazo son las mismas con otras armas.
 - Log: `MINHOOK: arrancado`, `MINHOOK <función> version N = … -> MH_OK`, y cada segundo `dibujos=` (debe ser > 0) y `minhook: versiones=… llamadas=…`. Al cambiar de arma: `PIEZAS del arma (n): …`.
 
 ## E17d (rama `manos`) — La mano, en la cámara con la que de verdad se pinta el arma
