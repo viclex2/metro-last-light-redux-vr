@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20 (rama `manos`) — Girar sobre ti mismo con el stick
+- Usuario: al girar con el mando estando quieto, "giras dando vueltas alrededor de un eje" en vez de sobre ti mismo.
+- Causa: la posición de la cabeza va respecto a un punto fijo de la habitación (donde empezó SteamVR), y al girar con el stick el juego gira el cuerpo sobre ese punto. Si no estás justo encima, la cabeza da vueltas a su alrededor, como en un tiovivo.
+- Ahora, cada vez que cambia el giro del cuerpo se suma justo lo necesario (`g_piv`) para que la cabeza se quede quieta: giras sobre ti. Ese desplazamiento se va gastando mientras andas con el stick (no se nota) y nunca pasa de 1 m.
+- Config `girar_sobre_ti=1` (0 = como antes). Log: `giro: correcciones= desplazado= cabeza=` (cabeza = cuánto estás separado del punto de la habitación).
+
 ## E19 (rama `manos`) — Las balas salen del arma, hacia donde apunta
 - Antes la bala salía de la cabeza hacia donde mirabas, aunque el arma estuviera en otro sitio.
 - Gancho (con MinHook) en `metro.exe+0x3D7FF0`, la función que crea cada bala (RDX = origen, R8 = dirección; idea de D-Rey86 en 2033). Antes de engancharla se comprueba que dentro llame al constructor de la bala (`+0x3D6970`).

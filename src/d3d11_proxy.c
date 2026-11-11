@@ -198,6 +198,7 @@ static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apa
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
 /* (E17) piezas del arma/brazos: censo y ocultar */
+static int cfg_pivote = 1;                   /* (E20) al girar con el stick, girar sobre la cabeza (no alrededor del centro de la habitacion) */
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -356,6 +357,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
     else if (!strcmp(s, "ocultar_brazos"))   cfg_brazos = v;
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
+    else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "detective"))        cfg_detective = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
     else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
@@ -3023,6 +3025,7 @@ static void nat_eye_check(const float *f)
     if (be == g_eye) InterlockedIncrement(&g_nat_eok); else InterlockedIncrement(&g_nat_ebad);
 }
 static void *g_nat_tramp = NULL; static BYTE *g_nat_ret = NULL;
+static float g_piv[3] = { 0, 0, 0 }; static volatile LONG g_piv_n = 0; static int g_nat_reset_piv = 0;   /* (E20) */
 /* (E19) balas hacia donde apunta el arma */
 static float g_bul_C[3][3], g_bul_hc[3]; static volatile ULONGLONG g_bul_t = 0;
 static volatile LONG g_bul_mine = 0, g_bul_other = 0, g_bul_inst = 0;
@@ -3039,7 +3042,7 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
     if (!(h > 1e-5f) || !isfinite(h)) { orig(mgr, pos, a, b, a5, a6); return; }
     float yh = atan2f(g_rt_Rg[0][2], g_rt_Rg[2][2]);
     float ph = asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f));
-    if (!g_nat_was || (GetTickCount64() - g_nat_last) > 500) { g_nat_ref = yh; vr_log("NATIVA: la cabeza entra en la camara del juego"); }
+    if (!g_nat_was || (GetTickCount64() - g_nat_last) > 500) { g_nat_ref = yh; g_nat_reset_piv = 1; vr_log("NATIVA: la cabeza entra en la camara del juego"); }
     g_nat_was = 1;
     float yaw = atan2f(a[0], a[2]) + (yh - g_nat_ref);
     float pitch = clampf(ph, -1.48f, 1.48f);
@@ -3060,12 +3063,42 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
         float hl[3];
         for (int i = 0; i < 3; i++) hl[i] = g_rt_dg[i] + g_rt_Rg[i][0] * ev[0] + g_rt_Rg[i][1] * ev[1] + g_rt_Rg[i][2] * ev[2];
         for (int i = 0; i < 3; i++) off[i] = B[i][0] * hl[0] + B[i][1] * hl[1] + B[i][2] * hl[2];
-        for (int i = 0; i < 3; i++) { fwd[i] = C[i][2]; up[i] = C[i][1]; npos[i] = pos[i] + off[i]; }
+        /* (E20) GIRAR SOBRE TI MISMO. La cabeza (g_rt_dg) va respecto a un punto fijo de la habitacion, y al girar
+         * con el stick el juego gira ese punto: si no estas justo encima, la cabeza daba vueltas alrededor de el
+         * (como en un tiovivo). Al cambiar el giro del cuerpo se suma lo justo (g_piv) para que la cabeza se quede
+         * donde esta. g_piv se va gastando al andar con el stick (no se nota) y nunca pasa de 1 m. */
+        {
+            static float lb = 0, lpos[3]; static int have = 0;
+            float bang = atan2f(a[0], a[2]) - g_nat_ref;
+            if (!cfg_pivote || g_nat_reset_piv) { g_piv[0] = g_piv[1] = g_piv[2] = 0; have = 0; g_nat_reset_piv = 0; }
+            if (cfg_pivote && have) {
+                float d = bang - lb;
+                while (d > 3.14159265f) d -= 6.28318531f;
+                while (d < -3.14159265f) d += 6.28318531f;
+                if (fabsf(d) > 1e-5f) {
+                    float Bo[3][3]; euler_cam(lb, 0.0f, Bo);
+                    for (int i = 0; i < 3; i += 2)   /* solo en horizontal (x, z) */
+                        g_piv[i] += (Bo[i][0] * g_rt_dg[0] + Bo[i][1] * g_rt_dg[1] + Bo[i][2] * g_rt_dg[2])
+                                  - (B[i][0] * g_rt_dg[0] + B[i][1] * g_rt_dg[1] + B[i][2] * g_rt_dg[2]);
+                    InterlockedIncrement(&g_piv_n);
+                }
+                /* al andar (el juego mueve el cuerpo), se gasta g_piv lo mismo que se ha andado */
+                float mx = pos[0] - lpos[0], mz = pos[2] - lpos[2], mv = sqrtf(mx * mx + mz * mz);
+                float pl = sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]);
+                if (pl > 1e-6f && mv > 1e-4f && mv < 1.0f) {
+                    float k = mv * 0.5f >= pl ? 0.0f : (pl - mv * 0.5f) / pl;
+                    g_piv[0] *= k; g_piv[2] *= k; pl *= k;
+                }
+                if (pl > 1.0f) { g_piv[0] /= pl; g_piv[2] /= pl; }
+            }
+            lb = bang; lpos[0] = pos[0]; lpos[1] = pos[1]; lpos[2] = pos[2]; have = 1;
+        }
+        for (int i = 0; i < 3; i++) { fwd[i] = C[i][2]; up[i] = C[i][1]; npos[i] = pos[i] + off[i] + g_piv[i]; }
         {   /* (E19) para las balas: giro de la camara y centro de la cabeza (sin el ojo), en el mundo */
             for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) g_bul_C[i][j] = C[i][j];
             float hc[3];
             for (int i = 0; i < 3; i++) hc[i] = B[i][0] * g_rt_dg[0] + B[i][1] * g_rt_dg[1] + B[i][2] * g_rt_dg[2];
-            for (int i = 0; i < 3; i++) g_bul_hc[i] = pos[i] + hc[i];
+            for (int i = 0; i < 3; i++) g_bul_hc[i] = pos[i] + hc[i] + g_piv[i];
             g_bul_t = GetTickCount64();
         }
         LONG k = InterlockedIncrement(&g_nat_ri) & 7;
@@ -3995,13 +4028,14 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld | balas: jugador=%ld otras=%ld ultima_desviada=%.1fgrados", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld | balas: jugador=%ld otras=%ld ultima_desviada=%.1fgrados | giro: correcciones=%ld desplazado=%.2fm cabeza=%.2f/%.2fm", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_cam, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
                                        (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0),
                                        g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0),
-                                       (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev);
+                                       (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev,
+                                       (long)InterlockedExchange(&g_piv_n, 0), sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]), g_rt_dg[0], g_rt_dg[2]);
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4437,7 +4471,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E19: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
