@@ -218,6 +218,9 @@ static volatile int g_isl_hide = -1;
  * Numeros = orden de la tecla Fin (de mayor a menor): en la prueba de la E29, n.1 mano izq, n.2 mano der, n.3 y n.4 antebrazos */
 static int cfg_manos = 1, cfg_mano_izq = 1, cfg_isla_der = 2, cfg_isla_izq = 1;
 static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
+static int cfg_dos_manos = 1;        /* (E32) 0 = nunca, 1 = automatico (acercar la mano izq al sitio donde el juego la pone en el arma), 2 = siempre */
+static float cfg_dos_manos_cm = 12.0f;   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
+static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
 static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
 static void isl_default_mask(void)
 {
@@ -427,6 +430,8 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "isla_mano_der"))    cfg_isla_der = v;
     else if (!strcmp(s, "isla_mano_izq"))    cfg_isla_izq = v;
     else if (!strcmp(s, "mano_izq_mando"))   cfg_mano_izq_mando = v;   /* (E31) */
+    else if (!strcmp(s, "dos_manos"))        cfg_dos_manos = v;        /* (E32) */
+    else if (!strcmp(s, "dos_manos_cm"))     cfg_dos_manos_cm = fv;    /* (E32) */
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
@@ -3294,6 +3299,25 @@ static void lhand_update(const OvrPose *rp)
         if (!inv4(g_lhand_C0, C0i)) { g_lhand_ok = 0; return; }
         mul4(A, C0i, G);
     }
+    {   /* (E32) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya pone la mano izq en el arma
+         * (guardamanos) con la animacion, asi que basta darle la MISMA G que al arma (g_hand_G). Automatico: el sitio donde
+         * tiene que estar tu mando para agarrar = g_hand_G * C0_izq (donde pusiste el mando al calibrar, movido con el arma). */
+        static int dos = 0;
+        int want = 0; float dist = -1.0f;
+        if (g_hand_ok && !g_lhand_hold) {
+            if (cfg_dos_manos == 2) want = 1;
+            else if (cfg_dos_manos == 1) {
+                float T[4][4]; mul4(g_hand_G, g_lhand_C0, T);
+                float dx = A[0][3] - T[0][3], dy = A[1][3] - T[1][3], dz = A[2][3] - T[2][3];
+                float lim = cfg_dos_manos_cm * 0.01f;
+                dist = sqrtf(dx * dx + dy * dy + dz * dz);
+                want = dos ? (dist < lim * 1.8f) : (dist < lim);
+            }
+        }
+        if (want != dos) { dos = want; vr_log("MANO IZQ: DOS MANOS %s (mando a %.1f cm del sitio de agarre)", dos ? "SI" : "NO", dist * 100.0f); }
+        g_dos_manos = dos;
+        if (dos) memcpy(G, g_hand_G, sizeof(G));
+    }
     memcpy(g_lhand_G, G, sizeof(G));
     g_lhand_ok = 1;
 }
@@ -5787,8 +5811,8 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld",
-                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)InterlockedExchange(&g_lh_n, 0),
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld",
+                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state);
         }
     }
@@ -6051,7 +6075,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E31: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E32: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

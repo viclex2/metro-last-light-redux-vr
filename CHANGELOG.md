@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E32 (rama `manos`) — Agarrar el arma con las dos manos (o no)
+- Prueba de la E31 (usuario, 11/11): la mano izquierda sigue al mando izquierdo y funciona bien; falta calibrarla con la posición real de su mando.
+- Con dos manos, la mano izq **pasa de su mando al arma**: el juego ya la pone en el guardamanos con su animación, así que se le da la **misma G que al arma** (G_izq = G_arma). Al soltar, vuelve a su mando.
+- **Automático** (`dos_manos=1`, por defecto): cuando acercas el mando izq al sitio donde tiene que estar para agarrar el arma (= donde lo pusiste al calibrar la mano izq, movido con el arma) a menos de `dos_manos_cm` (12 cm), se engancha; se suelta al alejarlo a 1,8 veces esa distancia (21,6 cm). No usa ningún botón (todos los del mando izq ya están ocupados).
+- **Para que funcione hay que tener calibrada la mano izq** (mantener el clic del stick izq 1,5 s con el mando donde ves la mano).
+- Config: `dos_manos=0` (nunca), `1` (automático), `2` (siempre con el arma); `dos_manos_cm=12`.
+- Log: `MANO IZQ: DOS MANOS SI/NO (mando a X cm del sitio de agarre)` al cambiar, y `dos_manos=` en el chivato de cada 2 s.
+- No toca la puntería: el arma sigue la mano derecha (apuntar con las dos manos queda para la E33). Sin probar.
+
 ## E31 (rama `manos`) — La mano izquierda en el mando izquierdo
 - Prueba de la E30 (usuario, 11/11): **bien**, se ven solo las manos. En el corte de la muñeca se ve "hueco" (el juego no pinta la cara de dentro de la malla). Agarre por arma con el revólver: "más o menos" bien.
 - La isla de la mano izquierda se pinta con su **propia cámara del arma**: la misma que la del arma, pero movida con el **mando izquierdo** (G_izq = mando_izq_ahora · mando_izq_calibrado⁻¹) en vez del derecho. Se calcula en el Unmap junto a la del arma (también la del ojo derecho con `dos_ojos=2`) y, al pintar la mano izq, se pone en su lugar (VS y PS) y luego se devuelve la del juego.
