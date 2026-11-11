@@ -1,0 +1,42 @@
+# Aplica un parche (git diff) a una rama, hace commit y push, y lanza la Release.
+# Se usa desde el movil: Actions > "Aplicar parche" > Run workflow > pegar el parche en base64.
+name: Aplicar parche
+
+on:
+  workflow_dispatch:
+    inputs:
+      rama:
+        description: Rama donde aplicar el parche (manos o main)
+        default: manos
+      parche_base64:
+        description: Parche en base64, en una sola linea
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rama }}
+
+      - name: Aplicar el parche y subirlo
+        env:
+          P: ${{ inputs.parche_base64 }}
+          RAMA: ${{ inputs.rama }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$P" | tr -d ' \r\n' | base64 -d > /tmp/parche.patch
+          git apply --check /tmp/parche.patch
+          git apply /tmp/parche.patch
+          TAG="$(tr -d ' \r\n' < VERSION)"
+          git config user.name "parche-movil"
+          git config user.email "parche-movil@users.noreply.github.com"
+          git add -A
+          git commit -m "$TAG: parche aplicado desde el movil"
+          git push origin "HEAD:$RAMA"
+          gh workflow run release.yml --ref "$RAMA"
