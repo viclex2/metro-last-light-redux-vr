@@ -61,6 +61,7 @@
 - **E20g probada**: intro y menús bien. Mirar abajo da 24-31 dibujos (igual que la pausa) y quitaba el VR. **E20h**: menú = dibujos ≥20 Y (juego parado: sin llamadas a mover con dt>0 en 200 ms, o no mirando >25° abajo). Log `PANTALLA:` siempre. **Pendiente de prueba** (confirmar que en la pausa se para el jugador).
 - **E20h probada**: mirar abajo OK. Al cambiar de arma se quitaba el VR unos segundos.
 - **E21 (manos)**: mando de Xbox de mentira (MinHook en XInputGetState/GetCapabilities): stick izq analógico en partida; en menús todo como mando de consola. Cambio de arma (Y) no cuenta como menú 3 s. **Pendiente de prueba.** Pendiente también: el usuario nota retraso/rebote al mover la cabeza (el arma no): mirar `STEAMVR:` (reproyección, 36 Hz por ojo).
+- **E21 probada**: controles bien. **E22**: menú SOLO con el juego parado (en la pausa `jugador=0/s`; en el cambio de arma ~70/s). Contra el rebote de cabeza: cada imagen se manda a SteamVR con la postura con la que se montó su cámara (`g_nat_ringpose`, se busca por posición en `nat_eye_check`). **Pendiente de prueba.**
 - **Lista del usuario antes de pasar a estable (11/11)**: (1) menús, intro y opciones como pantalla flotante con fondo negro, y VR solo en partida; (2) que no pete al cambiar opciones gráficas (ESTADO.md problema 4: peta en d3d11.dll+0x17206B tras SetFullscreenState(0); hay `crash_handler` que lo apunta en el log); (3) girar sobre uno mismo (E20).
 
 ## Siguientes pasos

@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E22 (rama `manos`) — Cambio de arma sin salir del VR, y menos "rebote" al mover la cabeza
+- Prueba de la E21 (usuario): **controles bien** (mando de Xbox de mentira: `xinput1_4` y `xinput1_3` enganchadas). Falta: al cambiar de arma a veces aún se quita el VR; y la cabeza va con algo de retraso o "rebote" (el arma no).
+- **Cambio de arma**: log de la E21: en la **pausa de verdad** el jugador deja de actualizarse (`jugador=0/s`); en los "falsos menús" (cambio de arma, 20-38 dibujos) sigue a ~70/s. Ahora **solo cuenta como menú con el juego parado**. Se quita lo de mirar abajo y los 3 s tras cambiar de arma, que ya no hacen falta.
+- **Rebote al mover la cabeza**: el log dice que el juego ya va a ~70 parejas/s (`veces_mostrado=1.00`), así que no es falta de velocidad. Sospecha: el juego monta la cámara un fotograma antes de dibujarla, pero a SteamVR se le mandaba cada imagen con la postura de cabeza más reciente. SteamVR "corregía" la imagen con una postura que no era la suya → rebote al girar. Ahora cada cámara que monta el juego guarda la postura del visor con la que se hizo; cuando esa cámara llega a la gráfica, se apunta, y la imagen se manda a SteamVR **con su postura de verdad**. Config `postura_camara=1` (0 = como antes). Log: `postura: de_su_camara=N (distinta de la ultima M)` en la línea `PANTALLA`; si M es alto, el desfase era real.
+- Arreglo: al volver al VR se "apaga" la pantalla flotante, para que la próxima vez se coloque otra vez delante de donde miras.
+
 ## E21 (rama `manos`) — Mando de Xbox "de mentira": andar analógico y menús con los mandos VR
 - Prueba de la E20h (usuario): casi perfecto. Mirar abajo ya no quita el VR. Pidió: (1) al cambiar de arma se quitaba el VR unos segundos; (2) navegar por los menús solo con los mandos VR; (3) andar despacio o deprisa según cuánto empujes el stick; (4) nota algo de retraso/rebote al mover la cabeza (el arma no).
 - (1) Tras cambiar de arma con el mando (Y), durante 3 s los dibujos en pantalla no cuentan como menú (salvo con el juego parado).

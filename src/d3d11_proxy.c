@@ -216,6 +216,8 @@ static volatile ULONGLONG g_wpn_switch_t = 0;    /* (E21) ultima vez que el mand
 static int g_menu_pad = 0;
 static int cfg_xinput = 1;                   /* (E21) los mandos VR tambien como mando de Xbox */
 static void xinput_hook_try(void);
+static int cfg_pose_cam = 1;                 /* (E22) mandar cada imagen con la postura con la que se monto su camara */
+static int g_cine_on; static void cine_hide(void);
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -376,6 +378,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
+    else if (!strcmp(s, "postura_camara"))   cfg_pose_cam = v;
     else if (!strcmp(s, "pantalla_menus"))   cfg_cine = v;
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
@@ -1976,7 +1979,9 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
              * ademas que el juego este parado (el jugador no se actualiza con el tiempo en marcha) o no mirar abajo. */
             int paused = !g_mov_run || now - g_mov_run > 200;
             int looking_down = g_rt_Rg[1][2] < -0.42f;          /* mas de 25 grados hacia abajo */
-            int menu_ok = paused || (!looking_down && !(g_wpn_switch_t && now - g_wpn_switch_t < 3000));   /* (E21) */
+            /* (E22) log de la E21: en la pausa de verdad el jugador deja de actualizarse (0/s); al cambiar de arma y en
+             * otros "falsos menus" sigue a ~70/s. Asi que solo cuenta como menu con el juego parado. */
+            int menu_ok = paused; (void)looking_down;
             if ((g_bb_last >= cfg_menu_draws && menu_ok) || (menu_t && now - menu_t < 400 && g_bb_last >= cfg_menu_stay)) menu_t = now;
             int menu = menu_t && now - menu_t < 400;
             /* (E20e) el menu principal tiene un escenario 3D con la camara del jugador: no basta con la camara.
@@ -1989,6 +1994,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
             int arms = g_nhide == 0 || (g_arm_seen && now - g_arm_seen < 1000);
             if (cam && now - since > 1000 && (g_mode == 1 || arms)) want = 1;
             else if (!cam && gone && now - gone > 150) want = 0;
+            if (want == 1 && g_cine_on) cine_hide();   /* (E22) */
             if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s (dibujos en pantalla=%ld)", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA / PAUSA -> pantalla flotante", (long)g_bb_last); }
         }
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
@@ -2174,6 +2180,9 @@ static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi 
 /* ------------------------------------------------ visor (OpenVR / SteamVR) */
 /* Solo lo minimo de openvr_capi.h. La DLL de Valve se carga "a mano": si no esta, el resto sigue igual. */
 typedef struct { float m[3][4]; } OvrMat34;
+/* (E22) */
+static OvrMat34 g_eye_rpose[2]; static volatile LONG g_eye_rpose_ok[2] = { 0, 0 };
+static volatile LONG g_pose_same = 0, g_pose_diff = 0;
 typedef struct { OvrMat34 mat; float vel[3]; float avel[3]; int result; unsigned char valid; unsigned char connected; } OvrPose;
 typedef intptr_t (*PFN_VR_InitInternal)(int *err, int type);
 typedef intptr_t (*PFN_VR_GetGenericInterface)(const char *ver, int *err);
@@ -2700,7 +2709,12 @@ static void vr_submit_frame(IDXGISwapChain *sc)
                 if (g_photo & (1 << pe)) { photo_save(dev, ctx, bb, &d, pe); InterlockedAnd(&g_photo, ~(1 << pe)); }
                 if (!stereo) g_photo = 0;
             }
-            if (g_have_frame_pose) g_eye_pose[eye] = g_frame_pose;
+            if (g_have_frame_pose) {
+                if (cfg_pose_cam && g_mode == 1 && InterlockedExchange(&g_eye_rpose_ok[eye], 0)) {   /* (E22) */
+                    g_eye_pose[eye] = g_eye_rpose[eye];
+                    if (memcmp(&g_eye_rpose[eye], &g_frame_pose, sizeof(OvrMat34))) InterlockedIncrement(&g_pose_diff); else InterlockedIncrement(&g_pose_same);
+                } else g_eye_pose[eye] = g_frame_pose;
+            }
             if (!stereo) g_eye_pose[1] = g_eye_pose[0];
             /* textura + postura con la que se dibujo: asi SteamVR recoloca bien cada ojo aunque su imagen sea de antes */
             typedef struct { void *handle; int type; int colorspace; OvrMat34 pose; } OvrTexPose;
@@ -3374,26 +3388,36 @@ static void mandos_step(float dt)
  * sin mover el raton y sin ir un fotograma por detras. La inclinacion de lado (roll), cada ojo y moverse siguen en H. */
 typedef void (*nat_fn_t)(void *, const float *, const float *, const float *, void *, void *);
 static float g_nat_ring[8][3]; static LONG g_nat_ringe[8]; static volatile LONG g_nat_ri = 0;
+static OvrMat34 g_nat_ringpose[8];                 /* (E22) postura del visor con la que se monto cada camara */
 static int nat_full(void) { return cfg_natfull && nat_active(); }
 /* (E10) Cada camara que llega a la grafica: con que ojo la monte? (busco su posicion entre las ultimas que di).
  * Si no coincide con el ojo que se esta dibujando, el juego monta la camara un fotograma antes o despues: me cambio. */
 /* la camara (f) sale de una posicion que dimos nosotros? (y con que ojo) */
+static int g_nat_lastk = -1;
 static int nat_pos_match(const float *f, LONG *eye)
 {
-    float cx = f[15], cyy = f[19], cz = f[23], best = 1e9f; LONG be = -2;
+    float cx = f[15], cyy = f[19], cz = f[23], best = 1e9f; LONG be = -2; int bk = -1;
     for (int k = 0; k < 8; k++) {
         float dx = g_nat_ring[k][0] - cx, dy = g_nat_ring[k][1] - cyy, dz = g_nat_ring[k][2] - cz;
         float d = dx * dx + dy * dy + dz * dz;
-        if (d < best) { best = d; be = g_nat_ringe[k]; }
+        if (d < best) { best = d; be = g_nat_ringe[k]; bk = k; }
     }
     if (eye) *eye = be;
+    g_nat_lastk = bk;
     return best <= 0.003f * 0.003f && be >= 0;
 }
 static void nat_eye_check(const float *f)
 {
-    if (!nat_full() || !g_stereo_on) return;
+    if (!nat_full()) return;
     LONG be;
-    if (!nat_pos_match(f, &be)) { InterlockedIncrement(&g_nat_enone); return; }
+    int ok = nat_pos_match(f, &be);
+    if (ok && g_nat_lastk >= 0 && cfg_pose_cam) {   /* (E22) esta imagen se dibuja con la postura con la que se monto su camara */
+        LONG e = g_stereo_on ? g_eye : 0;
+        g_eye_rpose[e] = g_nat_ringpose[g_nat_lastk]; g_eye_rpose_ok[e] = 1;
+        if (!g_stereo_on) { g_eye_rpose[1] = g_eye_rpose[0]; g_eye_rpose_ok[1] = 1; }
+    }
+    if (!g_stereo_on) return;
+    if (!ok) { InterlockedIncrement(&g_nat_enone); return; }
     if (be == g_eye) InterlockedIncrement(&g_nat_eok); else InterlockedIncrement(&g_nat_ebad);
 }
 static void *g_nat_tramp = NULL; static BYTE *g_nat_ret = NULL;
@@ -3476,6 +3500,7 @@ static void nat_hook(void *mgr, const float *pos, const float *a, const float *b
         }
         LONG k = InterlockedIncrement(&g_nat_ri) & 7;
         g_nat_ring[k][0] = npos[0]; g_nat_ring[k][1] = npos[1]; g_nat_ring[k][2] = npos[2]; g_nat_ringe[k] = e;
+        g_nat_ringpose[k] = g_frame_pose;   /* (E22) la postura de la que salio g_rt_Rg (head_apply con la misma lectura) */
     }
     g_nat_yh = yh;      /* raton_make_H: cuerpo = juego - yh, y la cabeza entera encima => el giro y la inclinacion quedan exactos; H solo lleva ladeo, ojos y posicion */
     g_nat_last = GetTickCount64();
@@ -4416,10 +4441,11 @@ static DWORD WINAPI stats_thread(LPVOID unused)
                                        g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0),
                                        (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev,
                                        (long)InterlockedExchange(&g_piv_n, 0), sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]), g_rt_dg[0], g_rt_dg[2]);
-                vr_log("PANTALLA: dibujos_ultimo=%ld max=%ld modo=%ld cine=%d jugador=%ld/s (con tiempo parado %ld) inclinacion=%.0f | mando_xbox: lecturas=%ld",
+                vr_log("PANTALLA: dibujos_ultimo=%ld max=%ld modo=%ld cine=%d jugador=%ld/s (con tiempo parado %ld) inclinacion=%.0f | mando_xbox: lecturas=%ld | postura: de_su_camara=%ld (distinta de la ultima %ld)",
                        (long)g_bb_last, (long)InterlockedExchange(&g_bb_max, 0), (long)g_mode, g_cine_on,
                        (long)InterlockedExchange(&g_mov_calls, 0), (long)InterlockedExchange(&g_mov_dt0, 0), asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f)) * 57.3f,
-                       (long)InterlockedExchange(&g_x_reads, 0));
+                       (long)InterlockedExchange(&g_x_reads, 0), (long)(g_pose_same + g_pose_diff), (long)g_pose_diff);
+                g_pose_same = g_pose_diff = 0;
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4907,7 +4933,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E21: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E22: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
