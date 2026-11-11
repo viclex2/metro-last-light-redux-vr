@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E26 (rama `manos`) — Borrador también para la cámara
+- Chivato de la E25 (usuario a 1280x720): los fotogramas lentos (9-15 ms) son **casi todo del propio juego**; el mod pone 1-2 ms dentro de ellos; el envío a las gafas, el Present y la espera a SteamVR, ~0. En esa zona el juego iba a 72-138 fotogramas/s (no 144 fijos).
+- Se recorta lo que queda del mod: el cajón de la cámara (352 B, unas 20 veces por fotograma) también usa el borrador en memoria normal, en vez de leerse de la memoria de la gráfica.
+- Lo demás es el juego: para bajar su trabajo, ajustes que cargan el procesador (PhysX avanzado, calidad) — ver respuesta al usuario.
+
 ## E25 (rama `manos`) — Chivato de saltitos
 - Prueba de la E24 (usuario, a 1280x720): casi todo el rato fluido (144 fotogramas = 72 parejas), pero con "saltitos" al girar la cabeza. Log: algunos segundos hay un fotograma suelto de ~20 ms y esa pareja llega tarde; a ratos baja a 40-60 parejas.
 - Nada cambia en el juego. Solo se mide: cada fotograma que tarde más de 9 ms (sin contar la espera a SteamVR) se apunta con su desglose: `SALTITO: fotograma de X ms (ojo N): juego=… (dentro, el mod con los objetos=…) | mod_envio=… present=… espera_steamvr=… resto=…`. Y `saltitos=N/s` en la línea `TIEMPOS`. Con eso se sabe si los picos son del juego, del mod o del envío a las gafas.

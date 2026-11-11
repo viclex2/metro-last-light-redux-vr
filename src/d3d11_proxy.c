@@ -1491,8 +1491,8 @@ static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext *c, ID3D11Resource *
             /* (E24) BORRADOR. Los cajones de los objetos estan en memoria de la grafica, lentisima de LEER (~9 us por
              * objeto). Al juego se le da un borrador en memoria normal; en el Unmap se corrige ahi y se copia de golpe
              * (escribir alli si es rapido). Solo cajones de objeto (208), luces (144, 272), con DISCARD y en modo VR. */
-            if (cfg_shadow && g_mode == 1 && type == D3D11_MAP_WRITE_DISCARD && (bw == 208 || bw == 144 || bw == 272)) {
-                static __thread __attribute__((aligned(64))) float shadow[16][80];
+            if (cfg_shadow && g_mode == 1 && type == D3D11_MAP_WRITE_DISCARD && (bw == 208 || bw == 144 || bw == 272 || bw == CAM_BYTES)) {   /* (E26) + la camara (352) */
+                static __thread __attribute__((aligned(64))) float shadow[16][96];
                 static __thread int si = 0;
                 float *sh = shadow[si]; si = (si + 1) & 15;
                 if (pend_add(r, sh, bw, (UINT)type)) {   /* solo si queda apuntado: si no, nadie copiaria el borrador */
@@ -5016,7 +5016,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E25: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E26: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
