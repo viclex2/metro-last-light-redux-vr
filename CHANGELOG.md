@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E30 (rama `manos`) — Solo las manos (sin antebrazos)
+- Prueba de la E29 (usuario, 11/11): la pieza grande tiene **4 islas**. Con la tecla Fin (de mayor a menor): **n.1 = mano izquierda, n.2 = mano derecha, n.3 = antebrazo izquierdo, n.4 = antebrazo derecho**. Pintada por trozos se ve igual que entera.
+- Ahora, en cuanto se encuentran las islas, de la pieza grande **solo se pintan las dos manos**; los antebrazos y el reloj siguen ocultos. Las manos van con el arma (la izquierda, donde la pone el juego). El siguiente paso es llevar la izquierda al mando izquierdo.
+- Config (`metro_vr_config.txt`, por si hiciera falta): `manos=1` (0 = brazos ocultos como antes), `mano_izq=1` (0 = sin mano izquierda), `isla_mano_der=2`, `isla_mano_izq=1` (número de isla según la tecla Fin).
+- La tecla Fin sigue sirviendo para probar; tras la última pulsación se vuelve a "solo manos". Sin probar.
+
 ## E29 (rama `manos`) — Buscar las "islas" de la pieza de los brazos (manos y antebrazos)
 - Prueba de la E28 (usuario, 11/11): con Inicio, la 1.ª pieza guardada (la grande, `16734/177912`) enseña **todos los brazos con las manos** (menos el reloj); las otras 13 son piececitas del reloj. O sea: **manos y antebrazos van en una sola pieza** (en Metro 2033 las manos iban solas, 12132).
 - Como D-Rey86 (doc 31: partió sus manos en 3 tramos seguidos de la pieza): la primera vez que se pinta la pieza grande en VR, el mod lee sus índices una vez y busca sus **islas** (trozos que no están unidos al resto: cada mano, cada antebrazo…) y los **tramos** seguidos de cada una. Log: `ISLAS: pieza … N islas en M tramos` y una línea por isla (de mayor a menor) con sus tramos `+inicio:cuantos`.

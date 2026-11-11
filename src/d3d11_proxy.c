@@ -214,6 +214,18 @@ static volatile LONG g_isl_state = 0;             /* 0 nada, 1 buffer apuntado, 
 static ID3D11Buffer *g_isl_ib = NULL; static DXGI_FORMAT g_isl_fmt; static UINT g_isl_off = 0, g_isl_ic = 0, g_isl_si = 0;
 static volatile int g_isl_on = 0;                 /* (tecla Fin) 1 = la pieza grande se pinta por trozos, sin la isla g_isl_hide */
 static volatile int g_isl_hide = -1;
+/* (E30) solo las MANOS: de la pieza grande se pintan las islas de las manos y no las de los antebrazos.
+ * Numeros = orden de la tecla Fin (de mayor a menor): en la prueba de la E29, n.1 mano izq, n.2 mano der, n.3 y n.4 antebrazos */
+static int cfg_manos = 1, cfg_mano_izq = 1, cfg_isla_der = 2, cfg_isla_izq = 1;
+static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
+static void isl_default_mask(void)
+{
+    memset(g_isl_show, 0, sizeof(g_isl_show));
+    if (!cfg_manos || g_isl_state != 2) { g_isl_on = 0; return; }
+    if (cfg_isla_der >= 1 && cfg_isla_der <= g_nisl) g_isl_show[g_isl_order[cfg_isla_der - 1]] = 1;
+    if (cfg_mano_izq && cfg_isla_izq >= 1 && cfg_isla_izq <= g_nisl) g_isl_show[g_isl_order[cfg_isla_izq - 1]] = 1;
+    g_isl_on = 1;
+}
 static int wcal_find(UINT ic, UINT si) { for (int k = 0; k < g_nwcal; k++) if (g_wcal[k].ic == ic && g_wcal[k].si == si) return k; return -1; }
 static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apagado, 2 sin funcion, 3 indice, 4 visor no valido, 5 mando no valido */
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
@@ -409,6 +421,10 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ojo_arma"))         cfg_natarma = v;
     else if (!strcmp(s, "hud_vr"))           cfg_hud = v;
     else if (!strcmp(s, "ocultar_brazos"))   cfg_brazos = v;
+    else if (!strcmp(s, "manos"))            cfg_manos = v;      /* (E30) */
+    else if (!strcmp(s, "mano_izq"))         cfg_mano_izq = v;
+    else if (!strcmp(s, "isla_mano_der"))    cfg_isla_der = v;
+    else if (!strcmp(s, "isla_mano_izq"))    cfg_isla_izq = v;
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
@@ -2127,6 +2143,7 @@ static void isl_scan(IDXGISwapChain *sc)
         vr_log("ISLAS:   isla %d (n.%d con la tecla Fin): %u indices, tramos%s", k, o + 1, g_isl_size[k], line);
     }
     fail = 2;
+    vr_log("ISLAS: manos=%d mano_izq=%d -> se ven la isla n.%d (mano der)%s", cfg_manos, cfg_mano_izq, cfg_isla_der, cfg_mano_izq ? " y la de la mano izq" : "");
 out:
     if (par) free(par);
     if (tri) free(tri);
@@ -2136,6 +2153,7 @@ out:
     if (g_isl_ib) { ID3D11Buffer_Release(g_isl_ib); g_isl_ib = NULL; }
     MemoryBarrier();
     g_isl_state = fail;
+    if (fail == 2) isl_default_mask();   /* (E30) a partir de aqui se ven las manos */
 }
 /* (E29) tecla Fin: ensena los brazos quitando UNA isla cada vez (de la mas grande a la mas pequena); tras la ultima, se
  * vuelven a ocultar. Lo que desaparece en cada pulsacion es esa isla. */
@@ -2144,10 +2162,11 @@ static void isl_key(void)
     if (g_isl_state != 2) { vr_log(">>> Fin: aun no hay islas (estado %ld: tiene que verse el arma en VR un momento)", (long)g_isl_state); Beep(400, 150); return; }
     static int o = -1;
     o++;
-    if (o > g_nisl) { o = -1; g_isl_on = 0; g_isl_hide = -1; vr_log(">>> Fin: brazos ocultos otra vez"); Beep(600, 100); return; }
+    if (o > g_nisl) { o = -1; g_isl_hide = -1; isl_default_mask(); vr_log(">>> Fin: vuelta a lo normal (%s)", g_isl_on ? "solo las manos" : "brazos ocultos"); Beep(600, 100); return; }
     g_isl_on = 1;
+    memset(g_isl_show, 1, sizeof(g_isl_show));
     if (o == 0) { g_isl_hide = -1; vr_log(">>> Fin: brazos ENTEROS (pintados por trozos: deben verse igual que siempre)"); }
-    else { g_isl_hide = g_isl_order[o - 1]; vr_log(">>> Fin: brazos SIN la isla n.%d de %d (isla %d, %u indices): lo que desaparece es esa isla",
+    else { g_isl_hide = g_isl_order[o - 1]; g_isl_show[g_isl_hide] = 0; vr_log(">>> Fin: brazos SIN la isla n.%d de %d (isla %d, %u indices): lo que desaparece es esa isla",
                                                   o, g_nisl, g_isl_hide, g_isl_size[g_isl_hide]); }
     Beep(1000, 60);
 }
@@ -5392,7 +5411,7 @@ static int isl_nranges(void) { return g_isl_state == 2 ? g_nisr : 1; }
 static int isl_range(int r, UINT ic, UINT si, UINT *s, UINT *n)
 {
     if (g_isl_state != 2) { *s = si; *n = ic; return 1; }
-    if (g_isr[r].isl == g_isl_hide) return 0;
+    if (!g_isl_show[g_isr[r].isl]) return 0;
     *s = si + g_isr[r].start; *n = g_isr[r].count; return 1;
 }
 /* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos */
@@ -5858,7 +5877,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E29: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E30: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
