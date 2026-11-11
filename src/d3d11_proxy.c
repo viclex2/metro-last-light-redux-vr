@@ -203,6 +203,7 @@ static int cfg_cine = 1;                         /* 1 = fuera de la partida, pan
 static float cfg_cine_dist = 2.0f, cfg_cine_ancho = 2.6f;
 static int cfg_auto = 1;                         /* 1 = el modo VR (F9) se pone y quita solo segun haya partida */
 static int cfg_menu_draws = 12;                  /* (E20d) con tantos dibujos en la imagen final, hay un menu encima */
+static volatile ULONGLONG g_mov_seen = 0;        /* (E20e) ultima vez que el juego movio al jugador (solo existe en la partida) */
 static volatile ULONGLONG g_cam_seen = 0;        /* ultima vez que el juego monto la camara del jugador */
 static int g_auto_manual = 0;                    /* se ha pulsado F9: el automatico se aparta */
 static volatile LONG g_bb_draws = 0; static LONG g_bb_last = 0, g_bb_max = 0;    /* (E20d) dibujos en la imagen final por fotograma */
@@ -1961,10 +1962,12 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
             ULONGLONG now = GetTickCount64();
             if (g_bb_last >= cfg_menu_draws) menu_t = now;       /* (E20d) hay menu encima (pausa, opciones...) */
             int menu = menu_t && now - menu_t < 400;
-            int cam = g_cam_seen && now - g_cam_seen < 250 && !menu;
+            /* (E20e) el menu principal tiene un escenario 3D con la camara del jugador: no basta con la camara.
+             * La funcion que mueve al jugador solo se llama con una partida cargada (y se para en la pausa). */
+            int cam = g_cam_seen && now - g_cam_seen < 250 && g_mov_seen && now - g_mov_seen < 300 && !menu;
             if (cam) { if (!since) since = now; gone = 0; } else { since = 0; if (!gone) gone = now; }
             LONG want = g_mode;
-            if (cam && now - since > 1500) want = 1;            /* la partida lleva 1,5 s cargada */
+            if (cam && now - since > 1000) want = 1;            /* la partida lleva 1 s cargada */
             else if (!cam && gone && now - gone > 150) want = 0;
             if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s (dibujos en pantalla=%ld)", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA / PAUSA -> pantalla flotante", (long)g_bb_last); }
         }
@@ -3459,6 +3462,7 @@ static void mov_hook(void *pl, void *req, int prev, void *acc, float *mv, void *
                      void *a9, void *a10, void *a11, void *a12, void *a13)
 {
     ((mov_fn_t)g_mov_tramp)(pl, req, prev, acc, mv, a6, dt, basis, a9, a10, a11, a12, a13);
+    if ((BYTE *)__builtin_return_address(0) == g_mov_ret) g_mov_seen = GetTickCount64();   /* (E20e) hay jugador: partida */
     if ((BYTE *)__builtin_return_address(0) != g_mov_ret || !mv || !nat_active() || !g_nat_was) return;
     if (!isfinite(mv[0]) || !isfinite(mv[2])) return;
     float d = atan2f(g_rt_Rg[0][2], g_rt_Rg[2][2]) - g_nat_ref;
@@ -4767,7 +4771,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20d: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20e: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

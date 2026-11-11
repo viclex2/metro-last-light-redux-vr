@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20e (rama `manos`) — Modo VR solo con la partida cargada
+- Prueba de la E20d (usuario): **pantalla flotante perfecta**, **gira bien sobre uno mismo** y **ya no peta al cambiar gráficos** (varias veces seguidas). Falla una cosa: el VR se ponía en el menú principal.
+- Log: el menú principal tiene un escenario 3D que usa la cámara del jugador, así que "hay cámara" no basta. Pero la función que **mueve al jugador** (`+0x28D110`, la de andar) no se llama en el menú (`andar=0`) y en la partida va a ~100 veces/s; además se para en la pausa.
+- Ahora el modo VR pide las dos cosas: cámara del jugador **y** jugador moviéndose (en el último 0,3 s), durante 1 s seguido, y sin menú encima. Dibujos medidos en la imagen final: partida 1–5, opciones en partida 13–14, pausa 25–32 (`menu_dibujos=12` vale).
+
 ## E20d (rama `manos`) — Pantalla flotante propia, menú de pausa y la swapchain al cambiar gráficos
 - **Pantalla flotante hecha por el mod** (lo pidió el usuario: nada del overlay de SteamVR). En cada ojo se pinta, sobre negro, un rectángulo con la imagen del juego, colocado en la habitación a 2 m delante (2,6 m de ancho). Shaders propios compilados al arrancar con `d3dcompiler_47.dll` de Windows; 1440×1440 por ojo; se manda con la postura de la cabeza, así la pantalla se queda quieta en el sitio.
 - **Menú de pausa / opciones en la partida**: el log de la E20c mostró que en la pausa el juego sigue montando la cámara, así que el automático no se enteraba. Ahora además se cuentan los dibujos que van a la imagen final en cada fotograma: con el HUD quitado son pocos, y con un menú encima (texto, botones) son muchos. Con `menu_dibujos=12` o más → pantalla flotante. Log: `pantalla: dibujos_ultimo= max= modo= cine=` cada segundo, para ajustar el número.
