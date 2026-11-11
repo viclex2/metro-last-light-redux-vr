@@ -2,6 +2,169 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E31 (rama `manos`) — La mano izquierda en el mando izquierdo
+- Prueba de la E30 (usuario, 11/11): **bien**, se ven solo las manos. En el corte de la muñeca se ve "hueco" (el juego no pinta la cara de dentro de la malla). Agarre por arma con el revólver: "más o menos" bien.
+- La isla de la mano izquierda se pinta con su **propia cámara del arma**: la misma que la del arma, pero movida con el **mando izquierdo** (G_izq = mando_izq_ahora · mando_izq_calibrado⁻¹) en vez del derecho. Se calcula en el Unmap junto a la del arma (también la del ojo derecho con `dos_ojos=2`) y, al pintar la mano izq, se pone en su lugar (VS y PS) y luego se devuelve la del juego.
+- **Calibrar la mano izq**: mantener el **clic del stick izquierdo**. A los 0,3 s la mano izq vuelve a donde la pinta el juego; pon el mando ahí (como si la agarraras) y a los 1,5 s pita y se guarda en `%TEMP%\metro_vr_mano_izq.txt`. (Un toque corto sigue siendo correr.)
+- Config: `mano_izq_mando=1` (0 = la mano izq con el arma, como la E30).
+- Log cada 2 s: `MANO IZQ: mando= calibrada= calibrando= | camaras= dibujos= sin_camara= | islas=`. Si `sin_camara` sube, la mano izq no encuentra su cámara y se pinta con el arma.
+- Pendiente: agarrar el arma con las dos manos; postura fija de la mano izq (ahora sigue la animación del juego: al recargar se mueve); tapar el hueco de la muñeca. Sin probar.
+
+## E30 (rama `manos`) — Solo las manos (sin antebrazos)
+- Prueba de la E29 (usuario, 11/11): la pieza grande tiene **4 islas**. Con la tecla Fin (de mayor a menor): **n.1 = mano izquierda, n.2 = mano derecha, n.3 = antebrazo izquierdo, n.4 = antebrazo derecho**. Pintada por trozos se ve igual que entera.
+- Ahora, en cuanto se encuentran las islas, de la pieza grande **solo se pintan las dos manos**; los antebrazos y el reloj siguen ocultos. Las manos van con el arma (la izquierda, donde la pone el juego). El siguiente paso es llevar la izquierda al mando izquierdo.
+- Config (`metro_vr_config.txt`, por si hiciera falta): `manos=1` (0 = brazos ocultos como antes), `mano_izq=1` (0 = sin mano izquierda), `isla_mano_der=2`, `isla_mano_izq=1` (número de isla según la tecla Fin).
+- La tecla Fin sigue sirviendo para probar; tras la última pulsación se vuelve a "solo manos". Sin probar.
+
+## E29 (rama `manos`) — Buscar las "islas" de la pieza de los brazos (manos y antebrazos)
+- Prueba de la E28 (usuario, 11/11): con Inicio, la 1.ª pieza guardada (la grande, `16734/177912`) enseña **todos los brazos con las manos** (menos el reloj); las otras 13 son piececitas del reloj. O sea: **manos y antebrazos van en una sola pieza** (en Metro 2033 las manos iban solas, 12132).
+- Como D-Rey86 (doc 31: partió sus manos en 3 tramos seguidos de la pieza): la primera vez que se pinta la pieza grande en VR, el mod lee sus índices una vez y busca sus **islas** (trozos que no están unidos al resto: cada mano, cada antebrazo…) y los **tramos** seguidos de cada una. Log: `ISLAS: pieza … N islas en M tramos` y una línea por isla (de mayor a menor) con sus tramos `+inicio:cuantos`.
+- **Tecla Fin**: 1.ª pulsación = brazos enteros pero pintados por trozos (deben verse igual que siempre); cada pulsación siguiente quita UNA isla (de la más grande a la más pequeña): **lo que desaparece es esa isla**. Tras la última, los brazos se ocultan otra vez. Log: `>>> Fin: brazos SIN la isla n.X …`.
+- La pieza grande se sigue ocultando como siempre mientras no se pulse Fin. Sin probar.
+
+## E28 (rama `manos`) — Agarre por arma (como D-Rey86) y buscador de la mano
+- Problema: el arma se pega al mando con la calibración que se hizo con UNA arma. El juego pinta cada arma en un sitio distinto (el revólver, con los brazos más estirados), así que con otra arma la empuñadura no queda en el mando y al girar la muñeca el arma "da vueltas" a su alrededor.
+- Solución de D-Rey86 (su `docs/history/22` y `15`): un **punto de agarre por arma**, calibrado una vez en las gafas para cada arma. Aquí: cada arma recuerda su propia calibración de la mano.
+  - El arma se reconoce por su **pieza más grande que no sea brazo** (como la "pieza cuerpo" de D-Rey). Tiene que salir 15 fotogramas seguidos. Log: `ARMA: ahora <pieza> -> calibracion PROPIA/general`.
+  - Calibrar (como siempre: mano donde ves la empuñadura y mantener 1,5 s el clic del stick derecho) ahora guarda la calibración **para el arma que llevas**. Las armas sin la suya usan la general (la de antes). Log: `MANO: calibrada para el arma …`.
+  - `metro_vr_mano.txt`: las 3 líneas de antes (general) + una línea `arma <pieza> <inicio> <12 números>` por arma. El archivo viejo vale tal cual.
+- **Tecla Inicio**: enseña UNA de las piezas guardadas como brazo (las demás siguen ocultas). Cada pulsación, la siguiente; tras la última, todas ocultas otra vez. No toca el archivo. Sirve para saber **qué pieza es la mano** (siguiente paso). Log: `>>> Inicio: ENSENO la pieza guardada N de 14 (…)`.
+- Sin probar.
+
+## E27 (rama `manos`) — Los dos ojos en el mismo fotograma (opción `dos_ojos`, apagada por defecto)
+- Lo que dice la E25/E26: los tirones son del **propio juego** (el procesador va al límite). Hasta ahora el juego "pensaba" (física, enemigos, cámara…) **dos veces por pareja**, una por ojo. Con esto piensa **una** y solo se repite el pintado, como hace D-Rey86 en su mod de Metro 2033 (idea y datos de sus `docs/history/17-21`; el código es nuestro, no copiado).
+- Cómo va (símil: un PC con dos monitores): cada "pizarra" del juego que depende del ojo (la escena, la profundidad, el brillo, la imagen final…) tiene una **copia** para el ojo derecho. Cada dibujo que va a una pizarra con copia se hace dos veces: en la del juego (ojo izquierdo) y en la copia (ojo derecho), con los cajones de cámara del ojo derecho. Las **sombras** (pizarras cuadradas) se pintan una sola vez y valen para los dos.
+  - El juego monta la cámara en el **centro de la cabeza**; cada ojo se aparta en H (igual que ya se hacía con el arma).
+  - Cajones (cámara 352, objeto 208, luces 144/272): en el Unmap se guarda lo que escribió el juego y se calcula también la versión del ojo derecho, que va a una copia del cajón. En el dibujo del ojo derecho se ponen esas copias en todas las etapas (vértices, píxeles, teselado, geometría).
+  - Borrar, copiar, resolver y mipmaps también se repiten en las copias (MinHook, como los dibujos). Si se copia algo con copia a otra textura, esa también tiene copia (fotos de la escena para el agua/cristal).
+  - Las copias se crean la primera vez que se usan y se sueltan solas cuando el juego suelta la suya (una "etiqueta" pegada a cada objeto del juego).
+  - A las gafas se mandan los dos ojos en cada fotograma, sin parar el reloj.
+- Config `dos_ojos` en `metro_vr_config.txt`:
+  - `0` = como la E26 (por defecto).
+  - `1` = **PRUEBA**: todo lo que depende del ojo se pinta SOLO en las copias y a las gafas se manda la copia (un ojo por fotograma, como siempre). Mismo coste; **la imagen debería ser igual que con 0**. Si se ve igual, las copias funcionan. (En el monitor se puede ver negro o congelado: normal en esta prueba.)
+  - `2` = **de verdad**: los dos ojos en cada fotograma.
+- Log nuevo cada segundo: `DOS OJOS: modo= dibujos_dobles= solo_copia= (en_diferido=) cajones_ojo_der= cambios_de_cajones= lecturas_cambiadas= borrados= copias= calculo_con_copia= | coste_mod= | copias: texturas= (MB) vistas= cajones= fallos=`. Al crear cada copia: `DOS OJOS: copia N: AnchoxAlto formato=…`.
+  - Si `calculo_con_copia` no es 0, el juego usa "compute" en algo del ojo y eso aún no se repite (siguiente versión).
+- Sin probar. Riesgos: objetos que el juego no pinte para el ojo derecho (los quita por estar fuera de su vista), luces o sombras algo corridas en un ojo, o que la gráfica (RX 580) no llegue con el doble de pintado. Mirar `TIEMPOS`, `STEAMVR` y `SALTITO`.
+
+## E26 (rama `manos`) — Borrador también para la cámara
+- Chivato de la E25 (usuario a 1280x720): los fotogramas lentos (9-15 ms) son **casi todo del propio juego**; el mod pone 1-2 ms dentro de ellos; el envío a las gafas, el Present y la espera a SteamVR, ~0. En esa zona el juego iba a 72-138 fotogramas/s (no 144 fijos).
+- Se recorta lo que queda del mod: el cajón de la cámara (352 B, unas 20 veces por fotograma) también usa el borrador en memoria normal, en vez de leerse de la memoria de la gráfica.
+- Lo demás es el juego: para bajar su trabajo, ajustes que cargan el procesador (PhysX avanzado, calidad) — ver respuesta al usuario.
+
+## E25 (rama `manos`) — Chivato de saltitos
+- Prueba de la E24 (usuario, a 1280x720): casi todo el rato fluido (144 fotogramas = 72 parejas), pero con "saltitos" al girar la cabeza. Log: algunos segundos hay un fotograma suelto de ~20 ms y esa pareja llega tarde; a ratos baja a 40-60 parejas.
+- Nada cambia en el juego. Solo se mide: cada fotograma que tarde más de 9 ms (sin contar la espera a SteamVR) se apunta con su desglose: `SALTITO: fotograma de X ms (ojo N): juego=… (dentro, el mod con los objetos=…) | mod_envio=… present=… espera_steamvr=… resto=…`. Y `saltitos=N/s` en la línea `TIEMPOS`. Con eso se sabe si los picos son del juego, del mod o del envío a las gafas.
+
+## E24 (rama `manos`) — Borrador en memoria normal para los cajones de los objetos
+- Prueba de la E23: "va algo diferente, creo". Log: el mod baja de 190-250 a **130-165 ms/s**, y hay segundos con **138-140 fotogramas = ~70 parejas** (antes clavado en 73 = 36 parejas): está rozando el escalón de 72. Pero cada objeto sigue costando **~9,3 us**: el cajón está en memoria de la gráfica, lentísima de LEER aunque se copie directo.
+- Ahora, en modo VR, cuando el juego pide escribir un cajón de objeto (208 B) o de luces (144/272 B) con DISCARD, se le da un **borrador en memoria normal** (por hilo). En el Unmap se corrige en el borrador y se copia de golpe a la gráfica (escribir allí es rápido). Config `borrador=1` (0 = como antes). Log `TIEMPOS: … us cada uno … borradores=N/s`.
+- Al cambiar la **resolución** desde el menú del juego petó con 0xC00000FD (pila agotada) dentro de d3d11/driver; sin rastro de nuestro código en la pila. Pendiente. Mientras, cambiar la resolución con el juego cerrado (user.cfg).
+
+## E23 (rama `manos`) — Fluidez: el mod gastaba ~3 ms por fotograma leyendo "con red"
+- Usuario: la fluidez sigue igual; en el monitor va fluido, en VR no; "le sobran fps pero está capado". `estereo=1` mareó mucho (no repetir).
+- Lo que dicen los números (log de la E22): 73 fotogramas/s = 36 parejas; a 72 Hz cada pareja tiene que salir en 13,9 ms, y cuando se pasa aunque sea un poco SteamVR la deja en la mitad (36). Por eso va "clavado": es un escalón, no un tope (D-Rey llegó a lo mismo: "an exact 72/36 plateau is not proof of a limiter"). Cada fotograma cuesta ~10,4 ms; para 72 parejas hacen falta ~6,9.
+- **El propio mod se comía 190-250 ms de cada segundo** del hilo que dibuja (~3 ms por fotograma), casi todo al cambiar la lente de cada objeto (~25.000/s): leía su cajón con `ReadProcessMemory`, que es una llamada a Windows por objeto. Entre Map y Unmap el puntero es válido seguro, así que ahora se copia directamente (`lectura_rapida=1`; 0 = como antes).
+- Log más fino: `TIEMPOS: … en_el_mod=… (objetos: N/s, ms/s, us cada uno) … esperando_steamvr= fotogramas= imagen=AnchoxAlto`.
+- D-Rey (Metro 2033 VR) pinta los dos ojos en el mismo fotograma (duplica los dibujos); su gran ganancia fue la resolución interna del juego (la calidad "Muy alta" dibuja a 1,41x). Apuntado para más adelante.
+
+## E22 (rama `manos`) — Cambio de arma sin salir del VR, y menos "rebote" al mover la cabeza
+- Prueba de la E21 (usuario): **controles bien** (mando de Xbox de mentira: `xinput1_4` y `xinput1_3` enganchadas). Falta: al cambiar de arma a veces aún se quita el VR; y la cabeza va con algo de retraso o "rebote" (el arma no).
+- **Cambio de arma**: log de la E21: en la **pausa de verdad** el jugador deja de actualizarse (`jugador=0/s`); en los "falsos menús" (cambio de arma, 20-38 dibujos) sigue a ~70/s. Ahora **solo cuenta como menú con el juego parado**. Se quita lo de mirar abajo y los 3 s tras cambiar de arma, que ya no hacen falta.
+- **Rebote al mover la cabeza**: el log dice que el juego ya va a ~70 parejas/s (`veces_mostrado=1.00`), así que no es falta de velocidad. Sospecha: el juego monta la cámara un fotograma antes de dibujarla, pero a SteamVR se le mandaba cada imagen con la postura de cabeza más reciente. SteamVR "corregía" la imagen con una postura que no era la suya → rebote al girar. Ahora cada cámara que monta el juego guarda la postura del visor con la que se hizo; cuando esa cámara llega a la gráfica, se apunta, y la imagen se manda a SteamVR **con su postura de verdad**. Config `postura_camara=1` (0 = como antes). Log: `postura: de_su_camara=N (distinta de la ultima M)` en la línea `PANTALLA`; si M es alto, el desfase era real.
+- Arreglo: al volver al VR se "apaga" la pantalla flotante, para que la próxima vez se coloque otra vez delante de donde miras.
+
+## E21 (rama `manos`) — Mando de Xbox "de mentira": andar analógico y menús con los mandos VR
+- Prueba de la E20h (usuario): casi perfecto. Mirar abajo ya no quita el VR. Pidió: (1) al cambiar de arma se quitaba el VR unos segundos; (2) navegar por los menús solo con los mandos VR; (3) andar despacio o deprisa según cuánto empujes el stick; (4) nota algo de retraso/rebote al mover la cabeza (el arma no).
+- (1) Tras cambiar de arma con el mando (Y), durante 3 s los dibujos en pantalla no cuentan como menú (salvo con el juego parado).
+- (2)(3) **Mando de Xbox de mentira**: MinHook en `XInputGetState`/`XInputGetCapabilities` de las `xinput*.dll` que cargue el juego (log `MANDO XBOX: … enganchada`). El juego ve un mando de Xbox en el puerto 1 (si hay uno de verdad, se suman).
+  - **Partida**: el stick izquierdo va por el mando (analógico: poco = despacio, a tope = rápido); correr = clic del stick izquierdo. Lo demás sigue como teclado/ratón (ya funcionaba).
+  - **Menús y pantalla flotante**: todo como mando de consola. Sticks = navegar (el derecho también hace de cruceta), A o gatillo derecho = aceptar, B derecho = volver, X/Y izquierdos = X/Y, agarres = LB/RB, gatillo izquierdo = Start. Nada de teclado ni ratón.
+  - Config `mando_xbox=1` (0 = como antes, todo teclado/ratón). Log: `mando_xbox: lecturas=` en la línea `PANTALLA` (si es 0, el juego no lee el mando).
+- (4) Pendiente de mirar en el log (no se pudo leer en esta sesión).
+
+## E20h (rama `manos`) — Mirar hacia abajo sin que se quite el VR
+- Prueba de la E20g (usuario): "muchísimo mejor" (intro y menús bien). Falta: al mirar hacia abajo se quita el VR.
+- Log: mirando abajo salen **24-31 dibujos** en la imagen final, lo mismo que el menú de pausa (24-32): contar dibujos no basta.
+- Ahora, para contar como menú hacen falta los dibujos **y** además: o el juego está **parado** (el jugador no se actualiza con el tiempo en marcha: `dt > 0` en la función de mover, que se para en la pausa), o no estás mirando abajo (más de 25°).
+- Log nuevo cada segundo (también con la pantalla flotante): `PANTALLA: dibujos_ultimo= max= modo= cine= jugador=N/s (con tiempo parado M) inclinacion=`. Servirá para confirmar que en la pausa el jugador se para.
+
+## E20g (rama `manos`) — Arreglo de la E20f antes de probarla
+- En la E20f los brazos solo se miraban con el VR ya puesto, así que la condición "ver los brazos para entrar en VR" no se cumpliría nunca. Ahora, fuera del VR, se mira si se pintan los brazos guardados (sin ocultar nada). El resto, igual que la E20f.
+
+## E20f (rama `manos`) — La intro ya no es "partida", y mirar abajo/derecha ya no quita el VR
+- Prueba de la E20e (usuario): el menú principal y la pausa (Esc) van bien, pero: (1) en la intro (el tren con los logos hasta el vagón del menú) se ponía en VR, porque tiene escenario 3D, cámara y **movimiento**; (2) jugando, al mirar mucho hacia abajo o a la derecha se quitaba el VR.
+- (1) Log: en la intro los **brazos de Artyom** (las piezas guardadas con F6) no se pintan nunca (`ocultas=0`); jugando, unas 900/s. Ahora, para **entrar** en VR hace falta haber visto los brazos en el último segundo (para seguir en VR no). Si no hay brazos guardados, no se pide.
+- (2) Log: al mirar a ciertos sitios los dibujos en la imagen final suben a ~14-15 y el límite era 12. La pausa da 25+ y el submenú de opciones 13-14. Ahora se **entra** en menú con 20 (`menu_dibujos=20`) y se **sigue** en él mientras haya 10 o más (`menu_dibujos_seguir=10`).
+
+## E20e (rama `manos`) — Modo VR solo con la partida cargada
+- Prueba de la E20d (usuario): **pantalla flotante perfecta**, **gira bien sobre uno mismo** y **ya no peta al cambiar gráficos** (varias veces seguidas). Falla una cosa: el VR se ponía en el menú principal.
+- Log: el menú principal tiene un escenario 3D que usa la cámara del jugador, así que "hay cámara" no basta. Pero la función que **mueve al jugador** (`+0x28D110`, la de andar) no se llama en el menú (`andar=0`) y en la partida va a ~100 veces/s; además se para en la pausa.
+- Ahora el modo VR pide las dos cosas: cámara del jugador **y** jugador moviéndose (en el último 0,3 s), durante 1 s seguido, y sin menú encima. Dibujos medidos en la imagen final: partida 1–5, opciones en partida 13–14, pausa 25–32 (`menu_dibujos=12` vale).
+
+## E20d (rama `manos`) — Pantalla flotante propia, menú de pausa y la swapchain al cambiar gráficos
+- **Pantalla flotante hecha por el mod** (lo pidió el usuario: nada del overlay de SteamVR). En cada ojo se pinta, sobre negro, un rectángulo con la imagen del juego, colocado en la habitación a 2 m delante (2,6 m de ancho). Shaders propios compilados al arrancar con `d3dcompiler_47.dll` de Windows; 1440×1440 por ojo; se manda con la postura de la cabeza, así la pantalla se queda quieta en el sitio.
+- **Menú de pausa / opciones en la partida**: el log de la E20c mostró que en la pausa el juego sigue montando la cámara, así que el automático no se enteraba. Ahora además se cuentan los dibujos que van a la imagen final en cada fotograma: con el HUD quitado son pocos, y con un menú encima (texto, botones) son muchos. Con `menu_dibujos=12` o más → pantalla flotante. Log: `pantalla: dibujos_ultimo= max= modo= cine=` cada segundo, para ajustar el número.
+- **Cierre al cambiar gráficos (2.º intento)**: log de la E20c: cada cambio crea una swapchain nueva, y en el segundo cambio el overlay de Steam (`gameoverlayrenderer64.dll`, cargado aunque esté desactivado) leía la **primera swapchain, ya borrada**, dentro del Present. La tabla propia de la swapchain era una foto del momento; si luego alguien cambia la tabla original, no se enteraba. Ahora se sincroniza con la original en cada Present (log `SWAPCHAIN: casilla N … la copio`).
+
+## E20c (rama `manos`) — Cierre al cambiar las opciones gráficas: freno y chivato
+- Log del usuario (con la E19), al aplicar opciones gráficas desde el menú: `ERROR 0xC0000005 en d3d11.dll+0x151A5A`, lectura de `0xEC`. Con la `d3d11.dll` de su Windows: es **UpdateSubresource** ("rellena esta textura") de la tabla de funciones "versión 1" del contexto (la misma que alterna con la 2, como los Draw), y la textura que le pasan es **nula**: el juego intenta rellenar una textura cuya creación falló antes.
+- El contador `UpdSub` no subió: esa llamada no pasaba por nuestro gancho, porque Windows también cambia esa casilla de la tabla.
+- Ahora **UpdateSubresource va por MinHook** (todas sus versiones, como los Draw) y, si llega sin textura, **se salta** (log `FRENO: …`) en vez de petar.
+- **Chivato** (MinHook en `CreateBuffer` y `CreateTexture2D` del dispositivo): si el juego no consigue crear algo, el log dice qué, el error y si la gráfica se ha "caído" (`CHIVATO: … FALLO hr=… motivo=…`). También `PRESENT FALLO` si falla el Present. Esto dirá la causa de verdad.
+- Ojo: además del menú de antes, la nota vieja (ESTADO.md, problema 4) decía que pasaba también con `visor_imagen=0`.
+
+## E20b (rama `manos`) — Menús, intro y vídeos en una pantalla flotante; VR solo en la partida
+- Lo pidió el usuario: fuera de la partida (menús, elegir partida, intro, vídeos, pantallas de carga, el menú de opciones…) la imagen del juego se ve en una **pantalla flotante** delante de ti, con todo lo demás en **negro**. Al cargar la partida del todo, se pone sola en VR.
+- **Automático**: el mod mira si el juego está montando la cámara del jugador (el gancho de la cámara nativa, `+0x69B900`). Si la monta durante 1,5 s seguidos → modo VR (lo que antes se hacía con F9). Si deja de montarla → pantalla flotante. Pulsar F9 pasa a manual hasta reiniciar el juego.
+- La pantalla es un *overlay* de SteamVR (`IVROverlay_028`): 2,6 m de ancho a 2 m delante de donde miras, recta. Se coloca cada vez que se entra en un menú. Los ojos reciben una imagen negra.
+- Config: `pantalla_menus=1`, `pantalla_distancia=2.0`, `pantalla_ancho=2.6`, `vr_automatico=1`. Log: `CINE: …` y `>>> AUTO: …`.
+- **Por probar**: si en el menú de pausa el juego sigue montando la cámara, el automático no se enterará (se vería como antes); el log lo dirá.
+
+## E20 (rama `manos`) — Girar sobre ti mismo con el stick
+- Usuario: al girar con el mando estando quieto, "giras dando vueltas alrededor de un eje" en vez de sobre ti mismo.
+- Causa: la posición de la cabeza va respecto a un punto fijo de la habitación (donde empezó SteamVR), y al girar con el stick el juego gira el cuerpo sobre ese punto. Si no estás justo encima, la cabeza da vueltas a su alrededor, como en un tiovivo.
+- Ahora, cada vez que cambia el giro del cuerpo se suma justo lo necesario (`g_piv`) para que la cabeza se quede quieta: giras sobre ti. Ese desplazamiento se va gastando mientras andas con el stick (no se nota) y nunca pasa de 1 m.
+- Config `girar_sobre_ti=1` (0 = como antes). Log: `giro: correcciones= desplazado= cabeza=` (cabeza = cuánto estás separado del punto de la habitación).
+
+## E19 (rama `manos`) — Las balas salen del arma, hacia donde apunta
+- Antes la bala salía de la cabeza hacia donde mirabas, aunque el arma estuviera en otro sitio.
+- Gancho (con MinHook) en `metro.exe+0x3D7FF0`, la función que crea cada bala (RDX = origen, R8 = dirección; idea de D-Rey86 en 2033). Antes de engancharla se comprueba que dentro llame al constructor de la bala (`+0x3D6970`).
+- A la bala del jugador se le aplica **el mismo movimiento que al arma que ves** (mano ahora × mano calibrada⁻¹, en los ejes de la cámara): sale del arma y va hacia donde apunta su cañón. Se conserva la dispersión del juego. Si la mano está donde se calibró, la bala no cambia.
+- Bala del jugador = sale a menos de 1,5 m de tu cabeza y va a menos de 20° de donde mira la cámara. Las de los enemigos no se tocan.
+- **Prueba (usuario, 11/11): funciona, las balas salen del cañón.** Log: gancho `MH_OK`, 144 balas del jugador desviadas (hasta ~30°). Falta ver con enemigos disparando (`otras=0` en la prueba). Se guardó una pieza más como brazo (`252/855750`, un trocito del reloj): 14 en total.
+- Config `balas_mano=1` (0 = como antes). Log: `BALAS: gancho en metro.exe+0x3D7FF0 … -> MH_OK`, las primeras `BALA: del jugador. origen … -> … | direccion … -> … (N grados)` y cada segundo `balas: jugador= otras= ultima_desviada=`.
+
+## E18 (rama `manos`) — MinHook: el mod por fin ve los dibujos (para quitar los brazos con F6)
+- Prueba de la E17d (vídeo + log): **el arma y los brazos siguen al mando derecho** (`mano: ok=1 calibrada=1`). Los brazos van rígidos pegados al arma y se ven las mangas flotando: hay que quitarlos.
+- El log de la E17d enseña por qué no se veían los dibujos: Windows **alterna dos versiones** de cada función de dibujo (p. ej. Draw `…3540` y `…3610`) y va cambiando la casilla de la tabla entre ellas en cada fotograma.
+- Ahora se usa **MinHook** (licencia BSD, en `src/minhook`): se engancha **por dentro** cada versión de Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced que aparezca (hasta 6 de cada). Ya no se toca la tabla para dibujar.
+- Con esto deberían funcionar **F6** (ocultar la siguiente pieza del arma), **Shift+F6** (esa pieza es un brazo: se guarda) y **Ctrl+F6** (borrar las guardadas), que estaban hechas desde la E17 pero no veían nada.
+- **Prueba (usuario, 11/11): funciona.** Las 8 versiones enganchadas (`MH_OK`), `dibujos≈85000/s`, y con F6/Shift+F6 se quitaron los brazos enteros (13 piezas): **solo queda el arma en la mano**. Las piezas de brazo son las mismas con otras armas.
+- Log: `MINHOOK: arrancado`, `MINHOOK <función> version N = … -> MH_OK`, y cada segundo `dibujos=` (debe ser > 0) y `minhook: versiones=… llamadas=…`. Al cambiar de arma: `PIEZAS del arma (n): …`.
+
+## E17d (rama `manos`) — La mano, en la cámara con la que de verdad se pinta el arma
+- Log de la E17c: los desvíos de "pinta esto" los vuelve a quitar Windows en **cada** fotograma (288 veces/s), así que el mod sigue sin ver dibujos. Por esa vía no se puede. Se apuntan los primeros bytes de las funciones reales de dibujo para engancharlas por dentro en otra versión (lo que se necesita para quitar brazos).
+- Descubierto en el log: `arma: piezas_corregidas` era justo el doble que `mano: piezas`. La mitad eran cajones del cajón 0 (que la E15 movía, pero no son el arma que ves) y la otra mitad la **cámara del arma**, que es con la que se pinta el arma visible (la que arregló el 3D en la E10c). Ahora la mano se aplica también a esa cámara. Log: `mano: camara_arma=…`.
+
+## E17c (rama `manos`) — El mod no veía ningún dibujo
+- Log de la E17b: `dibujos=0`. El mod no ve ni una orden de "pinta esto" del juego (sí ve los datos, por eso la cámara y el 3D funcionan). Por eso F6 no encuentra piezas y el HUD de la E11 no hizo nada.
+- Sospecha: Windows cambia por dentro la "centralita" de esas órdenes después de que pusimos el desvío, o el juego pinta con otro contexto. Ahora, en cada fotograma, se comprueba y se vuelve a poner, y se usa el contexto que de verdad usa el juego. Log: `VTABLE: …` y `desvios_repuestos=`.
+
+## E17b (rama `manos`) — Arreglos del arma en la mano y de F6
+- Log de la E17: el mando derecho "desaparecía" la mitad del tiempo (`porque=3`: SteamVR decía que no sabía cuál era el derecho), así que el arma iba a la mano y volvía a la cara muchas veces por segundo. Ahora se busca el mando derecho entre los mandos y se recuerda el último bueno. Lo mismo para los botones.
+- F6 no encontraba ninguna pieza (`pintadas=0`): el juego pinta también desde otros hilos (listas "diferidas") y solo se miraba uno. Ahora se miran todos. Esto explica también por qué el HUD de la E11 no encontraba nada.
+- Log: `dibujos=` (cuántos dibujos ve el mod por segundo).
+
+## E17 (rama `manos`) — Solo el arma en el mando: quitar los brazos
+- Objetivo: solo el arma, sin brazos, en el mando derecho, y poder verla por todos lados.
+- **Quitar brazos** (idea de D-Rey86 en 2033, que no pinta las "mangas"): el mod apunta qué piezas se pintan con la lente del arma (cada una por su número de triángulos y dónde empieza). Las que se guardan como "brazos" no se pintan.
+  - **F6**: oculta la siguiente pieza, para ver cuál es (pitido).
+  - **Shift+F6**: "la que acabo de ocultar es un brazo": se guarda en `%TEMP%\metro_vr_brazos.txt` y ya no se pinta nunca.
+  - **Ctrl+F6**: borra todas las guardadas. (F6 antes era "luces", una prueba antigua.)
+  - Config `ocultar_brazos=1`. Log: `PIEZAS del arma (n): 1:triangulos/inicio …` cuando cambian, y `brazos: ocultas= pintadas= guardadas=`.
+- **Arma en la mano:** la E15 no hizo nada visible. Ahora el log dice por qué: `mano: … ok= porque= pos=` (1 apagado, 2 falta funcion de SteamVR, 3 sin mando derecho, 4 visor no valido, 5 mando no valido) y dónde está la mano.
+
 ## E16 — Optimización: tirones al apuntar y trabajo de sobra
 - **Al apuntar** el juego hace zoom y la lente principal se estrecha deprisa. El mod solo aceptaba cambios del 5 %: durante el zoom tomaba la cámara principal por "la del arma" (0,7 s cada vez) y todo se descolocaba a tirones; al soltar se arreglaba. Ahora sigue el zoom (hasta 15 % por paso, y se recupera en 0,15 s). El arma se reconoce comparando con la lente principal del momento.
 - **Trabajo de sobra quitado:** el "detective de lentes" (una herramienta de las pruebas antiguas) seguía leyendo entero cada cajón que el juego escribía, en cada dibujo, para siempre. Y la búsqueda de la cámara miraba también los cajones de huesos (3856 bytes) de cada personaje. Apagado lo primero (`detective=1` lo enciende) y lo segundo solo mira el cajón de la cámara.
