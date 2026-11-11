@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20d (rama `manos`) — Pantalla flotante propia, menú de pausa y la swapchain al cambiar gráficos
+- **Pantalla flotante hecha por el mod** (lo pidió el usuario: nada del overlay de SteamVR). En cada ojo se pinta, sobre negro, un rectángulo con la imagen del juego, colocado en la habitación a 2 m delante (2,6 m de ancho). Shaders propios compilados al arrancar con `d3dcompiler_47.dll` de Windows; 1440×1440 por ojo; se manda con la postura de la cabeza, así la pantalla se queda quieta en el sitio.
+- **Menú de pausa / opciones en la partida**: el log de la E20c mostró que en la pausa el juego sigue montando la cámara, así que el automático no se enteraba. Ahora además se cuentan los dibujos que van a la imagen final en cada fotograma: con el HUD quitado son pocos, y con un menú encima (texto, botones) son muchos. Con `menu_dibujos=12` o más → pantalla flotante. Log: `pantalla: dibujos_ultimo= max= modo= cine=` cada segundo, para ajustar el número.
+- **Cierre al cambiar gráficos (2.º intento)**: log de la E20c: cada cambio crea una swapchain nueva, y en el segundo cambio el overlay de Steam (`gameoverlayrenderer64.dll`, cargado aunque esté desactivado) leía la **primera swapchain, ya borrada**, dentro del Present. La tabla propia de la swapchain era una foto del momento; si luego alguien cambia la tabla original, no se enteraba. Ahora se sincroniza con la original en cada Present (log `SWAPCHAIN: casilla N … la copio`).
+
 ## E20c (rama `manos`) — Cierre al cambiar las opciones gráficas: freno y chivato
 - Log del usuario (con la E19), al aplicar opciones gráficas desde el menú: `ERROR 0xC0000005 en d3d11.dll+0x151A5A`, lectura de `0xEC`. Con la `d3d11.dll` de su Windows: es **UpdateSubresource** ("rellena esta textura") de la tabla de funciones "versión 1" del contexto (la misma que alterna con la 2, como los Draw), y la textura que le pasan es **nula**: el juego intenta rellenar una textura cuya creación falló antes.
 - El contador `UpdSub` no subió: esa llamada no pasaba por nuestro gancho, porque Windows también cambia esa casilla de la tabla.

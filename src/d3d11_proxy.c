@@ -202,8 +202,11 @@ static int cfg_pivote = 1;                   /* (E20) al girar con el stick, gir
 static int cfg_cine = 1;                         /* 1 = fuera de la partida, pantalla flotante */
 static float cfg_cine_dist = 2.0f, cfg_cine_ancho = 2.6f;
 static int cfg_auto = 1;                         /* 1 = el modo VR (F9) se pone y quita solo segun haya partida */
+static int cfg_menu_draws = 12;                  /* (E20d) con tantos dibujos en la imagen final, hay un menu encima */
 static volatile ULONGLONG g_cam_seen = 0;        /* ultima vez que el juego monto la camara del jugador */
 static int g_auto_manual = 0;                    /* se ha pulsado F9: el automatico se aparta */
+static volatile LONG g_bb_draws = 0; static LONG g_bb_last = 0, g_bb_max = 0;    /* (E20d) dibujos en la imagen final por fotograma */
+static void sc_vt_sync(void);
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -367,6 +370,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
     else if (!strcmp(s, "vr_automatico"))    cfg_auto = v;
+    else if (!strcmp(s, "menu_dibujos"))     cfg_menu_draws = iv;
     else if (!strcmp(s, "detective"))        cfg_detective = v;
     else if (!strcmp(s, "mandos"))           cfg_mandos = v;
     else if (!strcmp(s, "arma_en_mano"))     cfg_mano = v;
@@ -1906,6 +1910,7 @@ static int vr_active(void);
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT flags)
 {
     /* si nos vuelven a llamar desde dentro (bucle con la overlay), vamos directos al de fabrica */
+    if (!t_in_present) sc_vt_sync();   /* (E20d) */
     PFN_Present next = g_orig_Present;
     if (t_in_present) return next(sc, sync, flags);
     t_in_present = 1;
@@ -1947,15 +1952,21 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         g_hud_draws = 0;
         draw_hooks_check();
         pieces_frame();
+        {   /* (E20d) dibujos en la imagen final en este fotograma: en los menus (texto, botones) son muchos */
+            g_bb_last = InterlockedExchange(&g_bb_draws, 0);
+            if (g_bb_last > g_bb_max) g_bb_max = g_bb_last;
+        }
         if (cfg_auto && !g_auto_manual && g_nat_installed == 1) {   /* (E20) modo VR solo con partida */
-            static ULONGLONG since = 0, gone = 0;
+            static ULONGLONG since = 0, gone = 0, menu_t = 0;
             ULONGLONG now = GetTickCount64();
-            int cam = g_cam_seen && now - g_cam_seen < 250;
+            if (g_bb_last >= cfg_menu_draws) menu_t = now;       /* (E20d) hay menu encima (pausa, opciones...) */
+            int menu = menu_t && now - menu_t < 400;
+            int cam = g_cam_seen && now - g_cam_seen < 250 && !menu;
             if (cam) { if (!since) since = now; gone = 0; } else { since = 0; if (!gone) gone = now; }
             LONG want = g_mode;
             if (cam && now - since > 1500) want = 1;            /* la partida lleva 1,5 s cargada */
             else if (!cam && gone && now - gone > 150) want = 0;
-            if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA -> pantalla flotante"); }
+            if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s (dibujos en pantalla=%ld)", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA / PAUSA -> pantalla flotante", (long)g_bb_last); }
         }
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
         {   /* (E13) mandos */
@@ -2029,6 +2040,21 @@ static HRESULT STDMETHODCALLTYPE hk_SetFS(IDXGISwapChain *sc, BOOL fs, IDXGIOutp
 }
 static IDXGISwapChain * volatile g_game_sc = NULL;
 
+/* (E20d) la tabla propia se copio en un momento; si despues alguien (el overlay de Steam) cambia la tabla original,
+ * hay que copiarlo, o ese alguien no se entera de cosas (p. ej. que el juego tira la swapchain) y peta. */
+static void **g_sc_src = NULL; static int g_sc_nv = 0;
+static void sc_vt_sync(void)
+{
+    void **src = g_sc_src; if (!src) return;
+    static int said = 0;
+    for (int i = 0; i < g_sc_nv; i++) {
+        void *v = src[i];
+        if (i == 8)  { if (v != (void *)hk_Present && v != (void *)g_orig_Present) { if (said++ < 5) vr_log("SWAPCHAIN: el Present original ha cambiado (%p)", v); g_orig_Present = (PFN_Present)v; } continue; }
+        if (i == 10) { if (v != (void *)hk_SetFS) g_orig_SetFS = (PFN_SetFS)v; continue; }
+        if (i == 13) { if (v != (void *)hk_Resize) g_orig_Resize = (PFN_Resize)v; continue; }
+        if (g_sc_vt[i] != v) { if (said++ < 5) vr_log("SWAPCHAIN: casilla %d de la tabla original ha cambiado: la copio", i); g_sc_vt[i] = v; }
+    }
+}
 static void give_private_vtable(IDXGISwapChain *sc)
 {
     void **cur = *(void ***)sc;
@@ -2043,6 +2069,7 @@ static void give_private_vtable(IDXGISwapChain *sc)
         }
         if (n > 8) {
             g_orig_Present = (PFN_Present)g_sc_vt[8];        /* lo que el juego iba a llamar */
+            g_sc_src = cur; g_sc_nv = n;
             g_sc_vt[8] = (void *)hk_Present;
             g_orig_SetFS  = (PFN_SetFS)g_sc_vt[10];  g_sc_vt[10] = (void *)hk_SetFS;
             g_orig_Resize = (PFN_Resize)g_sc_vt[13]; g_sc_vt[13] = (void *)hk_Resize;
@@ -2167,6 +2194,7 @@ static void **g_ovl = NULL;                      /* tabla de IVROverlay_028 */
 static uint64_t g_ovl_h = 0;
 static int g_ovl_state = 0;                      /* 0 sin crear, 1 listo, -1 no se puede */
 static int g_cine_on = 0;                        /* la pantalla flotante se esta viendo ahora */
+static float g_eraw[2][4]; static OvrMat34 g_e2h[2]; static int g_eraw_ok = 0;   /* (E20d) lente cruda y ojo->cabeza de cada ojo */
 static ID3D11Texture2D *g_black = NULL;          /* imagen negra para los ojos (en nuestro dispositivo) */
 static double g_ft_gpu = 0, g_ft_tot = 0, g_ft_int = 0, g_ft_idle = 0, g_ft_comp = 0;
 static long g_ft_n = 0, g_ft_drop = 0, g_ft_mis = 0, g_ft_reproj = 0, g_ft_pres = 0;
@@ -2235,6 +2263,7 @@ static void head_try_init(void)
                 typedef OvrMat34 (*PFN_EyeToHead)(int eye);
                 for (int k = 0; k < 2; k++) {
                     OvrMat34 m = ((PFN_EyeToHead)tbl[5])(k);
+                    g_e2h[k] = m;   /* (E20d) para la pantalla flotante propia */
                     g_eyepos[k][0] = m.m[0][3]; g_eyepos[k][1] = m.m[1][3]; g_eyepos[k][2] = -m.m[2][3];  /* OpenVR -> juego: Z al reves */
                 }
                 vr_log("VISOR: ojos en (%.4f, %.4f, %.4f) y (%.4f, %.4f, %.4f) -> separacion %.1f mm",
@@ -2245,6 +2274,7 @@ static void head_try_init(void)
                 typedef void (*PFN_GetProjRaw)(int eye, float *l, float *r, float *t, float *b);
                 float e[2][4];
                 for (int k = 0; k < 2; k++) ((PFN_GetProjRaw)tbl[2])(k, &e[k][0], &e[k][1], &e[k][2], &e[k][3]);
+                memcpy(g_eraw, e, sizeof(e)); g_eraw_ok = 1;   /* (E20d) */
                 /* union de los dos ojos. En OpenVR "bottom" es el borde de ARRIBA y "top" el de abajo (van al reves) */
                 float L = fminf(e[0][0], e[1][0]), R = fmaxf(e[0][1], e[1][1]);
                 float UP = fmaxf(e[0][3], e[1][3]), DN = fminf(e[0][2], e[1][2]);
@@ -2292,7 +2322,7 @@ static void head_try_init(void)
             }
         }
         if (!p_Submit) vr_log("VISOR: no hay compositor; solo se leera el visor");
-        if (p_Submit && cfg_cine) {   /* (E20) */
+        if (0) {   /* (E20) overlay de SteamVR: quitado en la E20d (pantalla propia) */
             int err = 0;
             void **tbl = (void **)p_VR_GetIf("FnTable:IVROverlay_028", &err);
             if (tbl && err == 0) { g_ovl = tbl; vr_log("CINE: overlay listo (IVROverlay_028)"); }
@@ -2418,7 +2448,6 @@ static volatile LONG g_vr_submits = 0, g_vr_errs = 0;
 static void vr_drop_copy(void)
 {
     if (g_vr_tex) { ID3D11Texture2D_Release(g_vr_tex); g_vr_tex = NULL; }
-    if (g_cine_on && g_ovl_state == 1) ((PFN_OvlH)g_ovl[61])(g_ovl_h);   /* (E20) ClearOverlayTexture antes de soltarla */
     if (g_vr_own) { ID3D11Texture2D_Release(g_vr_own); g_vr_own = NULL; }
     if (g_vr_tex2) { ID3D11Texture2D_Release(g_vr_tex2); g_vr_tex2 = NULL; }
     if (g_vr_own2) { ID3D11Texture2D_Release(g_vr_own2); g_vr_own2 = NULL; }
@@ -2434,9 +2463,9 @@ typedef int (*PFN_OvlFlag)(uint64_t h, int flag, unsigned char on);
 typedef int (*PFN_OvlF)(uint64_t h, float v);
 typedef int (*PFN_OvlXform)(uint64_t h, int origin, const OvrMat34 *m);
 typedef int (*PFN_OvlTex)(uint64_t h, const OvrTexture *t);
+static OvrMat34 g_cine_M;
 static void cine_hide(void)
 {
-    if (g_cine_on && g_ovl_state == 1) ((PFN_OvlH)g_ovl[44])(g_ovl_h);   /* HideOverlay */
     if (g_cine_on) vr_log("CINE: fuera (vuelve el VR)");
     g_cine_on = 0;
 }
@@ -2455,41 +2484,141 @@ static void cine_place(void)
     M.m[0][3] = H->m[0][3] + fx * cfg_cine_dist;
     M.m[1][3] = H->m[1][3];
     M.m[2][3] = H->m[2][3] + fz * cfg_cine_dist;
-    int origin = p_GetTS ? p_GetTS() : 1;
-    int e = ((PFN_OvlXform)g_ovl[33])(g_ovl_h, origin, &M);           /* SetOverlayTransformAbsolute */
-    vr_log("CINE: pantalla colocada a %.1f m delante (espacio %d) -> %d", cfg_cine_dist, origin, e);
+    g_cine_M = M;
+    vr_log("CINE: pantalla colocada a %.1f m delante", cfg_cine_dist);
 }
-/* 1 = esta imagen va a la pantalla flotante (y los ojos ya han recibido negro) */
+/* (E20d) PANTALLA FLOTANTE PROPIA (sin el overlay de SteamVR): en cada ojo se pinta, sobre negro, un rectangulo
+ * con la imagen del juego, colocado en la habitacion a cfg_cine_dist delante. Se le da a SteamVR como cualquier
+ * imagen de ojo (con la postura de la cabeza), asi la pantalla se queda quieta en el sitio aunque muevas la cabeza. */
+#define CINE_RES 1440
+static ID3D11DeviceContext *g_cine_ctx = NULL;
+static ID3D11Texture2D *g_cine_tex[2]; static ID3D11RenderTargetView *g_cine_rtv[2];
+static ID3D11VertexShader *g_cine_vs = NULL; static ID3D11PixelShader *g_cine_ps = NULL;
+static ID3D11Buffer *g_cine_cb = NULL; static ID3D11SamplerState *g_cine_smp = NULL; static ID3D11RasterizerState *g_cine_rs = NULL;
+static ID3D11ShaderResourceView *g_cine_srv = NULL; static void *g_cine_srv_of = NULL;
+static int g_cine_ready = 0;   /* 0 sin preparar, 1 listo, -1 no se puede */
+static const char g_cine_hlsl[] =
+    "cbuffer C : register(b0) { row_major float4x4 mvp; };\n"
+    "Texture2D T : register(t0); SamplerState S : register(s0);\n"
+    "struct V { float4 p : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "V vs(uint i : SV_VertexID) { V o; float2 c = float2(i & 1, i >> 1); o.uv = float2(c.x, 1 - c.y);\n"
+    "  o.p = mul(mvp, float4(c.x - 0.5, c.y - 0.5, 0, 1)); return o; }\n"
+    "float4 ps(V i) : SV_Target { return float4(T.Sample(S, i.uv).rgb, 1); }\n";
+typedef HRESULT (WINAPI *PFN_D3DCompile)(LPCVOID, SIZE_T, LPCSTR, const void *, void *, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob **, ID3DBlob **);
+static ID3DBlob *cine_compile(PFN_D3DCompile f, const char *entry, const char *target)
+{
+    ID3DBlob *code = NULL, *err = NULL;
+    HRESULT hr = f(g_cine_hlsl, sizeof(g_cine_hlsl) - 1, "cine", NULL, NULL, entry, target, 0, 0, &code, &err);
+    if (FAILED(hr)) vr_log("CINE: no compila %s: %s", entry, err ? (const char *)ID3D10Blob_GetBufferPointer(err) : "?");
+    if (err) ID3D10Blob_Release(err);
+    return SUCCEEDED(hr) ? code : NULL;
+}
+static int cine_init(void)
+{
+    if (g_cine_ready) return g_cine_ready == 1;
+    g_cine_ready = -1;
+    if (!g_vr_dev || !g_eraw_ok) return 0;
+    HMODULE m = LoadLibraryA("d3dcompiler_47.dll");
+    PFN_D3DCompile f = m ? (PFN_D3DCompile)(void *)GetProcAddress(m, "D3DCompile") : NULL;
+    if (!f) { vr_log("CINE: falta d3dcompiler_47.dll"); return 0; }
+    ID3DBlob *bv = cine_compile(f, "vs", "vs_5_0"), *bp = cine_compile(f, "ps", "ps_5_0");
+    if (!bv || !bp) return 0;
+    ID3D11Device *d = g_vr_dev;
+    ID3D11Device_CreateVertexShader(d, ID3D10Blob_GetBufferPointer(bv), ID3D10Blob_GetBufferSize(bv), NULL, &g_cine_vs);
+    ID3D11Device_CreatePixelShader(d, ID3D10Blob_GetBufferPointer(bp), ID3D10Blob_GetBufferSize(bp), NULL, &g_cine_ps);
+    ID3D10Blob_Release(bv); ID3D10Blob_Release(bp);
+    D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
+    bd.ByteWidth = 64; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ID3D11Device_CreateBuffer(d, &bd, NULL, &g_cine_cb);
+    D3D11_SAMPLER_DESC sd; memset(&sd, 0, sizeof(sd));
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR; sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.MaxLOD = D3D11_FLOAT32_MAX; sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    ID3D11Device_CreateSamplerState(d, &sd, &g_cine_smp);
+    D3D11_RASTERIZER_DESC rd; memset(&rd, 0, sizeof(rd));
+    rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
+    ID3D11Device_CreateRasterizerState(d, &rd, &g_cine_rs);
+    for (int e = 0; e < 2; e++) {
+        D3D11_TEXTURE2D_DESC t; memset(&t, 0, sizeof(t));
+        t.Width = t.Height = CINE_RES; t.MipLevels = t.ArraySize = 1; t.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        t.SampleDesc.Count = 1; t.Usage = D3D11_USAGE_DEFAULT; t.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        t.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+        if (FAILED(ID3D11Device_CreateTexture2D(d, &t, NULL, &g_cine_tex[e])) || !g_cine_tex[e]) return 0;
+        if (FAILED(ID3D11Device_CreateRenderTargetView(d, (ID3D11Resource *)g_cine_tex[e], NULL, &g_cine_rtv[e]))) return 0;
+    }
+    ID3D11Device_GetImmediateContext(d, &g_cine_ctx);
+    if (!g_cine_vs || !g_cine_ps || !g_cine_cb || !g_cine_smp || !g_cine_rs || !g_cine_ctx) return 0;
+    g_cine_ready = 1;
+    vr_log("CINE: pantalla flotante propia lista (%dx%d por ojo)", CINE_RES, CINE_RES);
+    return 1;
+}
+/* 4x4 (fila mayor) = A * B */
+static void m4mul(const float A[4][4], const float B[4][4], float C[4][4])
+{
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { float t = 0; for (int k = 0; k < 4; k++) t += A[i][k] * B[k][j]; C[i][j] = t; }
+}
+static void m34to44(const OvrMat34 *a, float o[4][4])
+{
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) o[i][j] = a->m[i][j];
+    o[3][0] = o[3][1] = o[3][2] = 0; o[3][3] = 1;
+}
+/* 1 = esta imagen va a la pantalla flotante (y los ojos ya se han mandado) */
 static int cine_frame(void *own_tex)
 {
-    if (!cfg_cine || !g_ovl || !g_vr_dev || g_mode == 1) { cine_hide(); return 0; }
-    if (g_ovl_state == 0) {
-        g_ovl_state = -1;
-        int e = ((PFN_OvlCreate)g_ovl[1])("metro_vr.cine", "Metro VR", &g_ovl_h);   /* CreateOverlay */
-        if (e == 0 && g_ovl_h) {
-            ((PFN_OvlFlag)g_ovl[11])(g_ovl_h, 4194304, 1);      /* IgnoreTextureAlpha: el juego deja el alfa a 0 */
-            ((PFN_OvlF)g_ovl[22])(g_ovl_h, cfg_cine_ancho);     /* SetOverlayWidthInMeters */
-            g_ovl_state = 1;
-        }
-        D3D11_TEXTURE2D_DESC t; memset(&t, 0, sizeof(t));
-        t.Width = t.Height = 16; t.MipLevels = t.ArraySize = 1; t.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        t.SampleDesc.Count = 1; t.Usage = D3D11_USAGE_DEFAULT; t.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        t.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-        static UINT px[16 * 16]; for (int i = 0; i < 256; i++) px[i] = 0xFF000000u;
-        D3D11_SUBRESOURCE_DATA sd = { px, 16 * 4, 0 };
-        ID3D11Device_CreateTexture2D(g_vr_dev, &t, &sd, &g_black);
-        vr_log("CINE: pantalla flotante creada -> %d (negro=%s)", e, g_black ? "ok" : "FALLO");
+    if (!cfg_cine || g_mode == 1 || !g_have_frame_pose) { cine_hide(); return 0; }
+    if (!cine_init()) return 0;
+    if (g_cine_srv_of != own_tex) {
+        if (g_cine_srv) { ID3D11ShaderResourceView_Release(g_cine_srv); g_cine_srv = NULL; }
+        ID3D11Device_CreateShaderResourceView(g_vr_dev, (ID3D11Resource *)own_tex, NULL, &g_cine_srv);
+        g_cine_srv_of = own_tex;
     }
-    if (g_ovl_state != 1 || !g_black) return 0;
-    if (!g_cine_on) { cine_place(); ((PFN_OvlH)g_ovl[43])(g_ovl_h); g_cine_on = 1; vr_log("CINE: dentro (menu/video en pantalla flotante)"); }   /* ShowOverlay */
-    OvrTexture ot = { own_tex, 0, 1 /* gamma */ };
-    static int terr = 0;
-    int e = ((PFN_OvlTex)g_ovl[60])(g_ovl_h, &ot);                     /* SetOverlayTexture */
-    if (e && terr++ < 5) vr_log("CINE: SetOverlayTexture -> %d", e);
-    OvrTexture bt = { g_black, 0, 0 };
-    OvrBounds b = { 0, 0, 1, 1 };
-    p_Submit(0, &bt, &b, 0);
-    p_Submit(1, &bt, &b, 0);
+    if (!g_cine_srv) return 0;
+    if (!g_cine_on) { cine_place(); g_cine_on = 1; vr_log("CINE: dentro (menu/video/pausa en pantalla flotante)"); }
+    float W = cfg_cine_ancho, Hh = (g_vr_w > 0) ? cfg_cine_ancho * (float)g_vr_h / (float)g_vr_w : cfg_cine_ancho * 0.5625f;
+    float Mq[4][4], S[4][4] = { { W, 0, 0, 0 }, { 0, Hh, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } }, MS[4][4];
+    m34to44(&g_cine_M, Mq); m4mul(Mq, S, MS);
+    OvrMat34 pose = g_frame_pose;
+    float Hd[4][4]; m34to44(&pose, Hd);
+    ID3D11DeviceContext *c = g_cine_ctx;
+    float black[4] = { 0, 0, 0, 1 };
+    for (int e = 0; e < 2; e++) {
+        float E[4][4], HE[4][4], V[4][4];
+        m34to44(&g_e2h[e], E); m4mul(Hd, E, HE);
+        /* inversa de un giro + posicion */
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) V[i][j] = HE[j][i];
+        for (int i = 0; i < 3; i++) V[i][3] = -(V[i][0] * HE[0][3] + V[i][1] * HE[1][3] + V[i][2] * HE[2][3]);
+        V[3][0] = V[3][1] = V[3][2] = 0; V[3][3] = 1;
+        /* lente del ojo (como ComposeProjection de OpenVR), cerca 0.05 lejos 100 */
+        float l = g_eraw[e][0], r = g_eraw[e][1], t = g_eraw[e][2], b = g_eraw[e][3], zn = 0.05f, zf = 100.0f;
+        float idx = 1.0f / (r - l), idy = 1.0f / (b - t);
+        float P[4][4] = { { 2 * idx, 0, (r + l) * idx, 0 }, { 0, 2 * idy, (b + t) * idy, 0 },
+                          { 0, 0, zf / (zn - zf), zf * zn / (zn - zf) }, { 0, 0, -1, 0 } };
+        float PV[4][4], MVP[4][4];
+        m4mul(P, V, PV); m4mul(PV, MS, MVP);
+        ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_cine_cb, 0, NULL, MVP, 0, 0);
+        ID3D11DeviceContext_OMSetRenderTargets(c, 1, &g_cine_rtv[e], NULL);
+        ID3D11DeviceContext_ClearRenderTargetView(c, g_cine_rtv[e], black);
+        D3D11_VIEWPORT vp = { 0, 0, (float)CINE_RES, (float)CINE_RES, 0, 1 };
+        ID3D11DeviceContext_RSSetViewports(c, 1, &vp);
+        ID3D11DeviceContext_RSSetState(c, g_cine_rs);
+        ID3D11DeviceContext_IASetInputLayout(c, NULL);
+        ID3D11DeviceContext_IASetPrimitiveTopology(c, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        ID3D11DeviceContext_VSSetShader(c, g_cine_vs, NULL, 0);
+        ID3D11DeviceContext_VSSetConstantBuffers(c, 0, 1, &g_cine_cb);
+        ID3D11DeviceContext_PSSetShader(c, g_cine_ps, NULL, 0);
+        ID3D11DeviceContext_PSSetShaderResources(c, 0, 1, &g_cine_srv);
+        ID3D11DeviceContext_PSSetSamplers(c, 0, 1, &g_cine_smp);
+        ID3D11DeviceContext_Draw(c, 4, 0);
+    }
+    ID3D11RenderTargetView *nullrt = NULL; ID3D11ShaderResourceView *nullsrv = NULL;
+    ID3D11DeviceContext_OMSetRenderTargets(c, 1, &nullrt, NULL);
+    ID3D11DeviceContext_PSSetShaderResources(c, 0, 1, &nullsrv);
+    ID3D11DeviceContext_Flush(c);
+    typedef struct { void *handle; int type; int colorspace; OvrMat34 pose; } OvrTexPose2;
+    OvrTexPose2 t0 = { g_cine_tex[0], 0, 0, pose }, t1 = { g_cine_tex[1], 0, 0, pose };
+    OvrBounds bb = { 0, 0, 1, 1 };
+    int e1 = p_Submit(0, (OvrTexture *)&t0, &bb, 8), e2 = p_Submit(1, (OvrTexture *)&t1, &bb, 8);
+    static int se = 0;
+    if ((e1 || e2) && se++ < 5) vr_log("CINE: Submit fallo (%d %d)", e1, e2);
     return 1;
 }
 
@@ -4149,14 +4278,14 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld | balas: jugador=%ld otras=%ld ultima_desviada=%.1fgrados | giro: correcciones=%ld desplazado=%.2fm cabeza=%.2f/%.2fm", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld | balas: jugador=%ld otras=%ld ultima_desviada=%.1fgrados | giro: correcciones=%ld desplazado=%.2fm cabeza=%.2f/%.2fm | pantalla: dibujos_ultimo=%ld max=%ld modo=%ld cine=%d", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_cam, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
                                        (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0),
                                        g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0),
                                        (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev,
-                                       (long)InterlockedExchange(&g_piv_n, 0), sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]), g_rt_dg[0], g_rt_dg[2]);
+                                       (long)InterlockedExchange(&g_piv_n, 0), sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]), g_rt_dg[0], g_rt_dg[2], (long)g_bb_last, (long)InterlockedExchange(&g_bb_max, 0), (long)g_mode, g_cine_on);
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4274,19 +4403,19 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
 static int g_mh_ok = 0;
 static __thread int t_in_draw = 0;                   /* una version puede llamar a otra por dentro: solo cuenta la de fuera */
 #define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
-    PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++;                                         \
+    PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, sv); return; }                                                       \
     t_in_draw = 1; { int h = hud_pre(c, vc == 3); tr(c, vc, sv); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
-    PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++;                                          \
+    PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
     t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, si, bv); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
-    PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++;                                                 \
+    PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
     t_in_draw = 1; { int h = hud_pre(c, vc == 3 && ni == 1); tr(c, vc, ni, sv, si); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
-    PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++;                                                       \
+    PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
     t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, ni, si, bv, sinst); if (h) hud_post(c); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
@@ -4638,7 +4767,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20d: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
