@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20h (rama `manos`) — Mirar hacia abajo sin que se quite el VR
+- Prueba de la E20g (usuario): "muchísimo mejor" (intro y menús bien). Falta: al mirar hacia abajo se quita el VR.
+- Log: mirando abajo salen **24-31 dibujos** en la imagen final, lo mismo que el menú de pausa (24-32): contar dibujos no basta.
+- Ahora, para contar como menú hacen falta los dibujos **y** además: o el juego está **parado** (el jugador no se actualiza con el tiempo en marcha: `dt > 0` en la función de mover, que se para en la pausa), o no estás mirando abajo (más de 25°).
+- Log nuevo cada segundo (también con la pantalla flotante): `PANTALLA: dibujos_ultimo= max= modo= cine= jugador=N/s (con tiempo parado M) inclinacion=`. Servirá para confirmar que en la pausa el jugador se para.
+
 ## E20g (rama `manos`) — Arreglo de la E20f antes de probarla
 - En la E20f los brazos solo se miraban con el VR ya puesto, así que la condición "ver los brazos para entrar en VR" no se cumpliría nunca. Ahora, fuera del VR, se mira si se pintan los brazos guardados (sin ocultar nada). El resto, igual que la E20f.
 
