@@ -212,6 +212,10 @@ static volatile ULONGLONG g_cam_seen = 0;        /* ultima vez que el juego mont
 static int g_auto_manual = 0;                    /* se ha pulsado F9: el automatico se aparta */
 static volatile LONG g_bb_draws = 0; static LONG g_bb_last = 0, g_bb_max = 0;    /* (E20d) dibujos en la imagen final por fotograma */
 static void sc_vt_sync(void);
+static volatile ULONGLONG g_wpn_switch_t = 0;    /* (E21) ultima vez que el mando cambio de arma */
+static int g_menu_pad = 0;
+static int cfg_xinput = 1;                   /* (E21) los mandos VR tambien como mando de Xbox */
+static void xinput_hook_try(void);
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -371,6 +375,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "ocultar_brazos"))   cfg_brazos = v;
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
+    else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
     else if (!strcmp(s, "pantalla_menus"))   cfg_cine = v;
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
@@ -1971,7 +1976,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
              * ademas que el juego este parado (el jugador no se actualiza con el tiempo en marcha) o no mirar abajo. */
             int paused = !g_mov_run || now - g_mov_run > 200;
             int looking_down = g_rt_Rg[1][2] < -0.42f;          /* mas de 25 grados hacia abajo */
-            int menu_ok = paused || !looking_down;
+            int menu_ok = paused || (!looking_down && !(g_wpn_switch_t && now - g_wpn_switch_t < 3000));   /* (E21) */
             if ((g_bb_last >= cfg_menu_draws && menu_ok) || (menu_t && now - menu_t < 400 && g_bb_last >= cfg_menu_stay)) menu_t = now;
             int menu = menu_t && now - menu_t < 400;
             /* (E20e) el menu principal tiene un escenario 3D con la camara del jugador: no basta con la camara.
@@ -1987,6 +1992,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
             if (want != g_mode) { g_mode = want; vr_log(">>> AUTO: %s (dibujos en pantalla=%ld)", want ? "PARTIDA -> modo VR" : "MENU / VIDEO / CARGA / PAUSA -> pantalla flotante", (long)g_bb_last); }
         }
         if (g_nat_installed == 0 && (n % 30) == 0) nat_install();
+        if ((n % 60) == 0) xinput_hook_try();   /* (E21) */
         {   /* (E13) mandos */
             static LARGE_INTEGER lt; LARGE_INTEGER now, fq; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&fq);
             float dt = lt.QuadPart ? (float)(now.QuadPart - lt.QuadPart) / (float)fq.QuadPart : 0.0f; lt = now;
@@ -3140,6 +3146,74 @@ static void raton_step(void)
     InterlockedExchangeAdd(&g_rt_sent, labs(nx) + labs(ny));
 }
 
+/* ------------------------------------------------ (E21) mando de Xbox "de mentira" (XInput) */
+/* El juego lee los mandos de Xbox con XInputGetState. Se engancha (MinHook) en las xinput*.dll que tenga cargadas y,
+ * si hay mandos VR, se le contesta con el estado que montamos aqui: andar analogico con el stick, y en los menus todo
+ * (navegar, aceptar, volver) como un mando de consola. Si hay un mando de verdad, se suma. */
+typedef struct { WORD wButtons; BYTE bLT, bRT; SHORT sLX, sLY, sRX, sRY; } XPad;
+typedef struct { DWORD dwPacket; XPad pad; } XState;
+typedef struct { BYTE Type, SubType; WORD Flags; XPad pad; WORD wLeftMotor, wRightMotor; } XCaps;
+typedef DWORD (WINAPI *PFN_XGetState)(DWORD, XState *);
+typedef DWORD (WINAPI *PFN_XGetCaps)(DWORD, DWORD, XCaps *);
+#define XMOD_N 4
+static PFN_XGetState g_x_tr_state[XMOD_N]; static PFN_XGetCaps g_x_tr_caps[XMOD_N];
+static XPad g_xpad; static volatile LONG g_xpad_on = 0, g_xpad_pkt = 0, g_x_hooked = 0, g_x_reads = 0;
+static DWORD x_state_common(PFN_XGetState tr, DWORD i, XState *st)
+{
+    DWORD r = tr ? tr(i, st) : 1167;
+    if (i != 0 || !g_xpad_on || !st) return r;
+    InterlockedIncrement(&g_x_reads);
+    XPad v = g_xpad;
+    if (r != 0) { memset(st, 0, sizeof(*st)); }
+    else {   /* mando de verdad: se suma */
+        v.wButtons |= st->pad.wButtons;
+        if (st->pad.bLT > v.bLT) v.bLT = st->pad.bLT;
+        if (st->pad.bRT > v.bRT) v.bRT = st->pad.bRT;
+        if (abs(st->pad.sLX) > abs(v.sLX)) v.sLX = st->pad.sLX;
+        if (abs(st->pad.sLY) > abs(v.sLY)) v.sLY = st->pad.sLY;
+        if (abs(st->pad.sRX) > abs(v.sRX)) v.sRX = st->pad.sRX;
+        if (abs(st->pad.sRY) > abs(v.sRY)) v.sRY = st->pad.sRY;
+    }
+    st->pad = v;
+    st->dwPacket = (DWORD)g_xpad_pkt;
+    return 0;
+}
+static DWORD x_caps_common(PFN_XGetCaps tr, DWORD i, DWORD f, XCaps *c)
+{
+    DWORD r = tr ? tr(i, f, c) : 1167;
+    if (r == 0 || i != 0 || !g_xpad_on || !c) return r;
+    memset(c, 0, sizeof(*c)); c->Type = 1; c->SubType = 1;
+    c->pad.wButtons = 0xF3FF; c->pad.bLT = c->pad.bRT = 0xFF;
+    c->pad.sLX = c->pad.sLY = c->pad.sRX = c->pad.sRY = (SHORT)0xFFC0;
+    return 0;
+}
+#define X_DEF(k) static DWORD WINAPI x_st##k(DWORD i, XState *s) { return x_state_common(g_x_tr_state[k], i, s); } \
+                 static DWORD WINAPI x_cp##k(DWORD i, DWORD f, XCaps *c) { return x_caps_common(g_x_tr_caps[k], i, f, c); }
+X_DEF(0) X_DEF(1) X_DEF(2) X_DEF(3)
+static void *const g_x_det_state[XMOD_N] = { (void *)x_st0, (void *)x_st1, (void *)x_st2, (void *)x_st3 };
+static void *const g_x_det_caps[XMOD_N] = { (void *)x_cp0, (void *)x_cp1, (void *)x_cp2, (void *)x_cp3 };
+static void mh_start(void);
+static void xinput_hook_try(void)
+{
+    static int done[XMOD_N];
+    static const char *mods[XMOD_N] = { "xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll", "xinput1_2.dll" };
+    if (!cfg_xinput) return;
+    for (int k = 0; k < XMOD_N; k++) {
+        if (done[k]) continue;
+        HMODULE m = GetModuleHandleA(mods[k]);
+        if (!m) continue;
+        done[k] = 1;
+        mh_start();
+        void *fs = (void *)GetProcAddress(m, "XInputGetState"), *fc = (void *)GetProcAddress(m, "XInputGetCapabilities");
+        MH_STATUS a = MH_ERROR_FUNCTION_NOT_FOUND, b = MH_ERROR_FUNCTION_NOT_FOUND;
+        if (fs) { a = MH_CreateHook(fs, g_x_det_state[k], (void **)&g_x_tr_state[k]); if (a == MH_OK) a = MH_EnableHook(fs); }
+        if (fc) { b = MH_CreateHook(fc, g_x_det_caps[k], (void **)&g_x_tr_caps[k]); if (b == MH_OK) b = MH_EnableHook(fc); }
+        if (a == MH_OK) InterlockedIncrement(&g_x_hooked);
+        vr_log("MANDO XBOX: %s enganchada (GetState %s, GetCapabilities %s)", mods[k], MH_StatusToString(a), MH_StatusToString(b));
+    }
+}
+static SHORT x_axis(float v) { v = v > 1 ? 1 : (v < -1 ? -1 : v); return (SHORT)(v * 32767.0f); }
+
 /* ------------------------------------------------ (E13) mandos como teclado y raton */
 /* Mando de Quest (modo "heredado" de SteamVR): gatillo = eje 1, agarre = boton 2 (y eje 2), stick = eje 0 (clic = boton 32),
  * A/X = boton 7, B/Y = boton 1. Teclas = las del juego (user.cfg). Se mandan como "codigo de tecla" (scancode). */
@@ -3196,16 +3270,47 @@ static void mandos_step(float dt)
     for (int i = 0; i < O_COUNT; i++) if (g_pulse[i] > 0 && --g_pulse[i] == 0) out_set(i, 0);
     InterlockedExchange(&g_mandos_ok, 1);
 #define BTN(st, id) (((st).pressed >> (id)) & 1ull)
-    /* izquierdo: andar, correr (clic del stick), botiquin (agarre), lanzar (gatillo), linterna/mascara (X), arma/menu (Y) */
+    /* (E21) mando de Xbox de mentira: si el juego lo lee, el stick izquierdo va por el (andar analogico) */
     float lx = lok ? L.axis[0].x : 0, ly = lok ? L.axis[0].y : 0;
-    out_set(O_W, ly > 0.45f); out_set(O_S, ly < -0.45f);
-    out_set(O_D, lx > 0.45f); out_set(O_A, lx < -0.45f);
+    float rx0 = rok ? R.axis[0].x : 0, ry0 = rok ? R.axis[0].y : 0;
+    int xpad = cfg_xinput && g_x_hooked > 0;
+    XPad xp; memset(&xp, 0, sizeof(xp));
+    if (xpad) { xp.sLX = x_axis(lx); xp.sLY = x_axis(ly); }
+    /* (E21) MENUS (pantalla flotante): los mandos VR son un mando de consola; nada de teclado ni raton */
+    if (xpad && g_mode != 1) {
+        static int menu_was = 0;
+        if (!g_menu_pad) menu_was = 0;
+        if (!menu_was) { mandos_release_all(); menu_was = 1; vr_log("MANDOS: menu -> mando de consola"); }
+        g_menu_pad = 1;
+        xp.sRX = x_axis(rx0); xp.sRY = x_axis(ry0);
+        WORD b = 0;
+        if (rok && (BTN(R, 7) || R.axis[1].x > 0.6f)) b |= 0x1000;       /* A (der) o gatillo der = aceptar (A) */
+        if (rok && BTN(R, 1)) b |= 0x2000;                               /* B (der) = volver (B) */
+        if (lok && BTN(L, 7)) b |= 0x4000;                               /* X (izq) = X */
+        if (lok && BTN(L, 1)) b |= 0x8000;                               /* Y (izq) = Y */
+        if (lok && BTN(L, 2)) b |= 0x0100;                               /* agarre izq = LB */
+        if (rok && BTN(R, 2)) b |= 0x0200;                               /* agarre der = RB */
+        if (lok && L.axis[1].x > 0.6f) b |= 0x0010;                      /* gatillo izq = Start */
+        /* stick derecho tambien como cruceta */
+        if (ry0 > 0.6f) b |= 0x0001; if (ry0 < -0.6f) b |= 0x0002; if (rx0 < -0.6f) b |= 0x0004; if (rx0 > 0.6f) b |= 0x0008;
+        xp.wButtons = b;
+        g_xpad = xp; InterlockedIncrement(&g_xpad_pkt); g_xpad_on = 1;
+        return;
+    }
+    if (g_menu_pad) { g_menu_pad = 0; vr_log("MANDOS: partida -> teclado/raton (+ stick izq analogico)"); }
+    if (xpad) {
+        out_set(O_W, 0); out_set(O_S, 0); out_set(O_D, 0); out_set(O_A, 0);
+    } else {
+        out_set(O_W, ly > 0.45f); out_set(O_S, ly < -0.45f);
+        out_set(O_D, lx > 0.45f); out_set(O_A, lx < -0.45f);
+    }
     static int sprint = 0, lclick_prev = 0;
     int lclick = lok && BTN(L, 32);
     if (lclick && !lclick_prev) sprint = !sprint;
     if (lx * lx + ly * ly < 0.04f) sprint = 0;          /* stick suelto: deja de correr */
     lclick_prev = lclick;
-    out_set(O_SPRINT, sprint);
+    if (xpad) { out_set(O_SPRINT, 0); if (sprint) xp.wButtons |= 0x0040; }   /* (E21) correr = clic del stick izq del mando */
+    else out_set(O_SPRINT, sprint);
     out_set(O_MEDKIT, lok && BTN(L, 2));                 /* agarre izq = botiquin */
     out_set(O_THROW, lok && L.axis[1].x > 0.6f);         /* gatillo izq = lanzar */
     /* X: toque = linterna; mantener medio segundo = mascara */
@@ -3223,7 +3328,7 @@ static void mandos_step(float dt)
     if (y && !ydown) { ydown = GetTickCount64(); yesc = 0; }
     if (y && !yesc && GetTickCount64() - ydown > 1000) { out_set(O_ESC, 1); yesc = 1; }
     if (!y && ydown) {
-        if (!yesc) out_pulse(O_NEXT);
+        if (!yesc) { out_pulse(O_NEXT); g_wpn_switch_t = GetTickCount64(); }   /* (E21) el cambio de arma no es un menu */
         out_set(O_ESC, 0); ydown = 0;
     }
     /* derecho: disparar (gatillo), apuntar (agarre), usar (A), recargar (B), saltar/agacharse (stick arriba/abajo),
@@ -3256,6 +3361,7 @@ static void mandos_step(float dt)
         LONG st = (LONG)acc; acc -= (float)st;
         if (st) rt_send(st, 0);
     }
+    if (xpad) { g_xpad = xp; InterlockedIncrement(&g_xpad_pkt); g_xpad_on = 1; }
 #undef BTN
 }
 
@@ -4310,9 +4416,10 @@ static DWORD WINAPI stats_thread(LPVOID unused)
                                        g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0),
                                        (long)InterlockedExchange(&g_bul_mine, 0), (long)InterlockedExchange(&g_bul_other, 0), g_bul_lastdev,
                                        (long)InterlockedExchange(&g_piv_n, 0), sqrtf(g_piv[0] * g_piv[0] + g_piv[2] * g_piv[2]), g_rt_dg[0], g_rt_dg[2]);
-                vr_log("PANTALLA: dibujos_ultimo=%ld max=%ld modo=%ld cine=%d jugador=%ld/s (con tiempo parado %ld) inclinacion=%.0f",
+                vr_log("PANTALLA: dibujos_ultimo=%ld max=%ld modo=%ld cine=%d jugador=%ld/s (con tiempo parado %ld) inclinacion=%.0f | mando_xbox: lecturas=%ld",
                        (long)g_bb_last, (long)InterlockedExchange(&g_bb_max, 0), (long)g_mode, g_cine_on,
-                       (long)InterlockedExchange(&g_mov_calls, 0), (long)InterlockedExchange(&g_mov_dt0, 0), asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f)) * 57.3f);
+                       (long)InterlockedExchange(&g_mov_calls, 0), (long)InterlockedExchange(&g_mov_dt0, 0), asinf(clampf(g_rt_Rg[1][2], -1.0f, 1.0f)) * 57.3f,
+                       (long)InterlockedExchange(&g_x_reads, 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -4800,7 +4907,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20h: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E21: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

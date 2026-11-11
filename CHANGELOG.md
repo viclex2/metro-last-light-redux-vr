@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E21 (rama `manos`) — Mando de Xbox "de mentira": andar analógico y menús con los mandos VR
+- Prueba de la E20h (usuario): casi perfecto. Mirar abajo ya no quita el VR. Pidió: (1) al cambiar de arma se quitaba el VR unos segundos; (2) navegar por los menús solo con los mandos VR; (3) andar despacio o deprisa según cuánto empujes el stick; (4) nota algo de retraso/rebote al mover la cabeza (el arma no).
+- (1) Tras cambiar de arma con el mando (Y), durante 3 s los dibujos en pantalla no cuentan como menú (salvo con el juego parado).
+- (2)(3) **Mando de Xbox de mentira**: MinHook en `XInputGetState`/`XInputGetCapabilities` de las `xinput*.dll` que cargue el juego (log `MANDO XBOX: … enganchada`). El juego ve un mando de Xbox en el puerto 1 (si hay uno de verdad, se suman).
+  - **Partida**: el stick izquierdo va por el mando (analógico: poco = despacio, a tope = rápido); correr = clic del stick izquierdo. Lo demás sigue como teclado/ratón (ya funcionaba).
+  - **Menús y pantalla flotante**: todo como mando de consola. Sticks = navegar (el derecho también hace de cruceta), A o gatillo derecho = aceptar, B derecho = volver, X/Y izquierdos = X/Y, agarres = LB/RB, gatillo izquierdo = Start. Nada de teclado ni ratón.
+  - Config `mando_xbox=1` (0 = como antes, todo teclado/ratón). Log: `mando_xbox: lecturas=` en la línea `PANTALLA` (si es 0, el juego no lee el mando).
+- (4) Pendiente de mirar en el log (no se pudo leer en esta sesión).
+
 ## E20h (rama `manos`) — Mirar hacia abajo sin que se quite el VR
 - Prueba de la E20g (usuario): "muchísimo mejor" (intro y menús bien). Falta: al mirar hacia abajo se quita el VR.
 - Log: mirando abajo salen **24-31 dibujos** en la imagen final, lo mismo que el menú de pausa (24-32): contar dibujos no basta.

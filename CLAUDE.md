@@ -59,7 +59,8 @@
 - **E20d probada (11/11)**: pantalla flotante propia OK, giro sobre uno mismo OK, cambiar gráficos varias veces sin petar OK. Fallo: el VR se ponía en el menú principal (tiene escenario 3D con la cámara del jugador). **E20e**: además de la cámara, exige que se llame a la función de mover al jugador (`g_mov_seen`, gancho de andar; 0/s en menú, ~100/s en partida). **Pendiente de prueba.**
 - **E20e probada**: menú principal y pausa OK. Fallaba la intro (tren con movimiento) y mirar abajo/derecha (dibujos ~14). **E20f/E20g**: entrar en VR exige ver los brazos guardados (`g_arm_seen`); menú: entrar con ≥20 dibujos, seguir con ≥10. **Pendiente de prueba.**
 - **E20g probada**: intro y menús bien. Mirar abajo da 24-31 dibujos (igual que la pausa) y quitaba el VR. **E20h**: menú = dibujos ≥20 Y (juego parado: sin llamadas a mover con dt>0 en 200 ms, o no mirando >25° abajo). Log `PANTALLA:` siempre. **Pendiente de prueba** (confirmar que en la pausa se para el jugador).
-- **Pedido para más adelante**: que los mandos VR hagan de **mando de consola** (XInput) en vez de teclado y ratón.
+- **E20h probada**: mirar abajo OK. Al cambiar de arma se quitaba el VR unos segundos.
+- **E21 (manos)**: mando de Xbox de mentira (MinHook en XInputGetState/GetCapabilities): stick izq analógico en partida; en menús todo como mando de consola. Cambio de arma (Y) no cuenta como menú 3 s. **Pendiente de prueba.** Pendiente también: el usuario nota retraso/rebote al mover la cabeza (el arma no): mirar `STEAMVR:` (reproyección, 36 Hz por ojo).
 - **Lista del usuario antes de pasar a estable (11/11)**: (1) menús, intro y opciones como pantalla flotante con fondo negro, y VR solo en partida; (2) que no pete al cambiar opciones gráficas (ESTADO.md problema 4: peta en d3d11.dll+0x17206B tras SetFullscreenState(0); hay `crash_handler` que lo apunta en el log); (3) girar sobre uno mismo (E20).
 
 ## Siguientes pasos
