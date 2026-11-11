@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E24 (rama `manos`) — Borrador en memoria normal para los cajones de los objetos
+- Prueba de la E23: "va algo diferente, creo". Log: el mod baja de 190-250 a **130-165 ms/s**, y hay segundos con **138-140 fotogramas = ~70 parejas** (antes clavado en 73 = 36 parejas): está rozando el escalón de 72. Pero cada objeto sigue costando **~9,3 us**: el cajón está en memoria de la gráfica, lentísima de LEER aunque se copie directo.
+- Ahora, en modo VR, cuando el juego pide escribir un cajón de objeto (208 B) o de luces (144/272 B) con DISCARD, se le da un **borrador en memoria normal** (por hilo). En el Unmap se corrige en el borrador y se copia de golpe a la gráfica (escribir allí es rápido). Config `borrador=1` (0 = como antes). Log `TIEMPOS: … us cada uno … borradores=N/s`.
+- Al cambiar la **resolución** desde el menú del juego petó con 0xC00000FD (pila agotada) dentro de d3d11/driver; sin rastro de nuestro código en la pila. Pendiente. Mientras, cambiar la resolución con el juego cerrado (user.cfg).
+
 ## E23 (rama `manos`) — Fluidez: el mod gastaba ~3 ms por fotograma leyendo "con red"
 - Usuario: la fluidez sigue igual; en el monitor va fluido, en VR no; "le sobran fps pero está capado". `estereo=1` mareó mucho (no repetir).
 - Lo que dicen los números (log de la E22): 73 fotogramas/s = 36 parejas; a 72 Hz cada pareja tiene que salir en 13,9 ms, y cuando se pasa aunque sea un poco SteamVR la deja en la mitad (36). Por eso va "clavado": es un escalón, no un tope (D-Rey llegó a lo mismo: "an exact 72/36 plateau is not proof of a limiter"). Cada fotograma cuesta ~10,4 ms; para 72 parejas hacen falta ~6,9.

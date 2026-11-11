@@ -219,7 +219,9 @@ static int cfg_xinput = 1;                   /* (E21) los mandos VR tambien como
 static void xinput_hook_try(void);
 static int cfg_pose_cam = 1;                 /* (E22) mandar cada imagen con la postura con la que se monto su camara */
 static int g_cine_on; static void cine_hide(void);
-static int cfg_fastread = 1;                 /* (E23) leer los cajones directamente (sin ReadProcessMemory) */
+static int cfg_fastread = 1;
+static int cfg_shadow = 1;                   /* (E24) borrador en memoria normal para los cajones de objeto */
+static volatile LONG g_shadow_n = 0;                 /* (E23) leer los cajones directamente (sin ReadProcessMemory) */
 static int cfg_balas = 1;                    /* (E19) las balas del jugador salen del arma, hacia donde apunta */
 static int cfg_brazos = 1;                   /* 1 = no pintar las piezas guardadas como "brazos" */
 static __thread int g_cb0_weapon = 0;        /* el ultimo cajon 0 (en ESTE hilo) era de una pieza con la lente del arma */
@@ -382,6 +384,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
     else if (!strcmp(s, "postura_camara"))   cfg_pose_cam = v;
     else if (!strcmp(s, "lectura_rapida"))   cfg_fastread = v;
+    else if (!strcmp(s, "borrador"))         cfg_shadow = v;
     else if (!strcmp(s, "pantalla_menus"))   cfg_cine = v;
     else if (!strcmp(s, "pantalla_distancia")) cfg_cine_dist = fv;
     else if (!strcmp(s, "pantalla_ancho"))   cfg_cine_ancho = fv;
@@ -1167,21 +1170,30 @@ static int cb_buffer_info(ID3D11Resource *res, UINT *bw)
 }
 
 static LONGLONG g_qpf = 10000000;
-typedef struct { void *res; const void *p; UINT bw; UINT type; } Pending;
+typedef struct { void *res; const void *p; UINT bw; UINT type; void *real; } Pending;   /* (E24) real = memoria de la grafica si p es un borrador */
 static Pending g_pend[16];
 
-static void pend_add(void *res, const void *p, UINT bw, UINT type)
+static int pend_add(void *res, const void *p, UINT bw, UINT type)
 {
+    int ok = 0;
     EnterCriticalSection(&g_cs);
     for (int i = 0; i < 16; i++) {
         if (!g_pend[i].res || g_pend[i].res == res) {
-            g_pend[i].res = res; g_pend[i].p = p; g_pend[i].bw = bw; g_pend[i].type = type;
+            g_pend[i].res = res; g_pend[i].p = p; g_pend[i].bw = bw; g_pend[i].type = type; g_pend[i].real = NULL;
+            ok = 1;
             break;
         }
     }
     LeaveCriticalSection(&g_cs);
+    return ok;
 }
 
+static void pend_set_real(void *res, void *real)
+{
+    EnterCriticalSection(&g_cs);
+    for (int i = 0; i < 16; i++) if (g_pend[i].res == res) { g_pend[i].real = real; break; }
+    LeaveCriticalSection(&g_cs);
+}
 static int pend_take(void *res, Pending *out)
 {
     int found = 0;
@@ -1476,7 +1488,20 @@ static HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext *c, ID3D11Resource *
         UINT bw;
         if (cb_buffer_info(r, &bw)) {
             InterlockedIncrement(&g_cbmaps);
-            pend_add(r, m->pData, bw, (UINT)type);
+            /* (E24) BORRADOR. Los cajones de los objetos estan en memoria de la grafica, lentisima de LEER (~9 us por
+             * objeto). Al juego se le da un borrador en memoria normal; en el Unmap se corrige ahi y se copia de golpe
+             * (escribir alli si es rapido). Solo cajones de objeto (208), luces (144, 272), con DISCARD y en modo VR. */
+            if (cfg_shadow && g_mode == 1 && type == D3D11_MAP_WRITE_DISCARD && (bw == 208 || bw == 144 || bw == 272)) {
+                static __thread __attribute__((aligned(64))) float shadow[16][80];
+                static __thread int si = 0;
+                float *sh = shadow[si]; si = (si + 1) & 15;
+                if (pend_add(r, sh, bw, (UINT)type)) {   /* solo si queda apuntado: si no, nadie copiaria el borrador */
+                    pend_set_real(r, m->pData);
+                    m->pData = sh;
+                    InterlockedIncrement(&g_shadow_n);
+                }
+            } else
+                pend_add(r, m->pData, bw, (UINT)type);
         }
     }
     return hr;
@@ -1747,6 +1772,7 @@ static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext *c, ID3D11Resource *r
         slot_stuff(r, &p);
         if (cfg_detective && g_mode == 1) lens_detective(r, p.p, p.bw);
         prev_detective(r, p.p, p.bw);
+        if (p.real) memcpy(p.real, p.p, p.bw);   /* (E24) el borrador ya corregido, de golpe a la grafica */
         QueryPerformanceCounter(&pq1);
         InterlockedExchangeAdd(&g_prof_mod_us, (LONG)((pq1.QuadPart - pq0.QuadPart) * 1000000 / g_qpf));
     }
@@ -4437,10 +4463,10 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
             {
                 LONG cb0n = InterlockedExchange(&g_prof_cb0_n, 0), cb0us = InterlockedExchange(&g_prof_cb0_us, 0);
-                vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s (objetos: %ld/s, %ldms/s, %.2fus cada uno) fotograma_mas_lento=%.1fms esperando_steamvr=%ldms/s fotogramas=%ld/s lente_principal=%.3f imagen=%ux%u",
+                vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s (objetos: %ld/s, %ldms/s, %.2fus cada uno) fotograma_mas_lento=%.1fms esperando_steamvr=%ldms/s fotogramas=%ld/s lente_principal=%.3f imagen=%ux%u borradores=%ld/s",
                    (long)(InterlockedExchange(&g_prof_present_us, 0) / 1000), (long)(InterlockedExchange(&g_prof_mod_us, 0) / 1000),
                    (long)cb0n, (long)(cb0us / 1000), cb0n ? (double)cb0us / cb0n : 0.0,
-                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h);
+                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h, (long)InterlockedExchange(&g_shadow_n, 0));
             }
             if (g_ft_n > 0) {   /* (E12) */
                 vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
@@ -4952,7 +4978,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E23: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E24: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
