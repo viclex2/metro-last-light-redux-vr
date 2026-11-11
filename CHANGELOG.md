@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E29 (rama `manos`) — Buscar las "islas" de la pieza de los brazos (manos y antebrazos)
+- Prueba de la E28 (usuario, 11/11): con Inicio, la 1.ª pieza guardada (la grande, `16734/177912`) enseña **todos los brazos con las manos** (menos el reloj); las otras 13 son piececitas del reloj. O sea: **manos y antebrazos van en una sola pieza** (en Metro 2033 las manos iban solas, 12132).
+- Como D-Rey86 (doc 31: partió sus manos en 3 tramos seguidos de la pieza): la primera vez que se pinta la pieza grande en VR, el mod lee sus índices una vez y busca sus **islas** (trozos que no están unidos al resto: cada mano, cada antebrazo…) y los **tramos** seguidos de cada una. Log: `ISLAS: pieza … N islas en M tramos` y una línea por isla (de mayor a menor) con sus tramos `+inicio:cuantos`.
+- **Tecla Fin**: 1.ª pulsación = brazos enteros pero pintados por trozos (deben verse igual que siempre); cada pulsación siguiente quita UNA isla (de la más grande a la más pequeña): **lo que desaparece es esa isla**. Tras la última, los brazos se ocultan otra vez. Log: `>>> Fin: brazos SIN la isla n.X …`.
+- La pieza grande se sigue ocultando como siempre mientras no se pulse Fin. Sin probar.
+
 ## E28 (rama `manos`) — Agarre por arma (como D-Rey86) y buscador de la mano
 - Problema: el arma se pega al mando con la calibración que se hizo con UNA arma. El juego pinta cada arma en un sitio distinto (el revólver, con los brazos más estirados), así que con otra arma la empuñadura no queda en el mando y al girar la muñeca el arma "da vueltas" a su alrededor.
 - Solución de D-Rey86 (su `docs/history/22` y `15`): un **punto de agarre por arma**, calibrado una vez en las gafas para cada arma. Aquí: cada arma recuerda su propia calibración de la mano.

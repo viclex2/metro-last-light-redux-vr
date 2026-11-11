@@ -203,6 +203,17 @@ typedef struct { UINT ic, si; float C0[4][4]; } WpnCal;
 static WpnCal g_wcal[MAXW]; static int g_nwcal = 0;
 static volatile UINT g_wpn_ic = 0, g_wpn_si = 0;   /* arma que se ve ahora (0 = sin reconocer) */
 static int g_show = -1;                            /* (E28) tecla Inicio: pieza guardada como brazo que se ensena (-1 = ninguna) */
+/* (E29) ISLAS de la pieza grande de los brazos (manos + antebrazos van en una sola pieza). Una "isla" es un trozo de
+ * la malla que no esta unido al resto (una mano, un antebrazo...). Como D-Rey86 en Metro 2033 (sus manos: 3 tramos
+ * seguidos), se lee la pieza una vez, se buscan sus islas y la pieza se puede pintar por trozos, quitando alguno. */
+#define MAXISR 256
+typedef struct { UINT start, count; int isl; } IslRange;
+static IslRange g_isr[MAXISR]; static int g_nisr = 0, g_nisl = 0;
+static UINT g_isl_size[MAXISR]; static int g_isl_order[MAXISR];   /* tamano de cada isla; islas de mayor a menor */
+static volatile LONG g_isl_state = 0;             /* 0 nada, 1 buffer apuntado, 2 islas listas, 3 fallo */
+static ID3D11Buffer *g_isl_ib = NULL; static DXGI_FORMAT g_isl_fmt; static UINT g_isl_off = 0, g_isl_ic = 0, g_isl_si = 0;
+static volatile int g_isl_on = 0;                 /* (tecla Fin) 1 = la pieza grande se pinta por trozos, sin la isla g_isl_hide */
+static volatile int g_isl_hide = -1;
 static int wcal_find(UINT ic, UINT si) { for (int k = 0; k < g_nwcal; k++) if (g_wcal[k].ic == ic && g_wcal[k].si == si) return k; return -1; }
 static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apagado, 2 sin funcion, 3 indice, 4 visor no valido, 5 mando no valido */
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
@@ -2057,6 +2068,89 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     last_exit = t1;
     return hr;
 }
+/* (E29) lee una vez los indices de la pieza grande (copia a una caja "de lectura") y busca sus islas */
+static void isl_scan(IDXGISwapChain *sc)
+{
+    if (g_isl_state != 1 || !g_isl_ib) return;
+    LONG fail = 3;
+    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL; ID3D11Buffer *st = NULL; UINT *par = NULL, *tri = NULL;
+    UINT isz = g_isl_fmt == DXGI_FORMAT_R16_UINT ? 2 : (g_isl_fmt == DXGI_FORMAT_R32_UINT ? 4 : 0);
+    UINT ic = g_isl_ic, si = g_isl_si;
+    if (!isz || ic < 3 || ic % 3) { vr_log("ISLAS: formato raro (fmt=%d ic=%u)", (int)g_isl_fmt, ic); goto out; }
+    if (FAILED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) || !dv) goto out;
+    ID3D11Device_GetImmediateContext(dv, &ctx);
+    if (!ctx) goto out;
+    D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
+    bd.ByteWidth = ic * isz; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(ID3D11Device_CreateBuffer(dv, &bd, NULL, &st)) || !st) { vr_log("ISLAS: no se pudo crear la caja de lectura"); goto out; }
+    D3D11_BOX box = { g_isl_off + si * isz, 0, 0, g_isl_off + (si + ic) * isz, 1, 1 };
+    ID3D11DeviceContext_CopySubresourceRegion(ctx, (ID3D11Resource *)st, 0, 0, 0, 0, (ID3D11Resource *)g_isl_ib, 0, &box);
+    D3D11_MAPPED_SUBRESOURCE ms;
+    if (FAILED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &ms)) || !ms.pData) { vr_log("ISLAS: no se pudo leer"); goto out; }
+    UINT maxv = 0;
+    tri = (UINT *)malloc(ic * sizeof(UINT));
+    if (!tri) { ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)st, 0); goto out; }
+    for (UINT k = 0; k < ic; k++) { tri[k] = isz == 2 ? ((const USHORT *)ms.pData)[k] : ((const UINT *)ms.pData)[k]; if (tri[k] > maxv) maxv = tri[k]; }
+    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)st, 0);
+    if (maxv > 4000000) { vr_log("ISLAS: indices demasiado grandes (%u)", maxv); goto out; }
+    par = (UINT *)malloc((maxv + 1) * sizeof(UINT));
+    if (!par) goto out;
+    for (UINT v = 0; v <= maxv; v++) par[v] = v;
+#define ISL_ROOT(x) ({ UINT r__ = (x); while (par[r__] != r__) { par[r__] = par[par[r__]]; r__ = par[r__]; } r__; })
+    for (UINT t = 0; t < ic; t += 3) {   /* los 3 vertices de cada triangulo estan unidos */
+        UINT a = ISL_ROOT(tri[t]), b = ISL_ROOT(tri[t + 1]), d = ISL_ROOT(tri[t + 2]);
+        par[b] = a; par[d] = a;
+    }
+    /* isla de cada triangulo (numeradas por orden de aparicion) y tramos seguidos de la misma isla */
+    UINT roots[MAXISR]; int nisl = 0, nr = 0, cur = -1;
+    for (UINT t = 0; t < ic; t += 3) {
+        UINT rt = ISL_ROOT(tri[t]); int id = -1;
+        for (int k = 0; k < nisl; k++) if (roots[k] == rt) { id = k; break; }
+        if (id < 0) { if (nisl >= MAXISR) { vr_log("ISLAS: mas de %d islas", MAXISR); goto out; } id = nisl; roots[nisl] = rt; g_isl_size[nisl] = 0; nisl++; }
+        g_isl_size[id] += 3;
+        if (id != cur) {
+            if (nr >= MAXISR) { vr_log("ISLAS: mas de %d tramos", MAXISR); goto out; }
+            g_isr[nr].start = t; g_isr[nr].count = 0; g_isr[nr].isl = id; nr++; cur = id;
+        }
+        g_isr[nr - 1].count += 3;
+    }
+#undef ISL_ROOT
+    for (int k = 0; k < nisl; k++) g_isl_order[k] = k;
+    for (int a = 0; a < nisl; a++) for (int b = a + 1; b < nisl; b++)
+        if (g_isl_size[g_isl_order[b]] > g_isl_size[g_isl_order[a]]) { int x = g_isl_order[a]; g_isl_order[a] = g_isl_order[b]; g_isl_order[b] = x; }
+    g_nisl = nisl; g_nisr = nr;
+    vr_log("ISLAS: pieza %u/%u (indices de %u bytes, vertices hasta %u): %d islas en %d tramos", ic, si, isz, maxv, nisl, nr);
+    for (int o = 0; o < nisl; o++) {
+        int k = g_isl_order[o];
+        char line[600]; int L = 0;
+        for (int r = 0; r < nr && L < 520; r++) if (g_isr[r].isl == k) L += snprintf(line + L, sizeof(line) - L, " +%u:%u", g_isr[r].start, g_isr[r].count);
+        vr_log("ISLAS:   isla %d (n.%d con la tecla Fin): %u indices, tramos%s", k, o + 1, g_isl_size[k], line);
+    }
+    fail = 2;
+out:
+    if (par) free(par);
+    if (tri) free(tri);
+    if (st) ID3D11Buffer_Release(st);
+    if (ctx) ID3D11DeviceContext_Release(ctx);
+    if (dv) ID3D11Device_Release(dv);
+    if (g_isl_ib) { ID3D11Buffer_Release(g_isl_ib); g_isl_ib = NULL; }
+    MemoryBarrier();
+    g_isl_state = fail;
+}
+/* (E29) tecla Fin: ensena los brazos quitando UNA isla cada vez (de la mas grande a la mas pequena); tras la ultima, se
+ * vuelven a ocultar. Lo que desaparece en cada pulsacion es esa isla. */
+static void isl_key(void)
+{
+    if (g_isl_state != 2) { vr_log(">>> Fin: aun no hay islas (estado %ld: tiene que verse el arma en VR un momento)", (long)g_isl_state); Beep(400, 150); return; }
+    static int o = -1;
+    o++;
+    if (o > g_nisl) { o = -1; g_isl_on = 0; g_isl_hide = -1; vr_log(">>> Fin: brazos ocultos otra vez"); Beep(600, 100); return; }
+    g_isl_on = 1;
+    if (o == 0) { g_isl_hide = -1; vr_log(">>> Fin: brazos ENTEROS (pintados por trozos: deben verse igual que siempre)"); }
+    else { g_isl_hide = g_isl_order[o - 1]; vr_log(">>> Fin: brazos SIN la isla n.%d de %d (isla %d, %u indices): lo que desaparece es esa isla",
+                                                  o, g_nisl, g_isl_hide, g_isl_size[g_isl_hide]); }
+    Beep(1000, 60);
+}
 static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UINT flags)
 {
     /* si nos vuelven a llamar desde dentro (bucle con la overlay), vamos directos al de fabrica */
@@ -2064,6 +2158,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     PFN_Present next = g_orig_Present;
     if (t_in_present) return next(sc, sync, flags);
     t_in_present = 1;
+    if (g_isl_state == 1) isl_scan(sc);   /* (E29) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -4475,6 +4570,10 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             int dh = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
             if (dh && !prevhome) pieces_show_key();
             prevhome = dh;
+            static int prevend = 0;   /* (E29) Fin: islas de la pieza grande */
+            int de = (GetAsyncKeyState(VK_END) & 0x8000) != 0;
+            if (de && !prevend) isl_key();
+            prevend = de;
         }
         /* Shift + H: buscar la camara del juego en memoria */
         {
@@ -5281,7 +5380,22 @@ static int hud_pre(ID3D11DeviceContext *c, int fulltri)
     return 1;
 }
 static void hud_post(ID3D11DeviceContext *c) { g_orig_RSSetVP(c, 1, &g_vp_game); }
-/* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6) */
+/* (E29) la pieza guardada mas grande (la de manos + antebrazos) */
+static int isl_is_big(UINT ic, UINT si)
+{
+    UINT bic = 0, bsi = 0;
+    for (int i = 0; i < g_nhide; i++) if (g_hide[i].ic > bic) { bic = g_hide[i].ic; bsi = g_hide[i].si; }
+    return bic > 1000 && ic == bic && si == bsi;
+}
+/* tramos a pintar: con las islas listas, los suyos (0 = ese tramo no se pinta); si no, la pieza entera */
+static int isl_nranges(void) { return g_isl_state == 2 ? g_nisr : 1; }
+static int isl_range(int r, UINT ic, UINT si, UINT *s, UINT *n)
+{
+    if (g_isl_state != 2) { *s = si; *n = ic; return 1; }
+    if (g_isr[r].isl == g_isl_hide) return 0;
+    *s = si + g_isr[r].start; *n = g_isr[r].count; return 1;
+}
+/* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
 {
     (void)c;
@@ -5302,7 +5416,19 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
-        if (g_hide[i].ic == ic && g_hide[i].si == si) { g_arm_seen = GetTickCount64(); if (i == g_show) break; InterlockedIncrement(&g_pc_hidden); return 1; }
+        if (g_hide[i].ic == ic && g_hide[i].si == si) {
+            g_arm_seen = GetTickCount64();
+            if (i == g_show) break;
+            if (isl_is_big(ic, si)) {   /* (E29) la pieza grande: se apunta su buffer para buscar islas */
+                if (g_isl_state == 0 && InterlockedCompareExchange(&g_isl_state, 1, 0) == 0) {
+                    ID3D11Buffer *b = NULL; DXGI_FORMAT f = DXGI_FORMAT_UNKNOWN; UINT o = 0;
+                    ID3D11DeviceContext_IAGetIndexBuffer(c, &b, &f, &o);
+                    if (b) { g_isl_ib = b; g_isl_fmt = f; g_isl_off = o; g_isl_ic = ic; g_isl_si = si; } else g_isl_state = 3;
+                }
+                if (g_isl_on) { InterlockedIncrement(&g_pc_drawn); return 2; }
+            }
+            InterlockedIncrement(&g_pc_hidden); return 1;
+        }
     InterlockedIncrement(&g_pc_drawn);
     return 0;
 }
@@ -5319,7 +5445,10 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
-    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                      \
+      if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); }          \
+      else if (ps_ == 2) { int nr_ = isl_nranges(); for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_;         \
+          if (isl_range(r_, ic, si, &s_, &n_)) TW_DRAW(c, tr(c, n_, s_, bv)); } } } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
@@ -5327,7 +5456,10 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
-    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } t_in_draw = 0; }
+    t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                                   \
+      if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); }           \
+      else if (ps_ == 2) { int nr_ = isl_nranges(); for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_;                      \
+          if (isl_range(r_, ic, si, &s_, &n_)) TW_DRAW(c, tr(c, n_, ni, s_, bv, sinst)); } } } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 /* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
@@ -5726,7 +5858,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E28: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E29: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
