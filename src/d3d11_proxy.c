@@ -187,7 +187,7 @@ static float g_hand_rel[4][4];               /* mando derecho respecto al centro
 static float g_hand_G[4][4];                 /* lo que se mueve el arma: mano_ahora * mano_calibrada^-1 */
 static int g_hand_cal = 0;                   /* 1 = ya hay calibracion */
 static float g_hand_C0[4][4];                /* postura de la mano "con el arma en reposo" */
-static volatile LONG g_hand_req = 0, g_hand_n = 0;
+static volatile LONG g_hand_req = 0, g_hand_n = 0, g_hand_cam = 0;
 static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apagado, 2 sin funcion, 3 indice, 4 visor no valido, 5 mando no valido */
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
@@ -1080,10 +1080,14 @@ static void check_camera(const void *src, void *dst, void *res, UINT bw, UINT ma
             if (g_orig_P00 > 0 && p00 > g_orig_P00 * 1.3f) {   /* (E10c) camara del arma (lente estrecha) */
                 LONG e = g_eye;
                 float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
-                for (int r = 0; r < 3; r++) {
-                    Hc[r][3] -= t[r];
-                    Hic[r][3] += Hic[r][0] * t[0] + Hic[r][1] * t[1] + Hic[r][2] * t[2];
+                /* (E17d) ESTA es la camara con la que se pinta el arma que ves (la E15 solo movia las piezas del
+                 * cajon 0, que eran otras). Se le aplica la mano: vista_arma = T(-ojo) * G_mano * vista */
+                if (cfg_mano && g_hand_ok) {
+                    float Hg[4][4]; mul4(g_hand_G, Hc, Hg); memcpy(Hc, Hg, sizeof(Hg));
+                    InterlockedIncrement(&g_hand_cam);
                 }
+                for (int r = 0; r < 3; r++) Hc[r][3] -= t[r];
+                if (!inv4(Hc, Hic)) { for (int r = 0; r < 4; r++) for (int k = 0; k < 4; k++) Hic[r][k] = (r == k); }
                 InterlockedIncrement(&g_nat_armaojo);
             } else InterlockedIncrement(&g_nat_otras);
         }
@@ -3898,8 +3902,8 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
-                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                                       (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_cam, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
                                        (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0));
@@ -4118,6 +4122,17 @@ static void draw_hooks_check(void)
         { (void **)&vt->DrawIndexed, (void *)hk_DrawIdx, (void **)&g_orig_DrawIdx, "DrawIndexed" },
         { (void **)&vt->DrawInstanced, (void *)hk_DrawInst, (void **)&g_orig_DrawInst, "DrawInstanced" },
         { (void **)&vt->DrawIndexedInstanced, (void *)hk_DrawIdxInst, (void **)&g_orig_DrawIdxInst, "DrawIndexedInstanced" } };
+    static int dumped = 0;
+    if (!dumped && g_mode == 1) {   /* (E17d) para el siguiente paso: los primeros bytes de las funciones reales de dibujo */
+        dumped = 1;
+        for (int i = 2; i < 6; i++) {
+            unsigned char *b = (unsigned char *)*t[i].orig; char line[200]; int L = 0;
+            for (int k = 0; k < 24 && b; k++) L += snprintf(line + L, sizeof(line) - L, "%02X ", b[k]);
+            HMODULE hm = NULL; GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)b, &hm);
+            char mn[MAX_PATH] = "?"; if (hm) GetModuleFileNameA(hm, mn, MAX_PATH);
+            vr_log("DIBUJO real %s = %p (%s+0x%llx): %s", t[i].n, (void *)b, mn, (unsigned long long)(b - (unsigned char *)hm), line);
+        }
+    }
     for (int i = 0; i < 6; i++) {
         void *cur = *t[i].slot;
         if (cur == t[i].hook) continue;
@@ -4286,7 +4301,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E17c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E17d: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

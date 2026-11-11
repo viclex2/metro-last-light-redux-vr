@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E17d (rama `manos`) — La mano, en la cámara con la que de verdad se pinta el arma
+- Log de la E17c: los desvíos de "pinta esto" los vuelve a quitar Windows en **cada** fotograma (288 veces/s), así que el mod sigue sin ver dibujos. Por esa vía no se puede. Se apuntan los primeros bytes de las funciones reales de dibujo para engancharlas por dentro en otra versión (lo que se necesita para quitar brazos).
+- Descubierto en el log: `arma: piezas_corregidas` era justo el doble que `mano: piezas`. La mitad eran cajones del cajón 0 (que la E15 movía, pero no son el arma que ves) y la otra mitad la **cámara del arma**, que es con la que se pinta el arma visible (la que arregló el 3D en la E10c). Ahora la mano se aplica también a esa cámara. Log: `mano: camara_arma=…`.
+
 ## E17c (rama `manos`) — El mod no veía ningún dibujo
 - Log de la E17b: `dibujos=0`. El mod no ve ni una orden de "pinta esto" del juego (sí ve los datos, por eso la cámara y el 3D funcionan). Por eso F6 no encuentra piezas y el HUD de la E11 no hizo nada.
 - Sospecha: Windows cambia por dentro la "centralita" de esas órdenes después de que pusimos el desvío, o el juego pinta con otro contexto. Ahora, en cada fotograma, se comprueba y se vuelve a poner, y se usa el contexto que de verdad usa el juego. Log: `VTABLE: …` y `desvios_repuestos=`.
