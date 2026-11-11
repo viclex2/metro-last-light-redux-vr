@@ -178,8 +178,8 @@ static ID3D11DeviceContext *g_hud_ctx;
 static volatile LONG g_vt_fix;
 /* (E18) MinHook */
 #define MHVAR 6
-static void *g_mh_fn[4][MHVAR], *g_mh_tr[4][MHVAR];  /* funcion real enganchada / puente para llamar a la original */
-static int g_mh_n[4];                                /* versiones enganchadas de Draw, DrawIndexed, DrawInstanced, DrawIndexedInstanced */
+static void *g_mh_fn[5][MHVAR], *g_mh_tr[5][MHVAR];  /* funcion real enganchada / puente para llamar a la original */
+static int g_mh_n[5];                                /* versiones enganchadas de Draw, DrawIndexed, DrawInstanced, DrawIndexedInstanced, (E20c) UpdateSubresource */
 static volatile LONG g_mh_calls[4];                  /* llamadas por segundo (log) */
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
 static int cfg_mandos = 1;
@@ -1720,10 +1720,15 @@ static void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext *c, ID3D11Resource *r
     g_orig_Unmap(c, r, sub);
 }
 
-static void STDMETHODCALLTYPE hk_UpdateSub(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub,
-                                           const D3D11_BOX *box, const void *src, UINT rp, UINT dp)
+static volatile LONG g_upd_null = 0;
+static void upd_core(PFN_UpdateSub orig, ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub,
+                     const D3D11_BOX *box, const void *src, UINT rp, UINT dp)
 {
     InterlockedIncrement(&g_updsub);
+    if (!r) {   /* (E20c) el juego manda rellenar una textura que no existe (su creacion fallo): Windows petaba aqui */
+        if (InterlockedIncrement(&g_upd_null) <= 10) vr_log("FRENO: UpdateSubresource sin textura (la creacion fallo antes): me la salto para que no pete");
+        return;
+    }
     UINT bw;
     if (cfg_read && src && cb_buffer_info(r, &bw)) {
         if (!box && bw == CAM_BYTES)
@@ -1739,8 +1744,11 @@ static void STDMETHODCALLTYPE hk_UpdateSub(ID3D11DeviceContext *c, ID3D11Resourc
             }
         }
     }
-    g_orig_UpdateSub(c, r, sub, box, src, rp, dp);
+    orig(c, r, sub, box, src, rp, dp);
 }
+static void STDMETHODCALLTYPE hk_UpdateSub(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub,
+                                           const D3D11_BOX *box, const void *src, UINT rp, UINT dp)
+{ upd_core(g_orig_UpdateSub, c, r, sub, box, src, rp, dp); }
 
 typedef void (STDMETHODCALLTYPE *PFN_CopyRes)(ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
 typedef void (STDMETHODCALLTYPE *PFN_CopySub)(ID3D11DeviceContext*, ID3D11Resource*, UINT, UINT, UINT, UINT,
@@ -1910,6 +1918,14 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     if (real_frame) { InterlockedIncrement(&g_real_frames); vr_submit_frame(sc); }
     LARGE_INTEGER pp0, pp1; QueryPerformanceCounter(&pp0);
     HRESULT hr = next(sc, sync, flags);
+    if (FAILED(hr)) {   /* (E20c) */
+        static int said = 0;
+        if (said++ < 5) {
+            ID3D11Device *dv = NULL; HRESULT rr = 0;
+            if (SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) { rr = ID3D11Device_GetDeviceRemovedReason(dv); ID3D11Device_Release(dv); }
+            vr_log("PRESENT FALLO hr=0x%08lX (grafica caida? motivo=0x%08lX)", (unsigned long)hr, (unsigned long)rr);
+        }
+    }
     QueryPerformanceCounter(&pp1);
     {
         static LARGE_INTEGER lastp; LARGE_INTEGER fq; QueryPerformanceFrequency(&fq); g_qpf = fq.QuadPart;
@@ -4273,14 +4289,54 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++;                                                       \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
     t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, ni, si, bv, sinst); if (h) hud_post(c); } t_in_draw = 0; }
+#define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
+    { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 #define MH_ALL(M) M(0) M(1) M(2) M(3) M(4) M(5)
-MH_ALL(MH_D) MH_ALL(MH_DI) MH_ALL(MH_DN) MH_ALL(MH_DII)
-static void *const g_mh_det[4][MHVAR] = {
+MH_ALL(MH_D) MH_ALL(MH_DI) MH_ALL(MH_DN) MH_ALL(MH_DII) MH_ALL(MH_US)
+static void *const g_mh_det[5][MHVAR] = {
     { (void *)mh_D0,   (void *)mh_D1,   (void *)mh_D2,   (void *)mh_D3,   (void *)mh_D4,   (void *)mh_D5 },
     { (void *)mh_DI0,  (void *)mh_DI1,  (void *)mh_DI2,  (void *)mh_DI3,  (void *)mh_DI4,  (void *)mh_DI5 },
     { (void *)mh_DN0,  (void *)mh_DN1,  (void *)mh_DN2,  (void *)mh_DN3,  (void *)mh_DN4,  (void *)mh_DN5 },
-    { (void *)mh_DII0, (void *)mh_DII1, (void *)mh_DII2, (void *)mh_DII3, (void *)mh_DII4, (void *)mh_DII5 } };
-static const char *const g_mh_name[4] = { "Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced" };
+    { (void *)mh_DII0, (void *)mh_DII1, (void *)mh_DII2, (void *)mh_DII3, (void *)mh_DII4, (void *)mh_DII5 },
+    { (void *)mh_US0,  (void *)mh_US1,  (void *)mh_US2,  (void *)mh_US3,  (void *)mh_US4,  (void *)mh_US5 } };
+static const char *const g_mh_name[5] = { "Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced", "UpdateSubresource" };
+/* (E20c) CHIVATO: si el juego no consigue crear un cajon o una textura, se apunta (y si la grafica se ha "caido") */
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateBuf)(ID3D11Device *, const D3D11_BUFFER_DESC *, const D3D11_SUBRESOURCE_DATA *, ID3D11Buffer **);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateTex2D)(ID3D11Device *, const D3D11_TEXTURE2D_DESC *, const D3D11_SUBRESOURCE_DATA *, ID3D11Texture2D **);
+static PFN_CreateBuf g_tr_CreateBuf = NULL; static PFN_CreateTex2D g_tr_CreateTex = NULL;
+static volatile LONG g_create_fail = 0;
+static void create_failed(ID3D11Device *d, const char *what, HRESULT hr, UINT a, UINT b, UINT c)
+{
+    if (InterlockedIncrement(&g_create_fail) > 20) return;
+    HRESULT rr = d ? ID3D11Device_GetDeviceRemovedReason(d) : 0;
+    vr_log("CHIVATO: %s FALLO hr=0x%08lX (%u x %u, formato/uso %u) | grafica caida? motivo=0x%08lX", what, (unsigned long)hr, a, b, c, (unsigned long)rr);
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateBuf(ID3D11Device *d, const D3D11_BUFFER_DESC *ds, const D3D11_SUBRESOURCE_DATA *i, ID3D11Buffer **o)
+{
+    HRESULT hr = g_tr_CreateBuf(d, ds, i, o);
+    if (FAILED(hr) && o) create_failed(d, "CreateBuffer", hr, ds ? ds->ByteWidth : 0, 0, ds ? ds->BindFlags : 0);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateTex(ID3D11Device *d, const D3D11_TEXTURE2D_DESC *ds, const D3D11_SUBRESOURCE_DATA *i, ID3D11Texture2D **o)
+{
+    HRESULT hr = g_tr_CreateTex(d, ds, i, o);
+    if (FAILED(hr) && o) create_failed(d, "CreateTexture2D", hr, ds ? ds->Width : 0, ds ? ds->Height : 0, ds ? (UINT)ds->Format : 0);
+    return hr;
+}
+static void mh_start(void);
+static void dev_hooks(ID3D11DeviceContext *ctx)
+{
+    static int done = 0; if (done || !ctx) return;
+    ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(ctx, &dev);
+    if (!dev) return;
+    done = 1;
+    mh_start();
+    void *f1 = (void *)dev->lpVtbl->CreateBuffer, *f2 = (void *)dev->lpVtbl->CreateTexture2D;
+    MH_STATUS s1 = MH_CreateHook(f1, (void *)hk_CreateBuf, (void **)&g_tr_CreateBuf); if (s1 == MH_OK) s1 = MH_EnableHook(f1);
+    MH_STATUS s2 = MH_CreateHook(f2, (void *)hk_CreateTex, (void **)&g_tr_CreateTex); if (s2 == MH_OK) s2 = MH_EnableHook(f2);
+    vr_log("CHIVATO: CreateBuffer -> %s, CreateTexture2D -> %s", MH_StatusToString(s1), MH_StatusToString(s2));
+    ID3D11Device_Release(dev);
+}
 static void mh_start(void)
 {
     static int tried = 0; if (tried) return; tried = 1;
@@ -4291,12 +4347,14 @@ static void mh_start(void)
 /* mira las casillas de dibujo de la tabla del contexto y engancha por dentro cada version nueva que aparezca */
 static void mh_scan(ID3D11DeviceContext *c)
 {
-    if (!c || !g_mh_ok || !(cfg_hud || cfg_brazos)) return;
+    if (!c || !g_mh_ok) return;
     ID3D11DeviceContextVtbl *vt = c->lpVtbl;
-    void *p4[4] = { (void *)vt->Draw, (void *)vt->DrawIndexed, (void *)vt->DrawInstanced, (void *)vt->DrawIndexedInstanced };
-    for (int k = 0; k < 4; k++) {
+    void *p4[5] = { (void *)vt->Draw, (void *)vt->DrawIndexed, (void *)vt->DrawInstanced, (void *)vt->DrawIndexedInstanced, (void *)vt->UpdateSubresource };
+    if (g_orig_UpdateSub && (void *)vt->UpdateSubresource == (void *)hk_UpdateSub) p4[4] = (void *)g_orig_UpdateSub;
+    for (int k = 0; k < 5; k++) {
         void *p = p4[k];
-        if (!p) continue;
+        if (!p || p == (void *)hk_UpdateSub) continue;
+        if (k < 4 && !(cfg_hud || cfg_brazos)) continue;
         int known = 0;
         for (int i = 0; i < g_mh_n[k]; i++) if (g_mh_fn[k][i] == p) { known = 1; break; }
         for (int i = 0; i < MHVAR && !known; i++) if (g_mh_det[k][i] == p) known = 1;   /* (por si acaso) uno nuestro */
@@ -4400,7 +4458,9 @@ static void *g_vt_seen = NULL;
 static void draw_hooks_check(void)
 {
     ID3D11DeviceContext *c = g_hud_ctx;
-    if (!c || !(cfg_hud || cfg_brazos)) return;
+    if (!c) return;
+    mh_scan(c);
+    if (!(cfg_hud || cfg_brazos)) return;
     ID3D11DeviceContextVtbl *vt = c->lpVtbl;
     if ((void *)vt != g_vt_seen) {
         if (g_vt_seen) vr_log("VTABLE: el contexto tiene OTRA tabla de funciones (%p -> %p)", g_vt_seen, (void *)vt);
@@ -4432,8 +4492,10 @@ static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
             PATCH(&ctx->lpVtbl->Map,   hk_Map,   g_orig_Map,   "Map");
             PATCH(&ctx->lpVtbl->Unmap, hk_Unmap, g_orig_Unmap, "Unmap");
         }
-        if (cfg_updsub)
-            PATCH(&ctx->lpVtbl->UpdateSubresource, hk_UpdateSub, g_orig_UpdateSub, "UpdateSubresource");
+        /* (E20c) UpdateSubresource va por MinHook (mh_scan): Windows tambien cambia esa casilla de la tabla */
+        mh_start();
+        mh_scan(ctx);
+        dev_hooks(ctx);
         if (cfg_vscb) {
             PATCH(&ctx->lpVtbl->VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB, "VSSetConstantBuffers");
             PATCH(&ctx->lpVtbl->PSSetConstantBuffers, hk_PSSetCB, g_orig_PSSetCB, "PSSetConstantBuffers");
@@ -4576,7 +4638,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E20b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E20c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

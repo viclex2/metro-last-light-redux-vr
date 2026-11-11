@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20c (rama `manos`) — Cierre al cambiar las opciones gráficas: freno y chivato
+- Log del usuario (con la E19), al aplicar opciones gráficas desde el menú: `ERROR 0xC0000005 en d3d11.dll+0x151A5A`, lectura de `0xEC`. Con la `d3d11.dll` de su Windows: es **UpdateSubresource** ("rellena esta textura") de la tabla de funciones "versión 1" del contexto (la misma que alterna con la 2, como los Draw), y la textura que le pasan es **nula**: el juego intenta rellenar una textura cuya creación falló antes.
+- El contador `UpdSub` no subió: esa llamada no pasaba por nuestro gancho, porque Windows también cambia esa casilla de la tabla.
+- Ahora **UpdateSubresource va por MinHook** (todas sus versiones, como los Draw) y, si llega sin textura, **se salta** (log `FRENO: …`) en vez de petar.
+- **Chivato** (MinHook en `CreateBuffer` y `CreateTexture2D` del dispositivo): si el juego no consigue crear algo, el log dice qué, el error y si la gráfica se ha "caído" (`CHIVATO: … FALLO hr=… motivo=…`). También `PRESENT FALLO` si falla el Present. Esto dirá la causa de verdad.
+- Ojo: además del menú de antes, la nota vieja (ESTADO.md, problema 4) decía que pasaba también con `visor_imagen=0`.
+
 ## E20b (rama `manos`) — Menús, intro y vídeos en una pantalla flotante; VR solo en la partida
 - Lo pidió el usuario: fuera de la partida (menús, elegir partida, intro, vídeos, pantallas de carga, el menú de opciones…) la imagen del juego se ve en una **pantalla flotante** delante de ti, con todo lo demás en **negro**. Al cargar la partida del todo, se pone sola en VR.
 - **Automático**: el mod mira si el juego está montando la cámara del jugador (el gancho de la cámara nativa, `+0x69B900`). Si la monta durante 1,5 s seguidos → modo VR (lo que antes se hacía con F9). Si deja de montarla → pantalla flotante. Pulsar F9 pasa a manual hasta reiniciar el juego.
