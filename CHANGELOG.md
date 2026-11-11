@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E25 (rama `manos`) — Chivato de saltitos
+- Prueba de la E24 (usuario, a 1280x720): casi todo el rato fluido (144 fotogramas = 72 parejas), pero con "saltitos" al girar la cabeza. Log: algunos segundos hay un fotograma suelto de ~20 ms y esa pareja llega tarde; a ratos baja a 40-60 parejas.
+- Nada cambia en el juego. Solo se mide: cada fotograma que tarde más de 9 ms (sin contar la espera a SteamVR) se apunta con su desglose: `SALTITO: fotograma de X ms (ojo N): juego=… (dentro, el mod con los objetos=…) | mod_envio=… present=… espera_steamvr=… resto=…`. Y `saltitos=N/s` en la línea `TIEMPOS`. Con eso se sabe si los picos son del juego, del mod o del envío a las gafas.
+
 ## E24 (rama `manos`) — Borrador en memoria normal para los cajones de los objetos
 - Prueba de la E23: "va algo diferente, creo". Log: el mod baja de 190-250 a **130-165 ms/s**, y hay segundos con **138-140 fotogramas = ~70 parejas** (antes clavado en 73 = 36 parejas): está rozando el escalón de 72. Pero cada objeto sigue costando **~9,3 us**: el cajón está en memoria de la gráfica, lentísima de LEER aunque se copie directo.
 - Ahora, en modo VR, cuando el juego pide escribir un cajón de objeto (208 B) o de luces (144/272 B) con DISCARD, se le da un **borrador en memoria normal** (por hilo). En el Unmap se corrige en el borrador y se copia de golpe a la gráfica (escribir allí es rápido). Config `borrador=1` (0 = como antes). Log `TIEMPOS: … us cada uno … borradores=N/s`.

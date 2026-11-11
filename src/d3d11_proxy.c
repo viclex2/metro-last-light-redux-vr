@@ -1962,7 +1962,39 @@ static volatile LONG g_wait_us = 0;       /* tiempo esperando a SteamVR en el ul
 static void vr_after_present(void);
 static int vr_active(void);
 
+/* (E25) CHIVATO DE SALTITOS: tiempos de cada fotograma; si uno tarda demasiado se apunta en que se fue */
+static volatile LONG g_fr_sub_us = 0, g_fr_wait_us = 0, g_fr_pres_us = 0;
+static LONG g_fr_mod0 = 0;
+static volatile LONG g_saltos = 0;
+static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UINT flags);
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT flags)
+{
+    if (t_in_present) return hk_Present_in(sc, sync, flags);
+    static LARGE_INTEGER last_exit; static ULONGLONG said_t = 0; static int said_n = 0;
+    LARGE_INTEGER t0, t1; QueryPerformanceCounter(&t0);
+    LONG mod_now = g_prof_mod_us, mod_frame = mod_now - g_fr_mod0; g_fr_mod0 = mod_now;
+    LONG eye = g_eye;
+    g_fr_sub_us = g_fr_wait_us = g_fr_pres_us = 0;
+    HRESULT hr = hk_Present_in(sc, sync, flags);
+    QueryPerformanceCounter(&t1);
+    if (last_exit.QuadPart && g_qpf) {
+        double game = (double)(t0.QuadPart - last_exit.QuadPart) * 1000.0 / g_qpf;
+        double inside = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / g_qpf;
+        double wait = g_fr_wait_us / 1000.0, work = game + inside - wait;
+        if (g_mode == 1 && vr_active() && work > 9.0) {
+            InterlockedIncrement(&g_saltos);
+            ULONGLONG now = GetTickCount64();
+            if (now - said_t > 1000) { said_t = now; said_n = 0; }
+            if (said_n++ < 3)
+                vr_log("SALTITO: fotograma de %.1f ms sin contar la espera (ojo %ld): juego=%.1f (dentro, el mod con los objetos=%.1f) | mod_envio=%.1f present=%.1f espera_steamvr=%.1f resto=%.1f",
+                       work, (long)eye, game, mod_frame / 1000.0, g_fr_sub_us / 1000.0, g_fr_pres_us / 1000.0, wait,
+                       inside - g_fr_sub_us / 1000.0 - g_fr_pres_us / 1000.0 - wait);
+        }
+    }
+    last_exit = t1;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UINT flags)
 {
     /* si nos vuelven a llamar desde dentro (bucle con la overlay), vamos directos al de fabrica */
     if (!t_in_present) sc_vt_sync();   /* (E20d) */
@@ -1975,7 +2007,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
                (long)n, sync, flags, (long)g_maps, (long)g_cbmaps, (long)g_updsub);
     int real_frame = !(flags & DXGI_PRESENT_TEST);
     if (cfg_novsync && vr_active()) sync = 0;   /* SteamVR marca el ritmo */
-    if (real_frame) { InterlockedIncrement(&g_real_frames); vr_submit_frame(sc); }
+    if (real_frame) {
+        LARGE_INTEGER s0, s1; QueryPerformanceCounter(&s0);
+        InterlockedIncrement(&g_real_frames); vr_submit_frame(sc);
+        QueryPerformanceCounter(&s1); g_fr_sub_us = (LONG)((s1.QuadPart - s0.QuadPart) * 1000000 / g_qpf);
+    }
     LARGE_INTEGER pp0, pp1; QueryPerformanceCounter(&pp0);
     HRESULT hr = next(sc, sync, flags);
     if (FAILED(hr)) {   /* (E20c) */
@@ -1990,6 +2026,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     {
         static LARGE_INTEGER lastp; LARGE_INTEGER fq; QueryPerformanceFrequency(&fq); g_qpf = fq.QuadPart;
         InterlockedExchangeAdd(&g_prof_present_us, (LONG)((pp1.QuadPart - pp0.QuadPart) * 1000000 / fq.QuadPart));
+        g_fr_pres_us = (LONG)((pp1.QuadPart - pp0.QuadPart) * 1000000 / fq.QuadPart);
         if (lastp.QuadPart) {
             LONG ft = (LONG)((pp1.QuadPart - lastp.QuadPart) * 1000000 / fq.QuadPart);
             if (ft > g_prof_maxframe_us) g_prof_maxframe_us = ft;
@@ -2846,6 +2883,7 @@ static void vr_after_present(void)
     hand_update(rp);
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
     InterlockedExchangeAdd(&g_wait_us, (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart));
+    g_fr_wait_us = (LONG)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart);   /* (E25) */
     if (p_GetFrameTiming) {   /* (E12) lo que ha tardado la grafica en el ultimo fotograma que vio SteamVR */
         OvrFrameTiming ft; memset(&ft, 0, sizeof(ft)); ft.size = sizeof(ft);
         if (p_GetFrameTiming(&ft, 1) && ft.frameIndex != g_ft_last) {
@@ -4463,10 +4501,10 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             LONG frz = InterlockedExchange(&g_frozen_reads, 0), vlv = InterlockedExchange(&g_valve, 0);
             {
                 LONG cb0n = InterlockedExchange(&g_prof_cb0_n, 0), cb0us = InterlockedExchange(&g_prof_cb0_us, 0);
-                vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s (objetos: %ld/s, %ldms/s, %.2fus cada uno) fotograma_mas_lento=%.1fms esperando_steamvr=%ldms/s fotogramas=%ld/s lente_principal=%.3f imagen=%ux%u borradores=%ld/s",
+                vr_log("TIEMPOS: en_grafica(Present)=%ldms/s en_el_mod=%ldms/s (objetos: %ld/s, %ldms/s, %.2fus cada uno) fotograma_mas_lento=%.1fms esperando_steamvr=%ldms/s fotogramas=%ld/s lente_principal=%.3f imagen=%ux%u borradores=%ld/s saltitos=%ld/s",
                    (long)(InterlockedExchange(&g_prof_present_us, 0) / 1000), (long)(InterlockedExchange(&g_prof_mod_us, 0) / 1000),
                    (long)cb0n, (long)(cb0us / 1000), cb0n ? (double)cb0us / cb0n : 0.0,
-                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h, (long)InterlockedExchange(&g_shadow_n, 0));
+                   InterlockedExchange(&g_prof_maxframe_us, 0) / 1000.0, (long)(wus / 1000), (long)fps, g_orig_P00, (unsigned)g_vr_w, (unsigned)g_vr_h, (long)InterlockedExchange(&g_shadow_n, 0), (long)InterlockedExchange(&g_saltos, 0));
             }
             if (g_ft_n > 0) {   /* (E12) */
                 vr_log("STEAMVR: pares=%ld/s grafica_juego=%.1fms grafica_total=%.1fms grafica_steamvr=%.1fms entre_pares=%.1fms "
@@ -4978,7 +5016,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E24: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E25: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
