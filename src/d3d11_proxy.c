@@ -35,6 +35,7 @@
 #include <string.h>
 #include <math.h>
 #include <xmmintrin.h>
+#include "MinHook.h"   /* (E18) MinHook (BSD-2, src/minhook): ganchos "por dentro" de las funciones */
 
 #define RAD2DEG 57.29577951f
 #define CAM_BYTES 352
@@ -175,6 +176,11 @@ static void pieces_key(int shift, int ctrl);
 static void draw_hooks_check(void);
 static ID3D11DeviceContext *g_hud_ctx;
 static volatile LONG g_vt_fix;
+/* (E18) MinHook */
+#define MHVAR 6
+static void *g_mh_fn[4][MHVAR], *g_mh_tr[4][MHVAR];  /* funcion real enganchada / puente para llamar a la original */
+static int g_mh_n[4];                                /* versiones enganchadas de Draw, DrawIndexed, DrawInstanced, DrawIndexedInstanced */
+static volatile LONG g_mh_calls[4];                  /* llamadas por segundo (log) */
 static int g_hud_draws = 0;             /* dibujos en la imagen final en este fotograma (el 1o es la escena) */
 static int cfg_mandos = 1;
 static float cfg_giro = 120.0f;       /* grados por segundo con el stick derecho a tope */
@@ -3902,11 +3908,12 @@ static DWORD WINAPI stats_thread(LPVOID unused)
             {   /* (E10) ojo de la camara nativa */
                 LONG ok = InterlockedExchange(&g_nat_eok, 0), bad = InterlockedExchange(&g_nat_ebad, 0), none = InterlockedExchange(&g_nat_enone, 0);
                 if (bad > 10 && bad > 2 * ok) { g_nat_flip ^= 1; vr_log("NATIVA: el juego monta la camara en otro momento; cambio de ojo (flip=%ld)", (long)g_nat_flip); }
-                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
+                if (nat_full()) vr_log("NATIVA ojos: bien=%ld mal=%ld sin_saber=%ld flip=%ld | arma: piezas_corregidas=%ld otras_camaras=%ld | hud: dibujos_recolocados=%ld | andar=%ld | mano: camara_arma=%ld piezas=%ld calibrada=%d ok=%ld porque=%d pos=%.2f/%.2f/%.2f | brazos: ocultas=%ld pintadas=%ld guardadas=%d dibujos=%ld desvios_repuestos=%ld | minhook: versiones=%d/%d/%d/%d llamadas=%ld/%ld/%ld/%ld", (long)ok, (long)bad, (long)none, (long)g_nat_flip,
                                        (long)InterlockedExchange(&g_nat_armaojo, 0), (long)InterlockedExchange(&g_nat_otras, 0), (long)InterlockedExchange(&g_hud_n, 0), (long)InterlockedExchange(&g_mov_hits, 0), (long)InterlockedExchange(&g_hand_cam, 0), (long)InterlockedExchange(&g_hand_n, 0), g_hand_cal, (long)g_hand_ok, g_hand_why,
                                        g_hand_rel[0][3], g_hand_rel[1][3], g_hand_rel[2][3],
                                        (long)InterlockedExchange(&g_pc_hidden, 0), (long)InterlockedExchange(&g_pc_drawn, 0), g_nhide,
-                                       (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0));
+                                       (long)InterlockedExchange(&g_draws_seen, 0), (long)InterlockedExchange(&g_vt_fix, 0),
+                                       g_mh_n[0], g_mh_n[1], g_mh_n[2], g_mh_n[3], (long)InterlockedExchange(&g_mh_calls[0], 0), (long)InterlockedExchange(&g_mh_calls[1], 0), (long)InterlockedExchange(&g_mh_calls[2], 0), (long)InterlockedExchange(&g_mh_calls[3], 0));
             }
             vr_log("seg %d: nativa=%ld(%ld/s) oclusion=%d h7(vp/ant)=%ld/%ld h3(rayos/P/reflejos)=%ld/%ld/%ld fotogramas_H=%ld luces7_anterior=%ld luces7_propias=%ld propios=%ld fallan=%ld iW_raro=%ld rescatados=%ld objetos8_13=%ld/%ld orden(hueco0 antes/despues de la camara, camaras)=%ld/%ld/%ld raton=%ld desajuste=%.1f pasos=%ld fov_juego=%.1f linterna=%d fps=%ld espera_steamvr=%ldms reloj_parado=%ld soltados=%ld luces7=%ld luces3=%ld modo=%ld estereo=%ld camaras=%ld cb1_mod=%ld cb0_mod=%ld cb0_salta=%ld no_cuadra=%ld",
                    since_cam, (long)(nat_active() ? 1 : g_nat_installed == 1 ? 0 : (long)g_nat_installed - 10), (long)InterlockedExchange(&g_nat_hits, 0), g_ocl_state, (long)InterlockedExchange(&g_s7vp, 0), (long)InterlockedExchange(&g_s7T, 0),
@@ -3950,8 +3957,6 @@ typedef void (STDMETHODCALLTYPE *PFN_DrawIdx)(ID3D11DeviceContext *, UINT, UINT,
 typedef void (STDMETHODCALLTYPE *PFN_DrawInst)(ID3D11DeviceContext *, UINT, UINT, UINT, UINT);
 typedef void (STDMETHODCALLTYPE *PFN_DrawIdxInst)(ID3D11DeviceContext *, UINT, UINT, UINT, INT, UINT);
 static PFN_OMSetRT g_orig_OMSetRT = NULL; static PFN_RSSetVP g_orig_RSSetVP = NULL;
-static PFN_Draw g_orig_Draw = NULL; static PFN_DrawIdx g_orig_DrawIdx = NULL;
-static PFN_DrawInst g_orig_DrawInst = NULL; static PFN_DrawIdxInst g_orig_DrawIdxInst = NULL;
 static ID3D11DeviceContext *g_hud_ctx = NULL;
 static void *g_bb_ptr = NULL;                 /* la imagen final (backbuffer) del juego, para reconocerla */
 
@@ -4000,8 +4005,6 @@ static int hud_pre(ID3D11DeviceContext *c, int fulltri)
     return 1;
 }
 static void hud_post(ID3D11DeviceContext *c) { g_orig_RSSetVP(c, 1, &g_vp_game); }
-static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext *c, UINT vc, UINT sv)
-{ int h = hud_pre(c, vc == 3); g_orig_Draw(c, vc, sv); if (h) hud_post(c); }
 /* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6) */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
 {
@@ -4021,12 +4024,73 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     InterlockedIncrement(&g_pc_drawn);
     return 0;
 }
-static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv)
-{ if (piece_skip(c, ic, si)) return; int h = hud_pre(c, 0); g_orig_DrawIdx(c, ic, si, bv); if (h) hud_post(c); }
-static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si)
-{ int h = hud_pre(c, vc == 3 && ni == 1); g_orig_DrawInst(c, vc, ni, sv, si); if (h) hud_post(c); }
-static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst)
-{ if (piece_skip(c, ic, si)) return; int h = hud_pre(c, 0); g_orig_DrawIdxInst(c, ic, ni, si, bv, sinst); if (h) hud_post(c); }
+/* (E18) MinHook: las ordenes de dibujo se enganchan POR DENTRO de las funciones reales de d3d11.dll.
+ * Por tabla no se podia (E17c): Windows reescribe las casillas Draw* del contexto en cada fotograma. Ademas el log de
+ * la E17d ensena que Windows ALTERNA entre dos versiones de cada funcion (p. ej. Draw ...3540 y ...3610): por eso se
+ * engancha cada version distinta que aparezca en la tabla (hasta MHVAR por funcion), cada una con su propio "puente". */
+static int g_mh_ok = 0;
+static __thread int t_in_draw = 0;                   /* una version puede llamar a otra por dentro: solo cuenta la de fuera */
+#define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
+    PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++;                                         \
+    if (t_in_draw) { tr(c, vc, sv); return; }                                                       \
+    t_in_draw = 1; { int h = hud_pre(c, vc == 3); tr(c, vc, sv); if (h) hud_post(c); } t_in_draw = 0; }
+#define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
+    PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++;                                          \
+    if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
+    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, si, bv); if (h) hud_post(c); } t_in_draw = 0; }
+#define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
+    PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++;                                                 \
+    if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
+    t_in_draw = 1; { int h = hud_pre(c, vc == 3 && ni == 1); tr(c, vc, ni, sv, si); if (h) hud_post(c); } t_in_draw = 0; }
+#define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
+    PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++;                                                       \
+    if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
+    t_in_draw = 1; if (!piece_skip(c, ic, si)) { int h = hud_pre(c, 0); tr(c, ic, ni, si, bv, sinst); if (h) hud_post(c); } t_in_draw = 0; }
+#define MH_ALL(M) M(0) M(1) M(2) M(3) M(4) M(5)
+MH_ALL(MH_D) MH_ALL(MH_DI) MH_ALL(MH_DN) MH_ALL(MH_DII)
+static void *const g_mh_det[4][MHVAR] = {
+    { (void *)mh_D0,   (void *)mh_D1,   (void *)mh_D2,   (void *)mh_D3,   (void *)mh_D4,   (void *)mh_D5 },
+    { (void *)mh_DI0,  (void *)mh_DI1,  (void *)mh_DI2,  (void *)mh_DI3,  (void *)mh_DI4,  (void *)mh_DI5 },
+    { (void *)mh_DN0,  (void *)mh_DN1,  (void *)mh_DN2,  (void *)mh_DN3,  (void *)mh_DN4,  (void *)mh_DN5 },
+    { (void *)mh_DII0, (void *)mh_DII1, (void *)mh_DII2, (void *)mh_DII3, (void *)mh_DII4, (void *)mh_DII5 } };
+static const char *const g_mh_name[4] = { "Draw", "DrawIndexed", "DrawInstanced", "DrawIndexedInstanced" };
+static void mh_start(void)
+{
+    static int tried = 0; if (tried) return; tried = 1;
+    MH_STATUS s = MH_Initialize();
+    g_mh_ok = (s == MH_OK || s == MH_ERROR_ALREADY_INITIALIZED);
+    vr_log("MINHOOK: arrancado -> %s", MH_StatusToString(s));
+}
+/* mira las casillas de dibujo de la tabla del contexto y engancha por dentro cada version nueva que aparezca */
+static void mh_scan(ID3D11DeviceContext *c)
+{
+    if (!c || !g_mh_ok || !(cfg_hud || cfg_brazos)) return;
+    ID3D11DeviceContextVtbl *vt = c->lpVtbl;
+    void *p4[4] = { (void *)vt->Draw, (void *)vt->DrawIndexed, (void *)vt->DrawInstanced, (void *)vt->DrawIndexedInstanced };
+    for (int k = 0; k < 4; k++) {
+        void *p = p4[k];
+        if (!p) continue;
+        int known = 0;
+        for (int i = 0; i < g_mh_n[k]; i++) if (g_mh_fn[k][i] == p) { known = 1; break; }
+        for (int i = 0; i < MHVAR && !known; i++) if (g_mh_det[k][i] == p) known = 1;   /* (por si acaso) uno nuestro */
+        if (known) continue;
+        if (g_mh_n[k] >= MHVAR) {
+            static int said[4]; if (said[k] < 3) { said[k]++; vr_log("MINHOOK %s: demasiadas versiones (%p sin enganchar)", g_mh_name[k], p); }
+            continue;
+        }
+        int v = g_mh_n[k];
+        unsigned char *b = (unsigned char *)p; char line[100]; int L = 0;
+        for (int q = 0; q < 16; q++) L += snprintf(line + L, sizeof(line) - L, "%02X ", b[q]);
+        HMODULE hm = NULL; GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)b, &hm);
+        char mn[MAX_PATH] = "?"; if (hm) GetModuleFileNameA(hm, mn, MAX_PATH);
+        const char *mshort = strrchr(mn, '\\'); mshort = mshort ? mshort + 1 : mn;
+        MH_STATUS s = MH_CreateHook(p, g_mh_det[k][v], &g_mh_tr[k][v]);
+        if (s == MH_OK) s = MH_EnableHook(p);
+        g_mh_fn[k][v] = p; g_mh_n[k]++;          /* se apunta aunque falle, para no reintentar cada fotograma */
+        vr_log("MINHOOK %s version %d = %p (%s+0x%llx) %s-> %s", g_mh_name[k], v + 1, p, mshort,
+               (unsigned long long)(b - (unsigned char *)hm), line, MH_StatusToString(s));
+    }
+}
 /* (E17) fin de fotograma: el censo de piezas del arma, cambios de arma y el archivo de brazos */
 static void brazos_path(char *path) { GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_brazos.txt"); }
 static void brazos_load(void)
@@ -4102,9 +4166,9 @@ static void pieces_key(int shift, int ctrl)
     Beep(1000, 60);
 }
 
-/* (E17c) El mod no veia NINGUN dibujo (dibujos=0) aunque los desvios estaban puestos. Sospecha: Windows cambia
- * por dentro la tabla de funciones del contexto (o casillas sueltas de los Draw) despues de que la parcheamos.
- * Cada fotograma se mira; si una casilla ya no es nuestra, se apunta y se vuelve a poner. */
+/* (E17c) Cada fotograma se mira la tabla del contexto. (E18) Las casillas de DIBUJO ya no se tocan (Windows las
+ * reescribe): se engancha por dentro con MinHook cada version nueva que aparezca. Las otras dos (OMSetRenderTargets,
+ * RSSetViewports, para el HUD) siguen por tabla y se reponen si hiciera falta. */
 static void *g_vt_seen = NULL;
 static void draw_hooks_check(void)
 {
@@ -4115,32 +4179,18 @@ static void draw_hooks_check(void)
         if (g_vt_seen) vr_log("VTABLE: el contexto tiene OTRA tabla de funciones (%p -> %p)", g_vt_seen, (void *)vt);
         g_vt_seen = (void *)vt;
     }
-    struct { void **slot; void *hook; void **orig; const char *n; } t[6] = {
+    mh_scan(c);
+    struct { void **slot; void *hook; void **orig; const char *n; } t[2] = {
         { (void **)&vt->OMSetRenderTargets, (void *)hk_OMSetRT, (void **)&g_orig_OMSetRT, "OMSetRenderTargets" },
-        { (void **)&vt->RSSetViewports, (void *)hk_RSSetVP, (void **)&g_orig_RSSetVP, "RSSetViewports" },
-        { (void **)&vt->Draw, (void *)hk_Draw, (void **)&g_orig_Draw, "Draw" },
-        { (void **)&vt->DrawIndexed, (void *)hk_DrawIdx, (void **)&g_orig_DrawIdx, "DrawIndexed" },
-        { (void **)&vt->DrawInstanced, (void *)hk_DrawInst, (void **)&g_orig_DrawInst, "DrawInstanced" },
-        { (void **)&vt->DrawIndexedInstanced, (void *)hk_DrawIdxInst, (void **)&g_orig_DrawIdxInst, "DrawIndexedInstanced" } };
-    static int dumped = 0;
-    if (!dumped && g_mode == 1) {   /* (E17d) para el siguiente paso: los primeros bytes de las funciones reales de dibujo */
-        dumped = 1;
-        for (int i = 2; i < 6; i++) {
-            unsigned char *b = (unsigned char *)*t[i].orig; char line[200]; int L = 0;
-            for (int k = 0; k < 24 && b; k++) L += snprintf(line + L, sizeof(line) - L, "%02X ", b[k]);
-            HMODULE hm = NULL; GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)b, &hm);
-            char mn[MAX_PATH] = "?"; if (hm) GetModuleFileNameA(hm, mn, MAX_PATH);
-            vr_log("DIBUJO real %s = %p (%s+0x%llx): %s", t[i].n, (void *)b, mn, (unsigned long long)(b - (unsigned char *)hm), line);
-        }
-    }
-    for (int i = 0; i < 6; i++) {
+        { (void **)&vt->RSSetViewports, (void *)hk_RSSetVP, (void **)&g_orig_RSSetVP, "RSSetViewports" } };
+    for (int i = 0; i < 2; i++) {
         void *cur = *t[i].slot;
         if (cur == t[i].hook) continue;
-        static int said[6];
+        static int said[2];
         if (said[i] < 5) { said[i]++; vr_log("VTABLE: %s ya no es nuestro (antes %p, ahora %p): lo vuelvo a poner", t[i].n, *t[i].orig, cur); }
         DWORD old;
         if (!VirtualProtect((LPVOID)t[i].slot, sizeof(void *), PAGE_READWRITE, &old)) continue;
-        *t[i].orig = cur;                       /* lo que haya ahora es lo que hay que llamar */
+        *t[i].orig = cur;
         *t[i].slot = t[i].hook;
         VirtualProtect((LPVOID)t[i].slot, sizeof(void *), old, &old);
         InterlockedIncrement(&g_vt_fix);
@@ -4168,10 +4218,8 @@ static void install_hooks(ID3D11DeviceContext *ctx, IDXGISwapChain *sc)
             g_hud_ctx = ctx;
             PATCH(&ctx->lpVtbl->OMSetRenderTargets, hk_OMSetRT, g_orig_OMSetRT, "OMSetRenderTargets");
             PATCH(&ctx->lpVtbl->RSSetViewports, hk_RSSetVP, g_orig_RSSetVP, "RSSetViewports");
-            PATCH(&ctx->lpVtbl->Draw, hk_Draw, g_orig_Draw, "Draw");
-            PATCH(&ctx->lpVtbl->DrawIndexed, hk_DrawIdx, g_orig_DrawIdx, "DrawIndexed");
-            PATCH(&ctx->lpVtbl->DrawInstanced, hk_DrawInst, g_orig_DrawInst, "DrawInstanced");
-            PATCH(&ctx->lpVtbl->DrawIndexedInstanced, hk_DrawIdxInst, g_orig_DrawIdxInst, "DrawIndexedInstanced");
+            mh_start();      /* (E18) los dibujos, por dentro con MinHook (por tabla no se puede) */
+            mh_scan(ctx);
         }
     }
     if (cfg_present) {
@@ -4301,7 +4349,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E17d: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E18: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

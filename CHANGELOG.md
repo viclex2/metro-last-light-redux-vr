@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E18 (rama `manos`) — MinHook: el mod por fin ve los dibujos (para quitar los brazos con F6)
+- Prueba de la E17d (vídeo + log): **el arma y los brazos siguen al mando derecho** (`mano: ok=1 calibrada=1`). Los brazos van rígidos pegados al arma y se ven las mangas flotando: hay que quitarlos.
+- El log de la E17d enseña por qué no se veían los dibujos: Windows **alterna dos versiones** de cada función de dibujo (p. ej. Draw `…3540` y `…3610`) y va cambiando la casilla de la tabla entre ellas en cada fotograma.
+- Ahora se usa **MinHook** (licencia BSD, en `src/minhook`): se engancha **por dentro** cada versión de Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced que aparezca (hasta 6 de cada). Ya no se toca la tabla para dibujar.
+- Con esto deberían funcionar **F6** (ocultar la siguiente pieza del arma), **Shift+F6** (esa pieza es un brazo: se guarda) y **Ctrl+F6** (borrar las guardadas), que estaban hechas desde la E17 pero no veían nada.
+- Log: `MINHOOK: arrancado`, `MINHOOK <función> version N = … -> MH_OK`, y cada segundo `dibujos=` (debe ser > 0) y `minhook: versiones=… llamadas=…`. Al cambiar de arma: `PIEZAS del arma (n): …`.
+
 ## E17d (rama `manos`) — La mano, en la cámara con la que de verdad se pinta el arma
 - Log de la E17c: los desvíos de "pinta esto" los vuelve a quitar Windows en **cada** fotograma (288 veces/s), así que el mod sigue sin ver dibujos. Por esa vía no se puede. Se apuntan los primeros bytes de las funciones reales de dibujo para engancharlas por dentro en otra versión (lo que se necesita para quitar brazos).
 - Descubierto en el log: `arma: piezas_corregidas` era justo el doble que `mano: piezas`. La mitad eran cajones del cajón 0 (que la E15 movía, pero no son el arma que ves) y la otra mitad la **cámara del arma**, que es con la que se pinta el arma visible (la que arregló el 3D en la E10c). Ahora la mano se aplica también a esa cámara. Log: `mano: camara_arma=…`.

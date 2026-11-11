@@ -18,7 +18,7 @@
 ## Repositorio, compilar y publicar
 - `https://github.com/viclex2/metro-last-light-redux-vr` (antes se llamaba `metro-ll-redux-vr`; el nombre viejo redirige).
 - Ramas: **`main`** = versión estable para jugar. **`manos`** = pruebas del arma en la mano y los brazos.
-- Todo el mod está en `src/d3d11_proxy.c` (C, unas 4300 líneas, **codificación latin1**). Compilar: `sh build.sh` (mingw-w64) → `d3d11.dll`; luego copiarla a `bin/d3d11.dll`.
+- Todo el mod está en `src/d3d11_proxy.c` (más MinHook en `src/minhook`, que compila `build.sh`) (C, unas 4300 líneas, **codificación latin1**). Compilar: `sh build.sh` (mingw-w64) → `d3d11.dll`; luego copiarla a `bin/d3d11.dll`.
 - **Publicar = cambiar `VERSION`** (por ejemplo `E18`), añadir una sección `## E18 …` arriba del todo en `CHANGELOG.md` y hacer push. GitHub Actions crea la release sola; desde la rama `manos` sale como pre-release.
 - Enlace directo para el usuario: `https://github.com/viclex2/metro-last-light-redux-vr/raw/<rama>/bin/d3d11.dll` o la página de la release.
 - Cada versión cambia la marca `=== HITO Exx` del log (búscala y súbela): así se sabe qué DLL tiene puesta.
@@ -49,11 +49,12 @@
 
 ## Estado (11/11/2026)
 - **Estable (main, E16)**: 3D, cabeza 6DOF, cámara nativa, andar hacia donde miras, mandos, sin HUD, apuntar sin tirones. Unos 72 fps = 36 parejas por segundo (cada ojo a 36 Hz). Es jugable.
-- **Pruebas (manos, E17d)**: el arma sigue al mando derecho, aplicando la mano también a la cámara del arma. **Pendiente de que el usuario lo pruebe.** Calibrar: mano donde se ve el arma y mantener 1,5 s el clic del stick derecho.
+- **Pruebas (manos)**: E17d probada (11/11): **arma + brazos siguen al mando derecho** (`mano: ok=1`); los brazos van rígidos y se ven las mangas flotando. Calibrar: mano donde se ve el arma y mantener 1,5 s el clic del stick derecho.
+- **E18 (manos)**: MinHook (`src/minhook`, BSD-2) engancha por dentro las funciones de dibujo. Windows alterna **dos versiones** de cada Draw* en la tabla; se engancha cada versión nueva que aparezca (`MINHOOK … version N`). **Pendiente de prueba**: `dibujos=` debe ser > 0 y F6/Shift+F6 deben poder quitar los brazos.
 
 ## Siguientes pasos
-1. Leer el resultado de la E17d (`mano: camara_arma=…`).
-2. **E18: MinHook** (C, licencia BSD, compila con mingw) para enganchar Draw/DrawIndexed/DrawIndexedInstanced por dentro → F6 para quitar brazos. Pasar también los ganchos del `metro.exe` a MinHook.
+1. Probar la E18: log `MINHOOK` y `dibujos=`; con F6 recorrer las piezas del arma y guardar los brazos con Shift+F6.
+2. Pasar también los ganchos del `metro.exe` (cámara, andar) a MinHook.
 3. Balas hacia donde apunta el arma: `+0x3D7FF0` crea el proyectil (origen en RDX, dirección en R8; llama a `+0x3D6970`). Filtrar solo las del jugador (los NPC usan la misma función).
 4. Mano izquierda y reloj: copiar la solución de D-Rey (sus `docs/history/31-*.md` y `32-*.md`).
 5. Rendimiento (36 Hz por ojo).
