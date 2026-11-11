@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E20b (rama `manos`) — Menús, intro y vídeos en una pantalla flotante; VR solo en la partida
+- Lo pidió el usuario: fuera de la partida (menús, elegir partida, intro, vídeos, pantallas de carga, el menú de opciones…) la imagen del juego se ve en una **pantalla flotante** delante de ti, con todo lo demás en **negro**. Al cargar la partida del todo, se pone sola en VR.
+- **Automático**: el mod mira si el juego está montando la cámara del jugador (el gancho de la cámara nativa, `+0x69B900`). Si la monta durante 1,5 s seguidos → modo VR (lo que antes se hacía con F9). Si deja de montarla → pantalla flotante. Pulsar F9 pasa a manual hasta reiniciar el juego.
+- La pantalla es un *overlay* de SteamVR (`IVROverlay_028`): 2,6 m de ancho a 2 m delante de donde miras, recta. Se coloca cada vez que se entra en un menú. Los ojos reciben una imagen negra.
+- Config: `pantalla_menus=1`, `pantalla_distancia=2.0`, `pantalla_ancho=2.6`, `vr_automatico=1`. Log: `CINE: …` y `>>> AUTO: …`.
+- **Por probar**: si en el menú de pausa el juego sigue montando la cámara, el automático no se enterará (se vería como antes); el log lo dirá.
+
 ## E20 (rama `manos`) — Girar sobre ti mismo con el stick
 - Usuario: al girar con el mando estando quieto, "giras dando vueltas alrededor de un eje" en vez de sobre ti mismo.
 - Causa: la posición de la cabeza va respecto a un punto fijo de la habitación (donde empezó SteamVR), y al girar con el stick el juego gira el cuerpo sobre ese punto. Si no estás justo encima, la cabeza da vueltas a su alrededor, como en un tiovivo.
