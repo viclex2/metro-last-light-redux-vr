@@ -173,6 +173,7 @@ static volatile LONG g_hud_n;
 static volatile LONG g_mov_hits;
 static void pieces_frame(void);
 static void pieces_key(int shift, int ctrl);
+static void pieces_show_key(void);
 static void draw_hooks_check(void);
 static ID3D11DeviceContext *g_hud_ctx;
 static volatile LONG g_vt_fix;
@@ -195,6 +196,14 @@ static float g_hand_G[4][4];                 /* lo que se mueve el arma: mano_ah
 static int g_hand_cal = 0;                   /* 1 = ya hay calibracion */
 static float g_hand_C0[4][4];                /* postura de la mano "con el arma en reposo" */
 static volatile LONG g_hand_req = 0, g_hand_n = 0, g_hand_cam = 0;
+/* (E28) agarre POR ARMA (la solucion de D-Rey86: cada arma tiene su propio "punto de agarre"). Cada arma recuerda
+ * su propia calibracion de la mano; si no tiene, se usa la general. El arma se reconoce por su pieza mas grande. */
+typedef struct { UINT ic, si; float C0[4][4]; } WpnCal;
+#define MAXW 32
+static WpnCal g_wcal[MAXW]; static int g_nwcal = 0;
+static volatile UINT g_wpn_ic = 0, g_wpn_si = 0;   /* arma que se ve ahora (0 = sin reconocer) */
+static int g_show = -1;                            /* (E28) tecla Inicio: pieza guardada como brazo que se ensena (-1 = ninguna) */
+static int wcal_find(UINT ic, UINT si) { for (int k = 0; k < g_nwcal; k++) if (g_wcal[k].ic == ic && g_wcal[k].si == si) return k; return -1; }
 static int g_hand_why = 0;                   /* (E17) por que no hay mano: 1 apagado, 2 sin funcion, 3 indice, 4 visor no valido, 5 mando no valido */
 static int cfg_detective = 0;           /* (E16) el "detective" de lentes leia entero cada cajon que escribe el juego: apagado */
 static volatile LONG g_prof_present_us = 0, g_prof_mod_us = 0, g_prof_maxframe_us = 0;
@@ -2988,26 +2997,45 @@ static void hand_save(void)
     char path[MAX_PATH]; GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_mano.txt");
     FILE *fp = fopen(path, "w"); if (!fp) return;
     for (int i = 0; i < 3; i++) fprintf(fp, "%.6f %.6f %.6f %.6f\n", g_hand_C0[i][0], g_hand_C0[i][1], g_hand_C0[i][2], g_hand_C0[i][3]);
+    /* (E28) y una linea por arma: "arma <pieza> <inicio> <12 numeros>" */
+    for (int k = 0; k < g_nwcal; k++) {
+        fprintf(fp, "arma %u %u", g_wcal[k].ic, g_wcal[k].si);
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) fprintf(fp, " %.6f", g_wcal[k].C0[i][j]);
+        fprintf(fp, "\n");
+    }
     fclose(fp);
 }
 static void hand_load(void)
 {
     static int done = 0; if (done) return; done = 1;
     char path[MAX_PATH]; GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_mano.txt");
-    FILE *fp = fopen(path, "r");
-    memset(g_hand_C0, 0, sizeof(g_hand_C0)); g_hand_C0[3][3] = 1.0f;
-    if (fp) {
-        int ok = 1;
-        for (int i = 0; i < 3 && ok; i++)
-            if (fscanf(fp, "%f %f %f %f", &g_hand_C0[i][0], &g_hand_C0[i][1], &g_hand_C0[i][2], &g_hand_C0[i][3]) != 4) ok = 0;
-        fclose(fp);
-        if (ok) { g_hand_cal = 1; vr_log("MANO: calibracion cargada de %s", path); return; }
-    }
     /* sin calibrar: mano 15 cm a la derecha, 25 cm abajo, 30 cm delante, mando apuntando adelante */
     memset(g_hand_C0, 0, sizeof(g_hand_C0));
     for (int i = 0; i < 4; i++) g_hand_C0[i][i] = 1.0f;
     g_hand_C0[0][3] = 0.15f; g_hand_C0[1][3] = -0.25f; g_hand_C0[2][3] = 0.30f;
     g_hand_cal = 0;
+    FILE *fp = fopen(path, "r");
+    if (!fp) { vr_log("MANO: sin calibrar (%s no existe)", path); return; }
+    float Cg[4][4]; memset(Cg, 0, sizeof(Cg)); Cg[3][3] = 1.0f;
+    char ln[512]; int row = 0;
+    while (fgets(ln, sizeof(ln), fp)) {
+        if (!strncmp(ln, "arma", 4)) {     /* (E28) calibracion propia de un arma */
+            UINT ic, si; float m[12];
+            if (g_nwcal < MAXW && sscanf(ln + 4, "%u %u %f %f %f %f %f %f %f %f %f %f %f %f", &ic, &si,
+                       &m[0], &m[1], &m[2], &m[3], &m[4], &m[5], &m[6], &m[7], &m[8], &m[9], &m[10], &m[11]) == 14) {
+                WpnCal *w = &g_wcal[g_nwcal++];
+                w->ic = ic; w->si = si;
+                memset(w->C0, 0, sizeof(w->C0)); w->C0[3][3] = 1.0f;
+                for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) w->C0[i][j] = m[i * 4 + j];
+            }
+        } else if (row < 3 && sscanf(ln, "%f %f %f %f", &Cg[row][0], &Cg[row][1], &Cg[row][2], &Cg[row][3]) == 4) row++;
+    }
+    fclose(fp);
+    if (row == 3) memcpy(g_hand_C0, Cg, sizeof(Cg));
+    g_hand_cal = (row == 3 || g_nwcal > 0);
+    vr_log("MANO: calibracion general %s, %d arma(s) con calibracion propia (%s)", row == 3 ? "cargada" : "NO hay", g_nwcal, path);
+    for (int k = 0; k < g_nwcal; k++) vr_log("MANO:   arma %u/%u: mano a %.2f %.2f %.2f m de la cabeza", g_wcal[k].ic, g_wcal[k].si,
+                                             g_wcal[k].C0[0][3], g_wcal[k].C0[1][3], g_wcal[k].C0[2][3]);
 }
 static void hand_update(const OvrPose *rp)
 {
@@ -3038,12 +3066,25 @@ static void hand_update(const OvrPose *rp)
     memcpy(g_hand_rel, A, sizeof(A));
     if (g_hand_req) {
         g_hand_req = 0;
-        memcpy(g_hand_C0, A, sizeof(A)); g_hand_cal = 1; hand_save();
-        vr_log("MANO: calibrada (mano a %.2f %.2f %.2f m de la cabeza)", A[0][3], A[1][3], A[2][3]);
+        UINT wic = g_wpn_ic, wsi = g_wpn_si;
+        if (wic) {   /* (E28) se guarda para el arma que se ve ahora */
+            int k = wcal_find(wic, wsi);
+            if (k < 0 && g_nwcal < MAXW) { k = g_nwcal++; g_wcal[k].ic = wic; g_wcal[k].si = wsi; }
+            if (k >= 0) memcpy(g_wcal[k].C0, A, sizeof(A));
+        }
+        if (!wic || !g_hand_cal) memcpy(g_hand_C0, A, sizeof(A));   /* la general: sin arma reconocida, o la primera vez */
+        g_hand_cal = 1; hand_save();
+        if (wic) vr_log("MANO: calibrada para el arma %u/%u (mano a %.2f %.2f %.2f m de la cabeza)", wic, wsi, A[0][3], A[1][3], A[2][3]);
+        else     vr_log("MANO: calibrada la general, arma sin reconocer (mano a %.2f %.2f %.2f m de la cabeza)", A[0][3], A[1][3], A[2][3]);
         Beep(900, 80); Beep(1300, 120);
     }
     float C0i[4][4], G[4][4];
-    if (!inv4(g_hand_C0, C0i)) { g_hand_ok = 0; return; }
+    const float (*C0)[4] = (const float (*)[4])g_hand_C0;
+    {   /* (E28) si el arma de ahora tiene calibracion propia, se usa esa */
+        int k = g_wpn_ic ? wcal_find(g_wpn_ic, g_wpn_si) : -1;
+        if (k >= 0) C0 = (const float (*)[4])g_wcal[k].C0;
+    }
+    if (!inv4(C0, C0i)) { g_hand_ok = 0; return; }
     mul4(A, C0i, G);
     memcpy(g_hand_G, G, sizeof(G));
     g_hand_ok = 1;
@@ -4428,6 +4469,13 @@ static DWORD WINAPI keys_thread(LPVOID unused)
                 prevf[k] = d;
             }
         }
+        /* (E28) Inicio: ensenar una pieza guardada como brazo (para buscar la mano) */
+        {
+            static int prevhome = 0;
+            int dh = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
+            if (dh && !prevhome) pieces_show_key();
+            prevhome = dh;
+        }
         /* Shift + H: buscar la camara del juego en memoria */
         {
             static int prevh = 0;
@@ -5254,7 +5302,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
-        if (g_hide[i].ic == ic && g_hide[i].si == si) { InterlockedIncrement(&g_pc_hidden); g_arm_seen = GetTickCount64(); return 1; }
+        if (g_hide[i].ic == ic && g_hide[i].si == si) { g_arm_seen = GetTickCount64(); if (i == g_show) break; InterlockedIncrement(&g_pc_hidden); return 1; }
     InterlockedIncrement(&g_pc_drawn);
     return 0;
 }
@@ -5434,15 +5482,40 @@ static void pieces_frame(void)
         vr_log("PIEZAS del arma (%d):%s", g_pc_ncur, line);
         last_log = GetTickCount64();
     }
+    {   /* (E28) que arma se ve: su pieza mas grande que no sea brazo (como D-Rey86, la "pieza cuerpo" de cada arma).
+         * Tiene que salir la misma 15 fotogramas seguidos, para no cambiar a medias durante el cambio de arma. */
+        UINT cic = 0, csi = 0;
+        for (int i = 0; i < g_pc_ncur && !cic; i++) {
+            int h = 0; for (int k = 0; k < g_nhide; k++) if (g_hide[k].ic == g_pc_cur[i].ic && g_hide[k].si == g_pc_cur[i].si) h = 1;
+            if (!h) { cic = g_pc_cur[i].ic; csi = g_pc_cur[i].si; }
+        }
+        static UINT pic = 0, psi = 0; static int cnt = 0;
+        if (cic == pic && csi == psi) cnt++; else { pic = cic; psi = csi; cnt = 0; }
+        if (cic && cnt == 15 && (cic != g_wpn_ic || csi != g_wpn_si)) {
+            g_wpn_ic = cic; g_wpn_si = csi;
+            vr_log("ARMA: ahora %u/%u -> calibracion %s", cic, csi, wcal_find(cic, csi) >= 0 ? "PROPIA"
+                   : "general (para darle la suya: mano donde ves la empunadura y mantener 1,5 s el clic del stick derecho)");
+        }
+    }
     memcpy(g_pc_last, g_pc_cur, sizeof(PieceSig) * g_pc_ncur); g_pc_nlast = g_pc_ncur;
     g_pc_ncur = 0;
     InterlockedExchange(&g_pc_lock, 0);
+}
+/* (E28) tecla Inicio: ensena UNA de las piezas guardadas como brazo (las demas siguen ocultas), para ver cual es la mano.
+ * Cada pulsacion pasa a la siguiente; despues de la ultima, todas ocultas otra vez. No cambia el archivo. */
+static void pieces_show_key(void)
+{
+    if (g_nhide == 0) { vr_log(">>> Inicio: no hay piezas guardadas como brazo"); Beep(400, 150); return; }
+    g_show++;
+    if (g_show >= g_nhide) { g_show = -1; vr_log(">>> Inicio: todas las piezas guardadas, ocultas otra vez"); Beep(600, 100); return; }
+    vr_log(">>> Inicio: ENSENO la pieza guardada %d de %d (%u/%u)", g_show + 1, g_nhide, g_hide[g_show].ic, g_hide[g_show].si);
+    Beep(1000, 60);
 }
 /* F6: oculta la siguiente pieza para ver cual es. Shift+F6: la pieza oculta ahora SON brazos (se guarda).
  * Ctrl+F6: borra todas las guardadas. */
 static void pieces_key(int shift, int ctrl)
 {
-    if (ctrl) { g_nhide = 0; brazos_save(); g_try = -1; vr_log(">>> Ctrl+F6: borradas las piezas de brazos"); Beep(500, 200); return; }
+    if (ctrl) { g_nhide = 0; g_show = -1; brazos_save(); g_try = -1; vr_log(">>> Ctrl+F6: borradas las piezas de brazos"); Beep(500, 200); return; }
     if (shift) {
         if (g_try < 0) { vr_log(">>> Shift+F6: no hay ninguna pieza probandose (pulsa F6 primero)"); Beep(400, 150); return; }
         int dup = 0; for (int k = 0; k < g_nhide; k++) if (g_hide[k].ic == g_try_sig.ic && g_hide[k].si == g_try_sig.si) dup = 1;
@@ -5653,7 +5726,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E27: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E28: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E28 (rama `manos`) — Agarre por arma (como D-Rey86) y buscador de la mano
+- Problema: el arma se pega al mando con la calibración que se hizo con UNA arma. El juego pinta cada arma en un sitio distinto (el revólver, con los brazos más estirados), así que con otra arma la empuñadura no queda en el mando y al girar la muñeca el arma "da vueltas" a su alrededor.
+- Solución de D-Rey86 (su `docs/history/22` y `15`): un **punto de agarre por arma**, calibrado una vez en las gafas para cada arma. Aquí: cada arma recuerda su propia calibración de la mano.
+  - El arma se reconoce por su **pieza más grande que no sea brazo** (como la "pieza cuerpo" de D-Rey). Tiene que salir 15 fotogramas seguidos. Log: `ARMA: ahora <pieza> -> calibracion PROPIA/general`.
+  - Calibrar (como siempre: mano donde ves la empuñadura y mantener 1,5 s el clic del stick derecho) ahora guarda la calibración **para el arma que llevas**. Las armas sin la suya usan la general (la de antes). Log: `MANO: calibrada para el arma …`.
+  - `metro_vr_mano.txt`: las 3 líneas de antes (general) + una línea `arma <pieza> <inicio> <12 números>` por arma. El archivo viejo vale tal cual.
+- **Tecla Inicio**: enseña UNA de las piezas guardadas como brazo (las demás siguen ocultas). Cada pulsación, la siguiente; tras la última, todas ocultas otra vez. No toca el archivo. Sirve para saber **qué pieza es la mano** (siguiente paso). Log: `>>> Inicio: ENSENO la pieza guardada N de 14 (…)`.
+- Sin probar.
+
 ## E27 (rama `manos`) — Los dos ojos en el mismo fotograma (opción `dos_ojos`, apagada por defecto)
 - Lo que dice la E25/E26: los tirones son del **propio juego** (el procesador va al límite). Hasta ahora el juego "pensaba" (física, enemigos, cámara…) **dos veces por pareja**, una por ojo. Con esto piensa **una** y solo se repite el pintado, como hace D-Rey86 en su mod de Metro 2033 (idea y datos de sus `docs/history/17-21`; el código es nuestro, no copiado).
 - Cómo va (símil: un PC con dos monitores): cada "pizarra" del juego que depende del ojo (la escena, la profundidad, el brillo, la imagen final…) tiene una **copia** para el ojo derecho. Cada dibujo que va a una pizarra con copia se hace dos veces: en la del juego (ojo izquierdo) y en la copia (ojo derecho), con los cajones de cámara del ojo derecho. Las **sombras** (pizarras cuadradas) se pintan una sola vez y valen para los dos.
