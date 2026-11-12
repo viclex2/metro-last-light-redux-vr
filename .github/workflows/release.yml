@@ -35,6 +35,11 @@ jobs:
             p { print }
           ' CHANGELOG.md > notas.md
           [ -s notas.md ] || echo "Version $TAG. Ver CHANGELOG.md y docs/ESTADO.md." > notas.md
+          # Titulo de la Release: "E33 — Solo las manos..." (+ "(pruebas)" si no es main)
+          TITULO="$(head -n1 notas.md | grep '^## ' | sed -e 's/^## *//' -e 's/ *(rama `[^`]*`) */ /')"
+          [ -n "$TITULO" ] || TITULO="$TAG"
+          if [ "${{ github.ref_name }}" != "main" ]; then TITULO="$TITULO (pruebas)"; fi
+          echo "TITULO=$TITULO" >> "$GITHUB_ENV"
           printf '\n---\n**Instalar:** `d3d11.dll` + `openvr_api.dll` (64 bits, de Valve) junto a `metro.exe`. Ver README.\n' >> notas.md
           cat notas.md
 
@@ -42,8 +47,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          name: ${{ env.TAG }}
+          name: ${{ env.TITULO }}
           target_commitish: ${{ github.sha }}
           body_path: notas.md
           prerelease: ${{ github.ref_name != 'main' }}
+          make_latest: ${{ github.ref_name == 'main' && 'true' || 'false' }}
           files: d3d11.dll
+
+      # Deja en bin/ la MISMA DLL que va en la Release (asi el enlace raw/<rama>/bin/d3d11.dll nunca se queda viejo)
+      - name: Guardar la DLL compilada en bin/
+        run: |
+          cp d3d11.dll bin/d3d11.dll
+          if git diff --quiet -- bin/d3d11.dll; then echo "bin/ ya estaba al dia"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin/d3d11.dll
+          git commit -m "bin: d3d11.dll de la $TAG (compilada por GitHub)"
+          git push origin HEAD:${{ github.ref_name }}

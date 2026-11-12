@@ -1,0 +1,23 @@
+# Solo COMPILA (sin crear Release) en cualquier rama que no sea main ni manos.
+# Sirve para comprobar que una version nueva compila antes de publicarla.
+name: Compilar (prueba)
+
+on:
+  push:
+    branches-ignore: [main, manos]
+  workflow_dispatch:
+
+jobs:
+  compilar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar el compilador (mingw-w64)
+        timeout-minutes: 8
+        run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 gcc-mingw-w64-x86-64
+      - name: Compilar d3d11.dll
+        run: sh build.sh 2>&1 | tee compilar.log && ls -la d3d11.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d3d11-${{ github.ref_name }}
+          path: d3d11.dll

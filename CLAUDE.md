@@ -20,6 +20,10 @@
 - Ramas: **`main`** = versión estable para jugar. **`manos`** = pruebas del arma en la mano y los brazos.
 - Todo el mod está en `src/d3d11_proxy.c` (más MinHook en `src/minhook`, que compila `build.sh`) (C, unas 4300 líneas, **codificación latin1**). Compilar: `sh build.sh` (mingw-w64) → `d3d11.dll`; luego copiarla a `bin/d3d11.dll`.
 - **Publicar = cambiar `VERSION`** (por ejemplo `E18`), añadir una sección `## E18 …` arriba del todo en `CHANGELOG.md` y hacer push. GitHub Actions crea la release sola; desde la rama `manos` sale como pre-release.
+- **Orden de las Releases (12/11, decidido con el usuario):** `main` = estable, su release es la **Latest** (ahora la **E31**, la que mejor va). Todo lo de `manos` sale como **Pre-release** y nunca como Latest. El título de cada release sale solo del encabezado del CHANGELOG (`E33 — Solo las manos… (pruebas)`).
+- **`bin/d3d11.dll` lo actualiza GitHub solo**: tras crear la release, Actions copia en `bin/` la misma DLL que ha compilado y hace un commit `bin: …`. Por eso, **antes de volver a hacer push, `git pull`** (si no, el push se rechaza).
+- **Sin compilador local** (la sesión de Claude no tiene mingw ni red para instalarlo): para comprobar que algo compila ANTES de publicarlo, súbelo a una rama de prueba cualquiera (p. ej. `prueba-e34`); el workflow `Compilar (prueba)` la compila sin crear release. Si sale bien, pásalo a `manos` y borra la rama de prueba.
+- Desde el móvil el usuario puede aplicar un parche con Actions → "Aplicar parche".
 - Enlace directo para el usuario: `https://github.com/viclex2/metro-last-light-redux-vr/raw/<rama>/bin/d3d11.dll` o la página de la release.
 - Cada versión cambia la marca `=== HITO Exx` del log (búscala y súbela): así se sabe qué DLL tiene puesta.
 - `docs/ESTADO.md` es el diario técnico largo y `docs/PLAN_MANDOS.md` el plan de las manos. `CHANGELOG.md` explica cada versión y lo que se aprendió en ella.
