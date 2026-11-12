@@ -221,7 +221,13 @@ static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
 static int cfg_reloj = 1;            /* (E33) 1 = con "solo las manos" se sigue viendo el reloj (las piezas pequenas guardadas) */
 static volatile LONG g_watch_n = 0;  /* (E33) piezas del reloj pintadas (para el chivato) */
 static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton de agarre izq, 2 = siempre, 3 = automatico por cercania (el de la E32) */
-static int cfg_dos_manos_ejes = 1;   /* (E34) 1 = con las dos manos el arma apunta de la mano der hacia la izq (como Pavlov). 0 = no gira */
+static int cfg_dos_manos_ejes = 1;
+static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
+static int cfg_recarga_ms = 2200;    /* (E36) tiempo que la mano izq va con el arma tras meter el cargador (animacion del juego) */
+static float cfg_cadera_cm = 22.0f;  /* (E36) radio de la "cartuchera" en la cadera izq */
+static volatile LONG g_mag_state = 0;   /* (E36) 0 nada, 1 cargador en la mano, 2 metiendolo (mano izq con el arma) */
+static volatile LONG g_reload_req = 0;   /* (E36) el gesto pide pulsar R (lo hace mandos_step) */
+static volatile LONG g_ar_blocked = 0, g_ar2_blocked = 0, g_mag_ins = 0;   /* (E34) 1 = con las dos manos el arma apunta de la mano der hacia la izq (como Pavlov). 0 = no gira */
 static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo en partida) */
 static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
 static float cfg_dos_manos_cm = 12.0f;   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
@@ -358,6 +364,9 @@ static const char CFG_DEFAULT[] =
     "# sin_oclusion=1: (E35) el juego dibuja todo lo que esta delante (si no, en VR desaparecen cajas y paredes). 0 = mas rapido pero parpadean\r\n"
     "#   Shift+F10 lo cambia en el juego y se guarda aqui solo\r\n"
     "sin_oclusion=1\r\n"
+    "# recarga_manual=1: (E36) el arma ya no recarga sola. Mano izq a la cadera izq + agarre = coger cargador; llevarlo al arma = recargar.\r\n"
+    "#   B (derecho) sigue recargando de golpe. 0 = como el juego (recarga automatica)\r\n"
+    "recarga_manual=1\r\n"
     "# ipd_escala: separacion de los ojos (1.0 = la real del visor). Mas = el mundo parece mas pequeno\r\n"
     "ipd_escala=1.0\r\n"
     "# quitar_vsync=1: con la imagen en el visor, quita la sincronizacion vertical del juego (SteamVR ya marca el ritmo)\r\n"
@@ -444,6 +453,9 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "dos_manos"))        cfg_dos_manos = v;        /* (E32) */
     else if (!strcmp(s, "dos_manos_cm"))     cfg_dos_manos_cm = fv;    /* (E32) */
     else if (!strcmp(s, "dos_manos_ejes"))   cfg_dos_manos_ejes = v;   /* (E34) */
+    else if (!strcmp(s, "recarga_manual"))   cfg_recarga_manual = v;   /* (E36) */
+    else if (!strcmp(s, "recarga_ms"))       cfg_recarga_ms = v;       /* (E36) */
+    else if (!strcmp(s, "cadera_cm"))        cfg_cadera_cm = fv;       /* (E36) */
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
@@ -3181,6 +3193,7 @@ static void vr_after_present(void)
     memset(rp, 0, sizeof(rp));
     LARGE_INTEGER q0, q1, qf; QueryPerformanceCounter(&q0);
     p_WaitGetPoses(rp, 16, NULL, 0);
+    reload_update(rp);  /* (E36) antes que hand_update: decide si el agarre izq es cargador o dos manos */
     hand_update(rp);
     lhand_update(rp);   /* (E31) */
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
@@ -3255,6 +3268,97 @@ static void hand_load(void)
 }
 /* (E34) postura de un mando (role 1 = izq, 2 = der) respecto al centro de la cabeza, en ejes del juego.
  * Es la misma cuenta que hacen hand_update y lhand_update. Devuelve 0 si no hay mando. */
+/* (E36) RECARGA MANUAL (fase 1). Sin recarga automatica (ganchos en metro.exe+0x2BAA90 y +0x2B88C0). Gesto:
+ * mano izq a la cadera izq (bajo la cabeza, a la izquierda segun hacia donde mira el cuerpo) + apretar el agarre = coger un
+ * cargador (vibra). Con el agarre apretado, llevar la mano izq al mando der (el arma) = se pulsa R: recarga del juego con su
+ * animacion; la mano izq va con el arma cfg_recarga_ms. Soltar el agarre antes = se tira el cargador. Todo en el espacio de
+ * SteamVR (metros), sin el juego. */
+static void haptic(uint32_t role, int us)
+{
+    typedef void (*PFN_Haptic)(uint32_t dev, uint32_t axis, unsigned short us);
+    static PFN_Haptic p = NULL; static int tried = 0;
+    if (!tried) {
+        tried = 1; int err = 0;
+        void **tbl = p_VR_GetIf ? (void **)p_VR_GetIf("FnTable:IVRSystem_026", &err) : NULL;
+        if (tbl && !err) p = (PFN_Haptic)tbl[39];   /* TriggerHapticPulse (justo despues de GetControllerStateWithPose) */
+    }
+    if (!p || !p_RoleIdx) return;
+    uint32_t i = p_RoleIdx(role); if (i >= 16) return;
+    p(i, 0, (unsigned short)(us > 3999 ? 3999 : us));
+}
+static void reload_update(const OvrPose *rp)
+{
+    static int prev_grip = 0, buzz = 0; static ULONGLONG t_ins = 0;
+    if (!cfg_recarga_manual || g_mode != 1 || !p_RoleIdx || !rp[0].valid) { g_mag_state = 0; prev_grip = 0; return; }
+    uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
+    int grip = g_lgrip != 0;
+    if (li >= 16 || !rp[li].valid) { prev_grip = grip; return; }
+    const OvrMat34 *H = &rp[0].mat, *L = &rp[li].mat;
+    /* cadera izq: 55 cm bajo la cabeza, 18 cm a la izquierda (solo el giro horizontal de la cabeza) */
+    float fx = -H->m[0][2], fz = -H->m[2][2], fl = sqrtf(fx * fx + fz * fz);
+    if (fl < 1e-3f) { fx = 0; fz = -1; fl = 1; }
+    fx /= fl; fz /= fl;
+    float rx = -fz, rz = fx;   /* derecha = adelante girado 90 grados */
+    float hip[3] = { H->m[0][3] - rx * 0.18f, H->m[1][3] - 0.55f, H->m[2][3] - rz * 0.18f };
+    float dx = L->m[0][3] - hip[0], dy = L->m[1][3] - hip[1], dz = L->m[2][3] - hip[2];
+    float dhip = sqrtf(dx * dx + dy * dy + dz * dz);
+    float dgun = 9.0f;
+    if (ri < 16 && rp[ri].valid) {
+        const OvrMat34 *R = &rp[ri].mat;
+        float ex = L->m[0][3] - R->m[0][3], ey = L->m[1][3] - R->m[1][3], ez = L->m[2][3] - R->m[2][3];
+        dgun = sqrtf(ex * ex + ey * ey + ez * ez);
+    }
+    if (buzz > 0) { haptic(1, 3000); buzz--; }
+    switch (g_mag_state) {
+    case 0:
+        if (grip && !prev_grip && dhip < cfg_cadera_cm * 0.01f) {
+            g_mag_state = 1; buzz = 6; vr_log("RECARGA: cargador cogido de la cadera (mano a %.0f cm)", dhip * 100.0f);
+        }
+        break;
+    case 1:
+        if (!grip) { g_mag_state = 0; vr_log("RECARGA: cargador soltado sin meterlo"); break; }
+        if (dgun < 0.20f && dhip > cfg_cadera_cm * 0.01f) {
+            InterlockedExchange(&g_reload_req, 1); g_mag_state = 2; t_ins = GetTickCount64(); buzz = 4; haptic(2, 3000);
+            InterlockedIncrement(&g_mag_ins); vr_log("RECARGA: cargador al arma (manos a %.0f cm) -> recarga", dgun * 100.0f);
+        }
+        break;
+    case 2:
+        if (GetTickCount64() - t_ins > (ULONGLONG)cfg_recarga_ms) g_mag_state = 0;
+        break;
+    }
+    prev_grip = grip;
+}
+/* (E36) ganchos: "toca recarga automatica?" (devuelve 0/1) y su variante de otras armas (hace la recarga ella misma) */
+static int (*g_ar_tramp)(void *) = NULL;
+static void (*g_ar2_tramp)(void *) = NULL;
+static int ar_hook(void *w)
+{
+    int r = g_ar_tramp(w);
+    if (r && cfg_recarga_manual && g_mode == 1) { InterlockedIncrement(&g_ar_blocked); return 0; }
+    return r;
+}
+static void ar2_hook(void *w)
+{
+    if (cfg_recarga_manual && g_mode == 1) { InterlockedIncrement(&g_ar2_blocked); return; }   /* todas sus salidas tempranas = no hacer nada */
+    g_ar2_tramp(w);
+}
+static void ar_install(void)
+{
+    static int done = 0; if (done) return; done = 1;
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+    static const BYTE sig[12] = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0xD9 };
+    struct { UINT32 rva; void *hk; void **tr; } h[2] = { { 0x2BAA90, (void *)ar_hook, (void **)&g_ar_tramp }, { 0x2B88C0, (void *)ar2_hook, (void **)&g_ar2_tramp } };
+    mh_start();
+    for (int k = 0; k < 2; k++) {
+        BYTE *fn = base + h[k].rva;
+        if (memcmp(fn, sig, sizeof(sig)) || *(UINT32 *)(fn + 14) != 0xEC8) {
+            vr_log("RECARGA: metro.exe+0x%X no es la esperada (otra version del juego?): recarga automatica sin tocar", h[k].rva); continue;
+        }
+        MH_STATUS st = MH_CreateHook(fn, h[k].hk, h[k].tr);
+        if (st == MH_OK) st = MH_EnableHook(fn);
+        vr_log("RECARGA: gancho en metro.exe+0x%X -> %s", h[k].rva, MH_StatusToString(st));
+    }
+}
 static int ctrl_rel(const OvrPose *rp, uint32_t role, uint32_t *last, float A[4][4])
 {
     if (!p_RoleIdx || !rp[0].valid) return 0;
@@ -3287,7 +3391,7 @@ static void twohand_apply(const OvrPose *rp, float A[4][4], const float C0i[4][4
     float L[4][4]; int lok = ctrl_rel(rp, 1, &last_li, L);
     int want = 0; float dist = -1.0f;
     if (lok && !g_lhand_hold) {
-        if (cfg_dos_manos == 1) want = g_lgrip != 0;
+        if (cfg_dos_manos == 1) want = g_lgrip != 0 && g_mag_state != 1;   /* (E36) con el cargador en la mano no se agarra el arma */
         else if (cfg_dos_manos == 2) want = 1;
         else if (cfg_dos_manos == 3) {   /* (E32) automatico: mando izq cerca del sitio de agarre (G * C0_izq) */
             float G0[4][4], T[4][4]; mul4(A, C0i, G0); mul4(G0, g_lhand_C0, T);
@@ -3451,7 +3555,7 @@ static void lhand_update(const OvrPose *rp)
     }
     /* (E32/E34) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya la pone en el guardamanos con la
      * animacion, asi que se le da la MISMA G que al arma. Se decide en hand_update (twohand_apply), que va antes. */
-    if (g_dos_manos && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));
+    if ((g_dos_manos || g_mag_state == 2) && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));   /* (E36) metiendo el cargador: con el arma */
     memcpy(g_lhand_G, G, sizeof(G));
     g_lhand_ok = 1;
 }
@@ -3920,7 +4024,10 @@ static void mandos_step(float dt)
     out_set(O_FIRE, rok && R.axis[1].x > 0.6f);
     out_set(O_AIM, rok && BTN(R, 2));
     out_set(O_USE, rok && BTN(R, 7));
-    out_set(O_RELOAD, rok && BTN(R, 1));
+    static int rl_hold = 0;   /* (E36) cargador metido con el gesto: R pulsada unos fotogramas */
+    if (InterlockedExchange(&g_reload_req, 0)) rl_hold = 4;
+    out_set(O_RELOAD, (rok && BTN(R, 1)) || rl_hold > 0);
+    if (rl_hold > 0) rl_hold--;
     /* clic del stick derecho: toque = cuchillo; mantener 1,5 s = calibrar la mano del arma (E15) */
     static ULONGLONG rdown = 0; static int rcal = 0;
     int rc = rok && BTN(R, 32);
@@ -4241,6 +4348,7 @@ static void nat_install(void)
     g_nat_installed = 1;
     mov_install();
     bul_install();
+    ar_install();   /* (E36) */
     vr_log("NATIVA: gancho puesto en metro.exe+0x69B900 (llamada de la camara del jugador en +0x1F3960)");
 }
 
@@ -5964,8 +6072,8 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
-                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)InterlockedExchange(&g_lh_n, 0),
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
+                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
@@ -6229,7 +6337,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E35: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E36: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

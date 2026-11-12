@@ -2,6 +2,17 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E36 (rama `manos`) — Recarga manual (fase 1): el cargador sale de la cadera izquierda
+- Investigación (12/11, `docs/PLAN_RECARGA.md`): D-Rey no tiene recarga manual. En el `metro.exe` está la función que decide si el arma recarga sola (`+0x2BAA90`) y una variante de otras armas (`+0x2B88C0`).
+- **Ya no recarga sola** (ganchos en esas dos funciones; solo en VR). Log: `RECARGA: gancho en metro.exe+0x… -> MH_OK`.
+- **Gesto:** mano izq a la **cadera izquierda** (unos 55 cm bajo la cabeza y 18 cm a la izquierda) y **apretar el agarre** = coges un cargador (vibra el mando izq). **Sin soltar el agarre**, lleva la mano izq al mando derecho (a menos de 20 cm) = se mete: recarga del juego con su animación (vibran los dos) y la mano izq va con el arma ~2,2 s. Si sueltas el agarre antes, el cargador se "cae".
+- El agarre izq fuera de la cadera sigue siendo coger el arma con las dos manos. Si sigues apretando tras recargar, pasas a las dos manos.
+- **B derecho sigue recargando de golpe** (recarga de emergencia).
+- Config: `recarga_manual=1` (0 = como el juego), `recarga_ms=2200`, `cadera_cm=22` (tamaño de la "cartuchera").
+- Log: `RECARGA: cargador cogido… / al arma… / soltado…` y en la línea de `MANO IZQ` cada 2 s: `recarga=… (auto_bloqueadas=… cargadores=…)`.
+- Escopeta y revólver (cartucho a cartucho) aún no: pueden seguir recargando solos o no; probar y mirar el log.
+- Sin probar en las gafas.
+
 ## E35 (rama `manos`) — Archivos de serie (para que a cualquiera le salga igual), objetos sin parpadeos y chivato de tirones arreglado
 - Prueba de la E34 (usuario, 12/11): **el agarre con el botón funciona** (log: `DOS MANOS SI/NO` al apretar y soltar). En la zona de las cajas, objetos que desaparecían y volvían: era la "oclusión" del juego (descarta lo que cree tapado, calculado con su cámara, no con la del visor). **Shift+F10 lo arregló.** Quedan tirones al girar la cabeza en escenas cargadas (más de ~20.000 objetos por segundo); se mirarán aparte.
 - **Archivos de serie**: si a alguien le falta `metro_vr_brazos.txt`, `metro_vr_mano.txt` o `metro_vr_mano_izq.txt` (en `%TEMP%`), la DLL los crea con los datos del autor. Así, quien solo copia las dos DLL ve lo mismo: solo las manos, el reloj, la mano izq en el mando, el agarre a dos manos y el arma más o menos en la mano. **Si el archivo ya existe NO se toca** (la calibración de cada uno manda; para la suya: clic del stick derecho/izquierdo 1,5 s). Log: `ARCHIVOS: … creado con los datos de serie`.
