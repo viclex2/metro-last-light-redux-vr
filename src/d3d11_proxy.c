@@ -2605,6 +2605,7 @@ static PFN_PollEvent    p_PollEvent = NULL;
 static int head_apply(const OvrPose *pz);
 static void hand_update(const OvrPose *rp);
 static void lhand_update(const OvrPose *rp);
+static void reload_update(const OvrPose *rp);   /* (E36) */
 static void raton_step(void);
 static OvrMat34 g_frame_pose;              /* postura con la que se esta dibujando este fotograma */
 static OvrMat34 g_eye_pose[2];             /* postura con la que se dibujo la ultima imagen de cada ojo */
