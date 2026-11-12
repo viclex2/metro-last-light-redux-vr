@@ -29,7 +29,7 @@
 1. **Fase 1 (poco riesgo):** gancho en `+0x2BAA90` (y variantes) → sin recarga automática. Gesto: mano izq a la cadera izq +
    agarre = "coger cargador" (vibración); llevarla al arma = se lanza la recarga DEL JUEGO (tecla R) con su animación; durante
    la animación la mano izq va con el arma. El agarre izq fuera de la cadera sigue siendo el agarre a dos manos.
-2. **Fase 2:** expulsar el cargador con un botón (balas a 0 con la virtual `+0x1350`; el arma no dispara hasta meter otro).
+2. **Fase 2 (E37):** B toque. Expulsar el cargador con un botón (balas a 0 con la virtual `+0x1350`; el arma no dispara hasta meter otro).
 3. **Fase 3 (riesgo alto, arma por arma):** cargador visible en la mano izq (pieza del cargador pintada con la cámara de la mano
    izq, como el reloj) y meter las balas sin la animación del juego.
 - Escopeta/revólver (cartucho a cartucho): después, con sus funciones propias.

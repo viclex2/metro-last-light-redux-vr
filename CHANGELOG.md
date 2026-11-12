@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E37 (rama `manos`) — Recarga manual (fase 2): expulsar el cargador con B
+- Prueba de la E36 (usuario, 12/11): **la recarga desde la cadera sale perfecta a la primera.**
+- **B derecho (toque) = expulsar el cargador**: el arma se queda sin balas (vibra el mando der) y no dispara hasta meter otro desde la cadera izq.
+- **B mantenido 1 s = recarga de golpe** (la de siempre, por si acaso).
+- Cómo: el gancho de la recarga automática (`+0x2BAA90` / `+0x2B88C0`) ve el arma; se comprueba que es la del jugador (misma cuenta que el juego: dueño `arma+0x118` == jugador) y se le ponen las balas a 0 con la función del juego que lo hace al cargar partida (virtual `+0x1350`). Se hace en el hilo del juego.
+- Si con `recarga_manual=0`, el toque de B recarga como antes.
+- Log: `RECARGA: cargador expulsado (tenia N balas)` y `expulsados=` en la línea de `MANO IZQ`.
+- Sin probar en las gafas. Si pulsas B y no pasa nada (sin la línea en el log), es que ese arma no pasa por el gancho: dime cuál.
+
 ## E36 (rama `manos`) — Recarga manual (fase 1): el cargador sale de la cadera izquierda
 - Investigación (12/11, `docs/PLAN_RECARGA.md`): D-Rey no tiene recarga manual. En el `metro.exe` está la función que decide si el arma recarga sola (`+0x2BAA90`) y una variante de otras armas (`+0x2B88C0`).
 - **Ya no recarga sola** (ganchos en esas dos funciones; solo en VR). Log: `RECARGA: gancho en metro.exe+0x… -> MH_OK`.
