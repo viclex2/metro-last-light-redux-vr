@@ -292,6 +292,18 @@ static PieceSig g_pc_cur[MAXP], g_pc_last[MAXP]; static int g_pc_ncur = 0, g_pc_
 static PieceSig g_hide[MAXP]; static int g_nhide = 0;
 static int g_try = -1;                       /* F6: pieza que se esta probando a ocultar (-1 = ninguna) */
 static PieceSig g_try_sig;
+/* (E39) cargador de verdad: las piezas que son el cargador de cada arma (arma = su pieza grande g_wpn_ic/si) */
+typedef struct { UINT wic, wsi, ic, si; } MagSig;
+#define MAXMAG 48
+static MagSig g_mag[MAXMAG]; static int g_nmag = 0;
+static volatile UINT g_out_ic = 0, g_out_si = 0;   /* arma con el cargador FUERA (0 = ninguna) */
+static volatile LONG g_mag_hid_n = 0, g_mag_hand_n = 0;
+static int mag_is(UINT wic, UINT wsi, UINT ic, UINT si)
+{
+    for (int i = 0; i < g_nmag; i++) if (g_mag[i].wic == wic && g_mag[i].wsi == wsi && g_mag[i].ic == ic && g_mag[i].si == si) return 1;
+    return 0;
+}
+static int mag_count(UINT wic, UINT wsi) { int n = 0; for (int i = 0; i < g_nmag; i++) if (g_mag[i].wic == wic && g_mag[i].wsi == wsi) n++; return n; }
 static volatile LONG g_pc_hidden = 0, g_pc_drawn = 0;
 static int cfg_hud = 0;                 /* (E11) HUD como un cartel a una distancia fija, igual para los dos ojos */
 static float cfg_hud_size = 0.75f;      /* mitad del ancho del HUD, en "tangente" (0.75 = unos 74 grados de ancho) */
@@ -3324,6 +3336,7 @@ static void reload_update(const OvrPose *rp)
         if (!grip) { g_mag_state = 0; vr_log("RECARGA: cargador soltado sin meterlo"); break; }
         if (dgun < 0.20f && dhip > cfg_cadera_cm * 0.01f) {
             InterlockedExchange(&g_reload_req, 1); g_mag_state = 2; t_ins = GetTickCount64(); buzz = 4; haptic(2, 3000);
+            g_out_ic = 0;   /* (E39) el cargador vuelve a verse en el arma */
             InterlockedIncrement(&g_mag_ins); vr_log("RECARGA: cargador al arma (manos a %.0f cm) -> recarga", dgun * 100.0f);
         }
         break;
@@ -4076,9 +4089,9 @@ static void mandos_step(float dt)
     static ULONGLONG bdown = 0; static int bdone = 0;
     int bb = rok && BTN(R, 1);
     if (bb && !bdown) { bdown = GetTickCount64(); bdone = 0; }
-    if (bb && !bdone && GetTickCount64() - bdown > 1000) { rl_hold = 4; bdone = 1; }
+    if (bb && !bdone && GetTickCount64() - bdown > 1000) { rl_hold = 4; bdone = 1; g_out_ic = 0; }
     if (!bb && bdown) {
-        if (!bdone) { if (cfg_recarga_manual) { InterlockedExchange(&g_expel_req, 1); haptic(2, 2500); } else rl_hold = 4; }
+        if (!bdone) { if (cfg_recarga_manual) { InterlockedExchange(&g_expel_req, 1); g_out_si = g_wpn_si; g_out_ic = g_wpn_ic; haptic(2, 2500); } else rl_hold = 4; }
         bdown = 0;
     }
     out_set(O_RELOAD, rl_hold > 0);
@@ -5016,6 +5029,10 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             int de = (GetAsyncKeyState(VK_END) & 0x8000) != 0;
             if (de && !prevend) isl_key();
             prevend = de;
+            static int prevpg = 0;    /* (E39) Av Pag: marcar el cargador de cada arma */
+            int dp = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
+            if (dp && !prevpg) mag_key(rsh, (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+            prevpg = dp;
         }
         /* Shift + H: buscar la camara del juego en memoria */
         {
@@ -5912,6 +5929,13 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     if (!known && g_pc_ncur < MAXP) { g_pc_cur[g_pc_ncur].ic = ic; g_pc_cur[g_pc_ncur].si = si; g_pc_ncur++; }
     InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
+    /* (E39) el cargador: fuera = no se pinta en el arma; en la mano izq (cogido de la cadera) = se pinta con la camara de esa mano
+     * (4 = en el arma Y en la mano, si aun no se habia sacado el del arma) */
+    if (g_nmag && g_wpn_ic && mag_is(g_wpn_ic, g_wpn_si, ic, si)) {
+        int out = cfg_recarga_manual && g_out_ic == g_wpn_ic && g_out_si == g_wpn_si;
+        if (cfg_recarga_manual && g_mag_state == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); return out ? 3 : 4; }
+        if (out) { InterlockedIncrement(&g_mag_hid_n); InterlockedIncrement(&g_pc_hidden); return 1; }
+    }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
         if (g_hide[i].ic == ic && g_hide[i].si == si) {
             g_arm_seen = GetTickCount64();
@@ -5971,9 +5995,9 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                      \
-      if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); }          \
+      if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv));                                           \
-      else if (ps_ == 3) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
+      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
@@ -5982,9 +6006,9 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                                   \
-      if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); }           \
+      if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst));                                \
-      else if (ps_ == 3) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
+      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 /* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
@@ -6115,6 +6139,50 @@ static void brazos_save(void)
     for (int i = 0; i < g_nhide; i++) fprintf(fp, "%u %u\n", g_hide[i].ic, g_hide[i].si);
     fclose(fp);
 }
+/* (E39) metro_vr_cargadores.txt: una linea por pieza de cargador: "arma_ic arma_si pieza_ic pieza_si" */
+static void mag_path(char *path) { GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_cargadores.txt"); }
+static void mag_load(void)
+{
+    static int done = 0; if (done) return; done = 1;
+    char path[MAX_PATH]; mag_path(path);
+    FILE *fp = fopen(path, "r"); if (!fp) { vr_log("CARGADOR: ninguno marcado todavia (%s)", path); return; }
+    UINT a, b, c, d;
+    while (g_nmag < MAXMAG && fscanf(fp, "%u %u %u %u", &a, &b, &c, &d) == 4) { g_mag[g_nmag].wic = a; g_mag[g_nmag].wsi = b; g_mag[g_nmag].ic = c; g_mag[g_nmag].si = d; g_nmag++; }
+    fclose(fp);
+    vr_log("CARGADOR: %d piezas de cargador marcadas (%s)", g_nmag, path);
+}
+static void mag_save(void)
+{
+    char path[MAX_PATH]; mag_path(path);
+    FILE *fp = fopen(path, "w"); if (!fp) return;
+    for (int i = 0; i < g_nmag; i++) fprintf(fp, "%u %u %u %u\n", g_mag[i].wic, g_mag[i].wsi, g_mag[i].ic, g_mag[i].si);
+    fclose(fp);
+}
+static void pieces_key(int shift, int ctrl);
+/* (E39) Av Pag: ocultar la siguiente pieza (igual que F6). Shift+Av Pag: la pieza oculta es el CARGADOR de esta arma.
+ * Ctrl+Av Pag: borrar lo marcado como cargador de esta arma. */
+static void mag_key(int shift, int ctrl)
+{
+    UINT w = g_wpn_ic, ws = g_wpn_si;
+    if (ctrl) {
+        int j = 0; for (int i = 0; i < g_nmag; i++) if (!(g_mag[i].wic == w && g_mag[i].wsi == ws)) g_mag[j++] = g_mag[i];
+        int del = g_nmag - j; g_nmag = j; mag_save();
+        vr_log(">>> Ctrl+AvPag: borradas %d piezas de cargador del arma %u/%u", del, w, ws); Beep(500, 200); return;
+    }
+    if (shift) {
+        if (!w) { vr_log(">>> Shift+AvPag: aun no se sabe que arma llevas (espera un segundo con el arma en la mano)"); Beep(400, 150); return; }
+        if (g_try < 0) { vr_log(">>> Shift+AvPag: no hay ninguna pieza oculta (pulsa Av Pag hasta que desaparezca el cargador)"); Beep(400, 150); return; }
+        if (g_try_sig.ic == w && g_try_sig.si == ws) { vr_log(">>> Shift+AvPag: esa es la pieza grande del arma, no puede ser el cargador"); Beep(400, 150); return; }
+        if (!mag_is(w, ws, g_try_sig.ic, g_try_sig.si) && g_nmag < MAXMAG) {
+            g_mag[g_nmag].wic = w; g_mag[g_nmag].wsi = ws; g_mag[g_nmag].ic = g_try_sig.ic; g_mag[g_nmag].si = g_try_sig.si; g_nmag++; mag_save();
+        }
+        vr_log(">>> Shift+AvPag: pieza %u/%u guardada como CARGADOR del arma %u/%u (esta arma tiene %d)", g_try_sig.ic, g_try_sig.si, w, ws, mag_count(w, ws));
+        Beep(900, 80); Beep(1300, 120); Beep(1600, 120);
+        g_try = -1;
+        return;
+    }
+    pieces_key(0, 0);
+}
 static int sig_cmp(const void *a, const void *b)
 {
     const PieceSig *x = a, *y = b;
@@ -6124,12 +6192,14 @@ static int sig_cmp(const void *a, const void *b)
 static void pieces_frame(void)
 {
     brazos_load();
+    mag_load();
     {   /* (E31) chivato de la mano izquierda, cada 2 s */
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
-                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, (long)InterlockedExchange(&g_lh_n, 0),
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
+                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
+                                    (long)InterlockedExchange(&g_mag_hid_n, 0), (long)InterlockedExchange(&g_mag_hand_n, 0), (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
@@ -6143,7 +6213,8 @@ static void pieces_frame(void)
         char line[1100]; int L = 0;
         for (int i = 0; i < g_pc_ncur && L < 1000; i++) {
             int h = 0; for (int k = 0; k < g_nhide; k++) if (g_hide[k].ic == g_pc_cur[i].ic && g_hide[k].si == g_pc_cur[i].si) h = 1;
-            L += snprintf(line + L, sizeof(line) - L, " %d:%u/%u%s", i + 1, g_pc_cur[i].ic, g_pc_cur[i].si, h ? "(brazo)" : "");
+            int mg = !h && mag_is(g_wpn_ic, g_wpn_si, g_pc_cur[i].ic, g_pc_cur[i].si);
+            L += snprintf(line + L, sizeof(line) - L, " %d:%u/%u%s", i + 1, g_pc_cur[i].ic, g_pc_cur[i].si, h ? "(brazo)" : mg ? "(cargador)" : "");
         }
         vr_log("PIEZAS del arma (%d):%s", g_pc_ncur, line);
         last_log = GetTickCount64();
@@ -6161,6 +6232,9 @@ static void pieces_frame(void)
             g_wpn_ic = cic; g_wpn_si = csi;
             vr_log("ARMA: ahora %u/%u -> calibracion %s", cic, csi, wcal_find(cic, csi) >= 0 ? "PROPIA"
                    : "general (para darle la suya: mano donde ves la empunadura y mantener 1,5 s el clic del stick derecho)");
+            int nm = mag_count(cic, csi);
+            if (nm) vr_log("CARGADOR: esta arma tiene %d pieza(s) de cargador marcadas", nm);
+            else vr_log("CARGADOR: esta arma NO tiene cargador marcado (Av Pag hasta que desaparezca, luego Shift+Av Pag)");
         }
     }
     memcpy(g_pc_last, g_pc_cur, sizeof(PieceSig) * g_pc_ncur); g_pc_nlast = g_pc_ncur;
@@ -6393,7 +6467,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E38: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E39: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

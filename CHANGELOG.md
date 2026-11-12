@@ -2,6 +2,16 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E39 — Cargador de verdad, paso 1: marcar el cargador de cada arma (pruebas)
+
+- **Av Pág** oculta la siguiente pieza del arma (igual que F6). Cuando desaparezca el cargador: **Shift+Av Pág** lo guarda como cargador de esa arma (archivo `%TEMP%\metro_vr_cargadores.txt`, línea `arma_ic arma_si pieza_ic pieza_si`). **Ctrl+Av Pág** borra lo marcado de esa arma. Un arma puede tener varias piezas (cargador + balas, por ejemplo).
+- Con el cargador marcado:
+  - **B (toque)**: el cargador **desaparece del arma** al momento (antes solo se vaciaba por dentro).
+  - **Coger de la cadera (agarre izq)**: el cargador se pinta en la **mano izquierda** (con la cámara de esa mano, como el reloj). Si el del arma no se había sacado, se ven los dos.
+  - **Meterlo en el arma**: vuelve a verse en el arma y hace la recarga como en la E36. Mantener B 1 s también lo devuelve.
+- Log: `CARGADOR:` al cambiar de arma (si tiene o no cargador marcado), `PIEZAS del arma` marca `(cargador)`, y `MANO IZQ:` añade `fuera= oculto= en_mano=`.
+- Lo que queremos saber con esta prueba: si el cargador de cada arma es una **pieza suelta** (se puede ocultar solo él) y cómo se ve en la mano izquierda (seguramente algo desplazado: se colocará en la siguiente versión).
+
 ## E38 (rama `manos`) — Expulsar el cargador al momento (sin tener que disparar)
 - Prueba de la E37 (usuario, 12/11): B expulsaba, pero **solo al disparar la siguiente bala** (log: `cargador expulsado (tenia 28 balas)` justo tras un disparo). Causa: el gancho que ve el arma (`+0x2B88C0`) solo lo llama el juego al disparar. El cargador no "cae" porque no es un objeto suelto: es una pieza del modelo del arma (eso sería la fase 3).
 - Ahora el arma del jugador se recuerda la primera vez que dispara (y qué arma se ve en ese momento), y **al pulsar B se vacía al instante** desde el paso del jugador (hilo del juego, ~100 veces/s).
