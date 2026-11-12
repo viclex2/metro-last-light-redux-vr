@@ -173,6 +173,7 @@ static volatile LONG g_hud_n;
 static volatile LONG g_mov_hits;
 static void pieces_frame(void);
 static void pieces_key(int shift, int ctrl);
+static void mag_key(int shift, int ctrl);
 static void pieces_show_key(void);
 static void draw_hooks_check(void);
 static ID3D11DeviceContext *g_hud_ctx;
