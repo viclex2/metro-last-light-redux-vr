@@ -165,7 +165,7 @@ static int cfg_clock_thread = 1;
 static int cfg_linterna = 0;            /* con F9: agrandar el FOV del juego (lo que decide que se dibuja) */
 static float cfg_linterna_deg = 140.0f; /* FOV vertical del juego con la linterna */
 static int cfg_nativa = 1;              /* (E9) la cabeza entra en la camara del juego por dentro (metro.exe+0x69B900) */
-static int cfg_oclusion = 0;            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
+static int cfg_oclusion = 1;   /* (E35) por defecto QUITADA: se dibuja todo (si no, desaparecen cajas al mirar) */            /* (E9) con F9, el juego no descarta objetos por su "oclusion" de CPU (metro.exe+0x826B50) */
 static volatile LONG g_nat_installed = 0, g_nat_hits = 0;
 static int cfg_natarma = 1;             /* (E10b) a la camara del arma (que no sale de nuestra posicion) se le pone el ojo */
 static void *g_bb_ptr;
@@ -268,7 +268,7 @@ static int cfg_shadow = 1;                   /* (E24) borrador en memoria normal
  *   1 = PRUEBA: todo lo que depende del ojo se pinta en "copias" de las texturas en vez de en las del juego, y a las
  *       gafas se manda la copia. Mismo coste que 0 y la imagen deberia ser IGUAL: si se ve bien, las copias funcionan.
  *   2 = DE VERDAD: el juego piensa una vez y cada dibujo que depende del ojo se repite para el ojo derecho en las copias. */
-static int cfg_dosojos = 0;
+static int cfg_dosojos = 2;   /* (E35) por defecto los dos ojos en cada fotograma (probado y bueno desde la E27) */
 static volatile LONG g_twin_on = 0;          /* modo de los dos ojos activo AHORA (se cambia entre fotogramas) */
 static __thread int t_eye = -1;              /* ojo forzado en este hilo (para calcular lo del ojo derecho) */
 static __thread int t_quiet = 0;             /* calculo "de copia": sin apuntar nada ni tocar el estado global */
@@ -353,6 +353,11 @@ static const char CFG_DEFAULT[] =
     "# estereo: con F9. 2 = sincronizado (el juego dibuja izq y der del MISMO instante: se para su reloj en el 2o ojo)\r\n"
     "#          1 = alternos (un ojo por fotograma, el mundo sigue moviendose) | 0 = mono\r\n"
     "estereo=2\r\n"
+    "# dos_ojos=2: (E27) los dos ojos en el mismo fotograma (el juego piensa una vez por pareja: va mas fluido). 0 = un ojo por fotograma\r\n"
+    "dos_ojos=2\r\n"
+    "# sin_oclusion=1: (E35) el juego dibuja todo lo que esta delante (si no, en VR desaparecen cajas y paredes). 0 = mas rapido pero parpadean\r\n"
+    "#   Shift+F10 lo cambia en el juego y se guarda aqui solo\r\n"
+    "sin_oclusion=1\r\n"
     "# ipd_escala: separacion de los ojos (1.0 = la real del visor). Mas = el mundo parece mas pequeno\r\n"
     "ipd_escala=1.0\r\n"
     "# quitar_vsync=1: con la imagen en el visor, quita la sincronizacion vertical del juego (SteamVR ya marca el ritmo)\r\n"
@@ -483,6 +488,49 @@ static void parse_cfg_text(char *buf)
     }
 }
 
+/* (E35) cambia (o anade) una linea "clave=valor" en metro_vr_config.txt, sin tocar el resto */
+static void cfg_store(const char *key, int val)
+{
+    if (!g_cfgpath[0]) return;
+    FILE *fp = fopen(g_cfgpath, "rb"); if (!fp) return;
+    static char in[16384], out[16600]; size_t n = fread(in, 1, sizeof(in) - 1, fp); fclose(fp); in[n] = 0;
+    size_t kl = strlen(key), o = 0; char *q = in; int done = 0;
+    while (*q) {
+        char *e = strchr(q, '\n'); size_t ll = e ? (size_t)(e - q + 1) : strlen(q);
+        if (!strncmp(q, key, kl) && q[kl] == '=') { if (!done) { o += snprintf(out + o, sizeof(out) - o, "%s=%d\r\n", key, val); done = 1; } }
+        else if (o + ll < sizeof(out) - 64) { memcpy(out + o, q, ll); o += ll; }
+        q += ll;
+    }
+    if (!done) { if (o && out[o - 1] != '\n') o += snprintf(out + o, sizeof(out) - o, "\r\n"); o += snprintf(out + o, sizeof(out) - o, "%s=%d\r\n", key, val); }
+    fp = fopen(g_cfgpath, "wb"); if (!fp) return; fwrite(out, 1, o, fp); fclose(fp);
+}
+/* (E35) ARCHIVOS DE SERIE: si falta alguno, se crea con lo calibrado por el autor (Alex, 12/11/2026, rama Steam pre "next-gen").
+ * Si ya existe NO se toca (la calibracion de cada uno manda). Asi, quien solo copia las DLL ve lo mismo: solo las manos, el
+ * reloj, la mano izq en el mando, el agarre a dos manos y el arma mas o menos en la mano (luego cada uno recalibra). */
+static const char SEED_BRAZOS[] =
+    "16734 177912\n2538 849921\n288 855195\n1782 852885\n252 854925\n174 856020\n54 855498\n"
+    "6 855606\n24 855690\n24 855630\n6 855618\n6 855678\n6 855738\n252 855750\n";
+static const char SEED_MANO[] =
+    "0.997146 -0.011328 0.074647 0.104040\n"
+    "-0.058139 0.515567 0.854875 -0.039188\n"
+    "-0.048169 -0.856774 0.513436 0.442438\n"
+    "arma 6840 591642 0.995716 0.019216 -0.090447 0.114524 0.083253 0.239331 0.967362 0.005541 0.040236 -0.970748 0.236706 0.702303\n";
+static const char SEED_MANO_IZQ[] =
+    "0.559864 -0.827566 -0.041077 0.091846\n"
+    "0.774478 0.505040 0.380945 -0.167313\n"
+    "-0.294512 -0.245091 0.923685 0.719847\n";
+static void seed_files(const char *tmp)
+{
+    static const struct { const char *name; const char *txt; } f[] = {
+        { "metro_vr_brazos.txt", SEED_BRAZOS }, { "metro_vr_mano.txt", SEED_MANO }, { "metro_vr_mano_izq.txt", SEED_MANO_IZQ } };
+    for (int i = 0; i < 3; i++) {
+        char path[MAX_PATH]; snprintf(path, sizeof(path), "%s%s", tmp, f[i].name);
+        HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);   /* solo si no existe */
+        if (h == INVALID_HANDLE_VALUE) continue;
+        DWORD w; WriteFile(h, f[i].txt, (DWORD)strlen(f[i].txt), &w, NULL); CloseHandle(h);
+        vr_log("ARCHIVOS: %s no existia -> creado con los datos de serie", f[i].name);
+    }
+}
 static void load_config(const char *tmp)
 {
     snprintf(g_cfgpath, sizeof(g_cfgpath), "%smetro_vr_config.txt", tmp);
@@ -2121,14 +2169,16 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
         double game = (double)(t0.QuadPart - last_exit.QuadPart) * 1000.0 / g_qpf;
         double inside = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / g_qpf;
         double wait = g_fr_wait_us / 1000.0, work = game + inside - wait;
-        if (g_mode == 1 && vr_active() && work > 9.0) {
+        double lim = g_twin_on == 2 ? 13.9 : 9.0;   /* (E35) con los dos ojos a la vez cada fotograma es una PAREJA: 13,9 ms */
+        if (g_mode == 1 && vr_active() && work > lim) {
             InterlockedIncrement(&g_saltos);
             ULONGLONG now = GetTickCount64();
             if (now - said_t > 1000) { said_t = now; said_n = 0; }
             if (said_n++ < 3)
-                vr_log("SALTITO: fotograma de %.1f ms sin contar la espera (ojo %ld): juego=%.1f (dentro, el mod con los objetos=%.1f) | mod_envio=%.1f present=%.1f espera_steamvr=%.1f resto=%.1f",
-                       work, (long)eye, game, mod_frame / 1000.0, g_fr_sub_us / 1000.0, g_fr_pres_us / 1000.0, wait,
-                       inside - g_fr_sub_us / 1000.0 - g_fr_pres_us / 1000.0 - wait);
+                vr_log("SALTITO: fotograma de %.1f ms (limite %.1f) sin contar la espera (ojo %ld): juego=%.1f (dentro, el mod con los objetos=%.1f) | mod_envio=%.1f present=%.1f espera_steamvr=%.1f resto=%.1f -> culpa: %s",
+                       work, lim, (long)eye, game, mod_frame / 1000.0, g_fr_sub_us / 1000.0, g_fr_pres_us / 1000.0, wait,
+                       inside - g_fr_sub_us / 1000.0 - g_fr_pres_us / 1000.0 - wait,
+                       (game - mod_frame / 1000.0) >= lim ? "JUEGO" : (mod_frame / 1000.0 > 2.0 ? "juego + MOD" : "juego (justo al limite)"));
         }
     }
     last_exit = t1;
@@ -4837,6 +4887,7 @@ static DWORD WINAPI keys_thread(LPVOID unused)
                 cfg_oclusion = !cfg_oclusion;
                 vr_log(">>> Shift+F10: %s", cfg_oclusion ? "oclusion del juego QUITADA (se dibuja todo, mas lento)" : "oclusion del juego PUESTA (mas rapido)");
                 if (cfg_oclusion) { Beep(700, 90); Beep(1000, 120); } else { Beep(1000, 90); Beep(700, 120); }
+                cfg_store("sin_oclusion", cfg_oclusion);   /* (E35) se recuerda para la proxima vez */
             } else if (k8 && !prevf8) {   /* (E10d) F10 = FOTO de los dos ojos */
                 g_photo = 3;
                 vr_log(">>> F10: FOTO de lo que ve cada ojo (en la carpeta TEMP)");
@@ -6175,9 +6226,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);  /* log nuevo */
             if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
             load_config(tmp);
+            seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E34: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E35: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

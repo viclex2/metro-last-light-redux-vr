@@ -2,6 +2,15 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E35 (rama `manos`) — Archivos de serie (para que a cualquiera le salga igual), objetos sin parpadeos y chivato de tirones arreglado
+- Prueba de la E34 (usuario, 12/11): **el agarre con el botón funciona** (log: `DOS MANOS SI/NO` al apretar y soltar). En la zona de las cajas, objetos que desaparecían y volvían: era la "oclusión" del juego (descarta lo que cree tapado, calculado con su cámara, no con la del visor). **Shift+F10 lo arregló.** Quedan tirones al girar la cabeza en escenas cargadas (más de ~20.000 objetos por segundo); se mirarán aparte.
+- **Archivos de serie**: si a alguien le falta `metro_vr_brazos.txt`, `metro_vr_mano.txt` o `metro_vr_mano_izq.txt` (en `%TEMP%`), la DLL los crea con los datos del autor. Así, quien solo copia las dos DLL ve lo mismo: solo las manos, el reloj, la mano izq en el mando, el agarre a dos manos y el arma más o menos en la mano. **Si el archivo ya existe NO se toca** (la calibración de cada uno manda; para la suya: clic del stick derecho/izquierdo 1,5 s). Log: `ARCHIVOS: … creado con los datos de serie`.
+  - Solo vale para la versión de Steam anterior al "next-gen" (la misma que necesita el mod). La calibración de las manos es la del autor (Quest 3S): a otros les servirá de punto de partida.
+- **Oclusión del juego QUITADA por defecto** (`sin_oclusion=1`): se dibuja todo lo que está delante, sin cajas que parpadean (algo más pesado). **Shift+F10 sigue cambiándolo y ahora se guarda solo en la config** para la próxima vez.
+- **`dos_ojos=2` por defecto** (antes solo lo tenía puesto quien lo añadía a mano en la config). Con esto la config de serie es igual que la del autor.
+- **Chivato `SALTITO` arreglado**: con los dos ojos a la vez el límite es 13,9 ms por pareja (antes avisaba desde 9 ms, de un ojo, y llenaba el log de falsos avisos). Cada aviso dice ahora la culpa: `JUEGO`, `juego + MOD` o `juego (justo al limite)`.
+- Sin probar en las gafas.
+
 ## E34 (rama `manos`) — Agarrar el arma con el botón de agarre izquierdo (y apuntar con las dos manos, como en Pavlov)
 - Prueba de la E33 (usuario, 12/11): **el reloj sale bien**. Pero el agarre a dos manos solo funcionaba acercando la mano al sitio del arma (el modo automático de la E32); con el botón no hacía nada, porque el botón seguía siendo el botiquín.
 - **Agarre izquierdo (mantener) = coger el arma con las dos manos.** Mientras lo mantienes, la mano izquierda se queda pegada al arma (en el guardamanos, donde la pone el juego) aunque separes el mando. Al soltar, la mano vuelve a tu mando.
