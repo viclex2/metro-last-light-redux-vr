@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E33 (rama `manos`) — Solo las manos, pero con el RELOJ
+- Problema (E30): al dejar solo las manos se ocultaban las 13 piezas pequenas guardadas (`ocultar_brazos`), que son **el reloj** de la muneca. El reloj hace falta (no solo es estetico).
+- Ahora (`reloj=1`, por defecto): con solo las manos (`manos=1`), **todas las piezas guardadas menos la grande** (la de los brazos, `isl_is_big`) se **pintan**. Con la mano izq en el mando izq (E31) se pintan con **la misma camara que la isla de esa mano** (`piece_skip` devuelve 3 y `LH_WHOLE` en MH_DI/MH_DII), asi el reloj va pegado a la mano izq; si no, con la camara del arma.
+- `reloj=0` = como la E32 (reloj oculto). F6 / Shift+F6 / Ctrl+F6 / Inicio / Fin siguen igual: F6 oculta la siguiente pieza, Shift+F6 la guarda como brazo (y desde ahora, si no es la grande, se vera como reloj), Ctrl+F6 borra TODAS las guardadas.
+- Log: `reloj=` en la linea `MANO IZQ:` de cada 2 s (piezas del reloj pintadas con la camara de la mano izq).
+- Sin probar. Riesgo: que alguna de las 13 piezas no sea del reloj (se veria algo suelto: Inicio ensena cada una) o que el reloj no case con la mano (calibracion de la mano izq).
+
 ## E32 (rama `manos`) — Agarrar el arma con las dos manos (o no)
 - Prueba de la E31 (usuario, 11/11): la mano izquierda sigue al mando izquierdo y funciona bien; falta calibrarla con la posición real de su mando.
 - Con dos manos, la mano izq **pasa de su mando al arma**: el juego ya la pone en el guardamanos con su animación, así que se le da la **misma G que al arma** (G_izq = G_arma). Al soltar, vuelve a su mando.

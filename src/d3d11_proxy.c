@@ -218,6 +218,8 @@ static volatile int g_isl_hide = -1;
  * Numeros = orden de la tecla Fin (de mayor a menor): en la prueba de la E29, n.1 mano izq, n.2 mano der, n.3 y n.4 antebrazos */
 static int cfg_manos = 1, cfg_mano_izq = 1, cfg_isla_der = 2, cfg_isla_izq = 1;
 static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
+static int cfg_reloj = 1;            /* (E33) 1 = con "solo las manos" se sigue viendo el reloj (las piezas pequenas guardadas) */
+static volatile LONG g_watch_n = 0;  /* (E33) piezas del reloj pintadas (para el chivato) */
 static int cfg_dos_manos = 1;        /* (E32) 0 = nunca, 1 = automatico (acercar la mano izq al sitio donde el juego la pone en el arma), 2 = siempre */
 static float cfg_dos_manos_cm = 12.0f;   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
 static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
@@ -430,6 +432,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "isla_mano_der"))    cfg_isla_der = v;
     else if (!strcmp(s, "isla_mano_izq"))    cfg_isla_izq = v;
     else if (!strcmp(s, "mano_izq_mando"))   cfg_mano_izq_mando = v;   /* (E31) */
+    else if (!strcmp(s, "reloj"))            cfg_reloj = v;            /* (E33) */
     else if (!strcmp(s, "dos_manos"))        cfg_dos_manos = v;        /* (E32) */
     else if (!strcmp(s, "dos_manos_cm"))     cfg_dos_manos_cm = fv;    /* (E32) */
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
@@ -5592,7 +5595,8 @@ static int isl_range(int r, UINT ic, UINT si, UINT *s, UINT *n)
     if (lh_active() && cfg_isla_izq >= 1 && cfg_isla_izq <= g_nisl && g_isr[r].isl == g_isl_order[cfg_isla_izq - 1]) return 2;   /* (E31) */
     return 1;
 }
-/* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos */
+/* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos;
+ * (E33) 3 = pintarla entera con la camara de la mano izq (el reloj) */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
 {
     (void)c;
@@ -5624,6 +5628,13 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
                 }
                 if (g_isl_on) { InterlockedIncrement(&g_pc_drawn); return 2; }
             }
+            /* (E33) el RELOJ: con solo las manos, las piezas pequenas guardadas (todas menos la grande) se pintan.
+             * Con la mano izq en el mando, con la camara de esa mano (3); si no, con la del arma (0) */
+            if (cfg_reloj && cfg_manos && g_isl_on) {
+                InterlockedIncrement(&g_pc_drawn);
+                if (lh_active()) { InterlockedIncrement(&g_watch_n); return 3; }
+                return 0;
+            }
             InterlockedIncrement(&g_pc_hidden); return 1;
         }
     InterlockedIncrement(&g_pc_drawn);
@@ -5648,6 +5659,14 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
                 lh_unbind(c); }                                                                                  \
             else { lh_unbind(c); LH_RANGES(c, ic, si, TW_DRAW(c, CALL)); } }                                     \
     } while (0)
+/* (E33) una pieza entera (el reloj) con la camara de la mano izq, igual que ISL_DRAW pero sin trozos */
+#define LH_WHOLE(c, CALL) do {                                                                                  \
+        if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                            \
+            if (tw2_ == 2) { CALL; lh_bind(c, 1); tw_swap(c); CALL; tw_end(c, 2); }                             \
+            else if (tw2_ == 1) { tw_swap(c); CALL; tw_end(c, 1); }                                             \
+            else { CALL; }                                                                                      \
+            lh_unbind(c); }                                                                                     \
+        else { lh_unbind(c); TW_DRAW(c, CALL); } } while (0)
 #define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
     PFN_Draw tr = (PFN_Draw)g_mh_tr[0][v]; g_mh_calls[0]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, sv); return; }                                                       \
@@ -5657,7 +5676,8 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                      \
       if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); }          \
-      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv)); } t_in_draw = 0; }
+      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv));                                           \
+      else if (ps_ == 3) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
@@ -5667,7 +5687,8 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
     t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                                   \
       if (ps_ == 0) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); }           \
-      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst)); } t_in_draw = 0; }
+      else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst));                                \
+      else if (ps_ == 3) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 /* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
@@ -5811,9 +5832,9 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld",
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)InterlockedExchange(&g_lh_n, 0),
-                                    (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state);
+                                    (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
     while (InterlockedCompareExchange(&g_pc_lock, 1, 0) != 0) YieldProcessor();
@@ -6075,7 +6096,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E32: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E33: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
