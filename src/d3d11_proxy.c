@@ -228,7 +228,8 @@ static float cfg_cadera_cm = 22.0f;  /* (E36) radio de la "cartuchera" en la cad
 static volatile LONG g_mag_state = 0;   /* (E36) 0 nada, 1 cargador en la mano, 2 metiendolo (mano izq con el arma) */
 static volatile LONG g_reload_req = 0;
 static volatile LONG g_expel_req = 0, g_expel_n = 0;   /* (E37) B toque = expulsar cargador (se hace en el hilo del juego) */
-static void *volatile g_pw = NULL;   /* (E37) arma del jugador (la ve el gancho de la recarga automatica) */   /* (E36) el gesto pide pulsar R (lo hace mandos_step) */
+static void *volatile g_pw = NULL;
+static void expel_tick(void);   /* (E37) arma del jugador (la ve el gancho de la recarga automatica) */   /* (E36) el gesto pide pulsar R (lo hace mandos_step) */
 static volatile LONG g_ar_blocked = 0, g_ar2_blocked = 0, g_mag_ins = 0;   /* (E34) 1 = con las dos manos el arma apunta de la mano der hacia la izq (como Pavlov). 0 = no gira */
 static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo en partida) */
 static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
@@ -3292,6 +3293,7 @@ static void haptic(uint32_t role, int us)
 static void reload_update(const OvrPose *rp)
 {
     static int prev_grip = 0, buzz = 0; static ULONGLONG t_ins = 0;
+    if (g_mode != 1) g_pw = NULL;   /* (E38) menus / cargas: el arma puede dejar de existir */
     if (!cfg_recarga_manual || g_mode != 1 || !p_RoleIdx || !rp[0].valid) { g_mag_state = 0; prev_grip = 0; return; }
     uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
     int grip = g_lgrip != 0;
@@ -3346,10 +3348,9 @@ static int is_player_wpn(void *w)
     return ((PFN_Same)(base + 0xDEB0))(own, pl + 0xA0) != 0;
 }
 /* (E37) expulsar: balas del cargador a 0 (virtual +0x1350 = poner balas cargadas, la que usa cargar partida) */
-static void expel_check(void *w)
+static volatile UINT g_pw_ic = 0, g_pw_si = 0;   /* (E38) a que arma visible corresponde g_pw */
+static void expel_do(void *w)
 {
-    if (!g_expel_req || !is_player_wpn(w)) return;
-    g_pw = w;
     if (!InterlockedExchange(&g_expel_req, 0)) return;
     void **vt = *(void ***)w;
     typedef int (*PFN_Get)(void *); typedef void (*PFN_Set)(void *, int);
@@ -3357,6 +3358,23 @@ static void expel_check(void *w)
     ((PFN_Set)vt[0x1350 / 8])(w, 0);
     InterlockedIncrement(&g_expel_n);
     vr_log("RECARGA: cargador expulsado (tenia %d balas)", before);
+}
+/* (E37/E38) el gancho de la recarga solo se llama al DISPARAR: aqui se apunta cual es el arma del jugador (y que arma se ve),
+ * y si B estaba pedido y aun no se habia hecho, se hace ya (caso: arma recien cambiada) */
+static void expel_check(void *w)
+{
+    if (!is_player_wpn(w)) return;
+    g_pw = w; g_pw_ic = g_wpn_ic; g_pw_si = g_wpn_si;
+    if (g_expel_req) expel_do(w);
+}
+/* (E38) cada paso del jugador (hilo del juego, ~100/s): si B esta pedido y sabemos cual es el arma que se ve, al momento */
+static void expel_tick(void)
+{
+    void *w = g_pw;
+    if (!g_expel_req || !w || g_mode != 1) return;
+    if (g_pw_ic != g_wpn_ic || g_pw_si != g_wpn_si) return;   /* se cambio de arma: esperar a que dispare una vez */
+    if (!is_player_wpn(w)) { g_pw = NULL; return; }
+    expel_do(w);
 }
 static int ar_hook(void *w)
 {
@@ -4329,6 +4347,7 @@ static void mov_hook(void *pl, void *req, int prev, void *acc, float *mv, void *
         g_mov_seen = t;   /* (E20e) hay jugador: partida */
         InterlockedIncrement(&g_mov_calls);
         if (dt > 1e-6f) g_mov_run = t; else InterlockedIncrement(&g_mov_dt0);   /* (E20h) en la pausa el tiempo se para */
+        if (cfg_recarga_manual) expel_tick();   /* (E38) expulsar el cargador al momento */
     }
     if ((BYTE *)__builtin_return_address(0) != g_mov_ret || !mv || !nat_active() || !g_nat_was) return;
     if (!isfinite(mv[0]) || !isfinite(mv[2])) return;
@@ -6374,7 +6393,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E37: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E38: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

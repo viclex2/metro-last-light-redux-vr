@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E38 (rama `manos`) — Expulsar el cargador al momento (sin tener que disparar)
+- Prueba de la E37 (usuario, 12/11): B expulsaba, pero **solo al disparar la siguiente bala** (log: `cargador expulsado (tenia 28 balas)` justo tras un disparo). Causa: el gancho que ve el arma (`+0x2B88C0`) solo lo llama el juego al disparar. El cargador no "cae" porque no es un objeto suelto: es una pieza del modelo del arma (eso sería la fase 3).
+- Ahora el arma del jugador se recuerda la primera vez que dispara (y qué arma se ve en ese momento), y **al pulsar B se vacía al instante** desde el paso del jugador (hilo del juego, ~100 veces/s).
+- Tras **cambiar de arma**, hasta que esa arma dispara una vez el mod no sabe cuál es: B se queda pendiente y se hace en el primer disparo (como en la E37).
+- En menús y cargas se olvida el arma (por seguridad).
+- Sin probar en las gafas. Lo que no sé: si el modelo del cargador se pone vacío al instante o espera al siguiente disparo.
+
 ## E37 (rama `manos`) — Recarga manual (fase 2): expulsar el cargador con B
 - Prueba de la E36 (usuario, 12/11): **la recarga desde la cadera sale perfecta a la primera.**
 - **B derecho (toque) = expulsar el cargador**: el arma se queda sin balas (vibra el mando der) y no dispara hasta meter otro desde la cadera izq.
