@@ -220,7 +220,10 @@ static int cfg_manos = 1, cfg_mano_izq = 1, cfg_isla_der = 2, cfg_isla_izq = 1;
 static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
 static int cfg_reloj = 1;            /* (E33) 1 = con "solo las manos" se sigue viendo el reloj (las piezas pequenas guardadas) */
 static volatile LONG g_watch_n = 0;  /* (E33) piezas del reloj pintadas (para el chivato) */
-static int cfg_dos_manos = 1;        /* (E32) 0 = nunca, 1 = automatico (acercar la mano izq al sitio donde el juego la pone en el arma), 2 = siempre */
+static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton de agarre izq, 2 = siempre, 3 = automatico por cercania (el de la E32) */
+static int cfg_dos_manos_ejes = 1;   /* (E34) 1 = con las dos manos el arma apunta de la mano der hacia la izq (como Pavlov). 0 = no gira */
+static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo en partida) */
+static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
 static float cfg_dos_manos_cm = 12.0f;   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
 static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
 static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
@@ -435,6 +438,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "reloj"))            cfg_reloj = v;            /* (E33) */
     else if (!strcmp(s, "dos_manos"))        cfg_dos_manos = v;        /* (E32) */
     else if (!strcmp(s, "dos_manos_cm"))     cfg_dos_manos_cm = fv;    /* (E32) */
+    else if (!strcmp(s, "dos_manos_ejes"))   cfg_dos_manos_ejes = v;   /* (E34) */
     else if (!strcmp(s, "balas_mano"))       cfg_balas = v;
     else if (!strcmp(s, "girar_sobre_ti"))   cfg_pivote = v;
     else if (!strcmp(s, "mando_xbox"))       cfg_xinput = v;
@@ -3199,6 +3203,97 @@ static void hand_load(void)
     for (int k = 0; k < g_nwcal; k++) vr_log("MANO:   arma %u/%u: mano a %.2f %.2f %.2f m de la cabeza", g_wcal[k].ic, g_wcal[k].si,
                                              g_wcal[k].C0[0][3], g_wcal[k].C0[1][3], g_wcal[k].C0[2][3]);
 }
+/* (E34) postura de un mando (role 1 = izq, 2 = der) respecto al centro de la cabeza, en ejes del juego.
+ * Es la misma cuenta que hacen hand_update y lhand_update. Devuelve 0 si no hay mando. */
+static int ctrl_rel(const OvrPose *rp, uint32_t role, uint32_t *last, float A[4][4])
+{
+    if (!p_RoleIdx || !rp[0].valid) return 0;
+    uint32_t i = p_RoleIdx(role);
+    if (i >= 16 && p_RoleOf) for (uint32_t k = 1; k < 16; k++) if (rp[k].valid && p_RoleOf(k) == role) { i = k; break; }
+    if (i >= 16 && *last < 16 && rp[*last].valid) i = *last;
+    if (i >= 16 || !rp[i].valid) return 0;
+    *last = i;
+    const OvrMat34 *Hm = &rp[0].mat, *Mm = &rp[i].mat;
+    float d[3] = { Mm->m[0][3] - Hm->m[0][3], Mm->m[1][3] - Hm->m[1][3], Mm->m[2][3] - Hm->m[2][3] };
+    float R[3][3], t[3];
+    for (int a = 0; a < 3; a++) {
+        for (int b = 0; b < 3; b++) R[a][b] = Hm->m[0][a] * Mm->m[0][b] + Hm->m[1][a] * Mm->m[1][b] + Hm->m[2][a] * Mm->m[2][b];
+        t[a] = Hm->m[0][a] * d[0] + Hm->m[1][a] * d[1] + Hm->m[2][a] * d[2];
+    }
+    memset(A, 0, sizeof(float) * 16); A[3][3] = 1.0f;
+    for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) A[a][b] = R[a][b] * ((a == 2) != (b == 2) ? -1.0f : 1.0f);
+    A[0][3] = t[0]; A[1][3] = t[1]; A[2][3] = -t[2];
+    return 1;
+}
+/* (E34) AGARRE A DOS MANOS (como en Pavlov). Al agarrar se apunta DONDE esta tu mando izq visto desde la mano der
+ * (d0, en ejes de la mano der). Mientras agarras, el arma gira alrededor de la mano der lo justo para que esa
+ * direccion vuelva a apuntar a tu mando izq: mueves la izq y el canon la sigue; el giro de la muneca der (ladeo)
+ * sigue siendo de la der. Al soltar, el giro se deshace en ~0,1 s (sin tiron). Cambia A (postura de la mano der). */
+static void twohand_apply(const OvrPose *rp, float A[4][4], const float C0i[4][4])
+{
+    static int grab = 0; static float d0[3];
+    static float ax[3] = { 0, 0, 1 }, ang = 0;            /* giro que se le da al arma (eje en ejes de la mano der, angulo) */
+    static uint32_t last_li = 0xFFFFFFFFu;
+    float L[4][4]; int lok = ctrl_rel(rp, 1, &last_li, L);
+    int want = 0; float dist = -1.0f;
+    if (lok && !g_lhand_hold) {
+        if (cfg_dos_manos == 1) want = g_lgrip != 0;
+        else if (cfg_dos_manos == 2) want = 1;
+        else if (cfg_dos_manos == 3) {   /* (E32) automatico: mando izq cerca del sitio de agarre (G * C0_izq) */
+            float G0[4][4], T[4][4]; mul4(A, C0i, G0); mul4(G0, g_lhand_C0, T);
+            float dx = L[0][3] - T[0][3], dy = L[1][3] - T[1][3], dz = L[2][3] - T[2][3];
+            float lim = cfg_dos_manos_cm * 0.01f;
+            dist = sqrtf(dx * dx + dy * dy + dz * dz);
+            want = grab ? (dist < lim * 1.8f) : (dist < lim);
+        }
+    }
+    float d[3] = { 0, 0, 0 };   /* mando izq visto desde la mano der, en ejes de la mano der: R^T (pL - pR) */
+    if (lok) for (int i = 0; i < 3; i++)
+        d[i] = A[0][i] * (L[0][3] - A[0][3]) + A[1][i] * (L[1][3] - A[1][3]) + A[2][i] * (L[2][3] - A[2][3]);
+    float dl = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (want && !grab) {
+        if (dl < 0.05f) want = 0;   /* manos casi juntas: no hay direccion */
+        else {
+            /* si aun se estaba deshaciendo un giro, se parte de el (sin salto): d0 = Q^-1 d */
+            memcpy(d0, d, sizeof(d0));
+            if (ang > 0.0f) {
+                float c = cosf(-ang), sn = sinf(-ang), k[3] = { ax[0], ax[1], ax[2] };
+                float kd = k[0] * d[0] + k[1] * d[1] + k[2] * d[2];
+                float kx[3] = { k[1] * d[2] - k[2] * d[1], k[2] * d[0] - k[0] * d[2], k[0] * d[1] - k[1] * d[0] };
+                for (int i = 0; i < 3; i++) d0[i] = d[i] * c + kx[i] * sn + k[i] * kd * (1.0f - c);
+            }
+        }
+    }
+    if (want != grab) {
+        grab = want;
+        if (cfg_dos_manos == 3) vr_log("MANO IZQ: DOS MANOS %s (mando a %.1f cm del sitio de agarre)", grab ? "SI" : "NO", dist * 100.0f);
+        else vr_log("MANO IZQ: DOS MANOS %s (boton de agarre izq%s)", grab ? "SI" : "NO", cfg_dos_manos_ejes ? ", el arma apunta a la mano izq" : "");
+    }
+    g_dos_manos = grab;
+    if (grab && cfg_dos_manos_ejes && dl > 0.05f) {
+        float l0 = sqrtf(d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]);
+        float a[3] = { d0[0] / l0, d0[1] / l0, d0[2] / l0 }, b[3] = { d[0] / dl, d[1] / dl, d[2] / dl };
+        float cx[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+        float sl = sqrtf(cx[0] * cx[0] + cx[1] * cx[1] + cx[2] * cx[2]), co = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        if (sl > 1e-5f) {
+            float an = atan2f(sl, co);
+            if (an > 100.0f / RAD2DEG) an = 100.0f / RAD2DEG;   /* tope: mas alla no tiene sentido (manos cruzadas) */
+            ax[0] = cx[0] / sl; ax[1] = cx[1] / sl; ax[2] = cx[2] / sl; ang = an;
+        } else ang = 0.0f;
+    } else if (ang > 0.0f) {
+        ang *= 0.7f; if (ang < 0.002f) ang = 0.0f;   /* al soltar: vuelve a la mano der en ~0,1 s */
+    }
+    g_tw_deg10 = (LONG)(ang * RAD2DEG * 10.0f);
+    if (ang <= 0.0f) return;
+    /* Q = giro (Rodrigues) en ejes de la mano der; la mano der "nueva" = R * Q (misma posicion) */
+    float c = cosf(ang), sn = sinf(ang), t = 1.0f - c, x = ax[0], y = ax[1], z = ax[2];
+    float Q[3][3] = { { t * x * x + c,     t * x * y - sn * z, t * x * z + sn * y },
+                      { t * x * y + sn * z, t * y * y + c,     t * y * z - sn * x },
+                      { t * x * z - sn * y, t * y * z + sn * x, t * z * z + c     } };
+    float R2[3][3];
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R2[i][j] = A[i][0] * Q[0][j] + A[i][1] * Q[1][j] + A[i][2] * Q[2][j];
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) A[i][j] = R2[i][j];
+}
 static void hand_update(const OvrPose *rp)
 {
     hand_load();
@@ -3247,6 +3342,8 @@ static void hand_update(const OvrPose *rp)
         if (k >= 0) C0 = (const float (*)[4])g_wcal[k].C0;
     }
     if (!inv4(C0, C0i)) { g_hand_ok = 0; return; }
+    if (cfg_dos_manos) twohand_apply(rp, A, (const float (*)[4])C0i);   /* (E34) agarre a dos manos */
+    else g_dos_manos = 0;
     mul4(A, C0i, G);
     memcpy(g_hand_G, G, sizeof(G));
     g_hand_ok = 1;
@@ -3302,25 +3399,9 @@ static void lhand_update(const OvrPose *rp)
         if (!inv4(g_lhand_C0, C0i)) { g_lhand_ok = 0; return; }
         mul4(A, C0i, G);
     }
-    {   /* (E32) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya pone la mano izq en el arma
-         * (guardamanos) con la animacion, asi que basta darle la MISMA G que al arma (g_hand_G). Automatico: el sitio donde
-         * tiene que estar tu mando para agarrar = g_hand_G * C0_izq (donde pusiste el mando al calibrar, movido con el arma). */
-        static int dos = 0;
-        int want = 0; float dist = -1.0f;
-        if (g_hand_ok && !g_lhand_hold) {
-            if (cfg_dos_manos == 2) want = 1;
-            else if (cfg_dos_manos == 1) {
-                float T[4][4]; mul4(g_hand_G, g_lhand_C0, T);
-                float dx = A[0][3] - T[0][3], dy = A[1][3] - T[1][3], dz = A[2][3] - T[2][3];
-                float lim = cfg_dos_manos_cm * 0.01f;
-                dist = sqrtf(dx * dx + dy * dy + dz * dz);
-                want = dos ? (dist < lim * 1.8f) : (dist < lim);
-            }
-        }
-        if (want != dos) { dos = want; vr_log("MANO IZQ: DOS MANOS %s (mando a %.1f cm del sitio de agarre)", dos ? "SI" : "NO", dist * 100.0f); }
-        g_dos_manos = dos;
-        if (dos) memcpy(G, g_hand_G, sizeof(G));
-    }
+    /* (E32/E34) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya la pone en el guardamanos con la
+     * animacion, asi que se le da la MISMA G que al arma. Se decide en hand_update (twohand_apply), que va antes. */
+    if (g_dos_manos && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));
     memcpy(g_lhand_G, G, sizeof(G));
     g_lhand_ok = 1;
 }
@@ -3703,7 +3784,7 @@ static void mandos_step(float dt)
 {
     static int was = 0;
     int active = cfg_mandos && p_RoleIdx && p_CtrlState && g_head_state == 1 && game_has_focus();
-    if (!active) { if (was) { mandos_release_all(); was = 0; } return; }
+    if (!active) { g_lgrip = 0; if (was) { mandos_release_all(); was = 0; } return; }
     OvrCtrlState L, R; memset(&L, 0, sizeof(L)); memset(&R, 0, sizeof(R));
     uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
     static uint32_t lli = 0xFFFFFFFFu, lri = 0xFFFFFFFFu;
@@ -3711,7 +3792,7 @@ static void mandos_step(float dt)
     if (ri >= 64) ri = lri; else lri = ri;
     int lok = li < 64 && p_CtrlState(li, &L, sizeof(L));
     int rok = ri < 64 && p_CtrlState(ri, &R, sizeof(R));
-    if (!lok && !rok) { if (was) { mandos_release_all(); was = 0; } return; }
+    if (!lok && !rok) { g_lgrip = 0; if (was) { mandos_release_all(); was = 0; } return; }
     if (!was) { vr_log("MANDOS: leyendo mandos (izq=%u der=%u)", li, ri); was = 1; }
     for (int i = 0; i < O_COUNT; i++) if (g_pulse[i] > 0 && --g_pulse[i] == 0) out_set(i, 0);
     InterlockedExchange(&g_mandos_ok, 1);
@@ -3727,12 +3808,12 @@ static void mandos_step(float dt)
         static int menu_was = 0;
         if (!g_menu_pad) menu_was = 0;
         if (!menu_was) { mandos_release_all(); menu_was = 1; vr_log("MANDOS: menu -> mando de consola"); }
-        g_menu_pad = 1;
+        g_menu_pad = 1; g_lgrip = 0;
         xp.sRX = x_axis(rx0); xp.sRY = x_axis(ry0);
         WORD b = 0;
         if (rok && (BTN(R, 7) || R.axis[1].x > 0.6f)) b |= 0x1000;       /* A (der) o gatillo der = aceptar (A) */
         if (rok && BTN(R, 1)) b |= 0x2000;                               /* B (der) = volver (B) */
-        if (lok && BTN(L, 7)) b |= 0x4000;                               /* X (izq) = X */
+        if (lok && BTN(L, 7)) b |= 0x0010;                               /* (E34) X (izq) = Start (pausa / salir de la pausa) */
         if (lok && BTN(L, 1)) b |= 0x8000;                               /* Y (izq) = Y */
         if (lok && BTN(L, 2)) b |= 0x0100;                               /* agarre izq = LB */
         if (rok && BTN(R, 2)) b |= 0x0200;                               /* agarre der = RB */
@@ -3764,25 +3845,25 @@ static void mandos_step(float dt)
     lclick_prev = lclick;
     if (xpad) { out_set(O_SPRINT, 0); if (sprint) xp.wButtons |= 0x0040; }   /* (E21) correr = clic del stick izq del mando */
     else out_set(O_SPRINT, sprint);
-    out_set(O_MEDKIT, lok && BTN(L, 2));                 /* agarre izq = botiquin */
+    g_lgrip = lok && BTN(L, 2);                          /* (E34) agarre izq = agarrar el arma con las dos manos (el botiquin ya no) */
     out_set(O_THROW, lok && L.axis[1].x > 0.6f);         /* gatillo izq = lanzar */
-    /* X: toque = linterna; mantener medio segundo = mascara */
+    /* (E34) X: toque = PAUSA (Esc); mantener medio segundo = mascara */
     static ULONGLONG xdown = 0; static int xmask = 0;
     int xb = lok && BTN(L, 7);
     if (xb && !xdown) { xdown = GetTickCount64(); xmask = 0; }
     if (xb && !xmask && GetTickCount64() - xdown > 600) { out_set(O_MASK, 1); xmask = 1; }
     if (!xb && xdown) {
-        if (!xmask) out_pulse(O_LIGHT);
+        if (!xmask) out_pulse(O_ESC);
         out_set(O_MASK, 0); xdown = 0;
     }
-    /* Y: toque corto = arma siguiente; mantener 1 s = menu (Esc) */
-    static ULONGLONG ydown = 0; static int yesc = 0;
+    /* (E34) Y: toque corto = arma siguiente; mantener medio segundo = linterna (antes era la pausa, que pasa a X) */
+    static ULONGLONG ydown = 0; static int ylight = 0;
     int y = lok && BTN(L, 1);
-    if (y && !ydown) { ydown = GetTickCount64(); yesc = 0; }
-    if (y && !yesc && GetTickCount64() - ydown > 1000) { out_set(O_ESC, 1); yesc = 1; }
+    if (y && !ydown) { ydown = GetTickCount64(); ylight = 0; }
+    if (y && !ylight && GetTickCount64() - ydown > 600) { out_pulse(O_LIGHT); ylight = 1; }
     if (!y && ydown) {
-        if (!yesc) { out_pulse(O_NEXT); g_wpn_switch_t = GetTickCount64(); }   /* (E21) el cambio de arma no es un menu */
-        out_set(O_ESC, 0); ydown = 0;
+        if (!ylight) { out_pulse(O_NEXT); g_wpn_switch_t = GetTickCount64(); }   /* (E21) el cambio de arma no es un menu */
+        ydown = 0;
     }
     /* derecho: disparar (gatillo), apuntar (agarre), usar (A), recargar (B), saltar/agacharse (stick arriba/abajo),
      * cuchillo (clic del stick), girar (stick a los lados) */
@@ -5832,8 +5913,8 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
-                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)InterlockedExchange(&g_lh_n, 0),
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
+                                    (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
@@ -6096,7 +6177,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             load_config(tmp);
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E33: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E34: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

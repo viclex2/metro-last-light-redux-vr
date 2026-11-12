@@ -2,6 +2,19 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E34 (rama `manos`) — Agarrar el arma con el botón de agarre izquierdo (y apuntar con las dos manos, como en Pavlov)
+- Prueba de la E33 (usuario, 12/11): **el reloj sale bien**. Pero el agarre a dos manos solo funcionaba acercando la mano al sitio del arma (el modo automático de la E32); con el botón no hacía nada, porque el botón seguía siendo el botiquín.
+- **Agarre izquierdo (mantener) = coger el arma con las dos manos.** Mientras lo mantienes, la mano izquierda se queda pegada al arma (en el guardamanos, donde la pone el juego) aunque separes el mando. Al soltar, la mano vuelve a tu mando.
+- **Dos manos = el arma apunta hacia tu mano izquierda (como en Pavlov).** La empuñadura sigue en la mano derecha y el cañón mira hacia donde está tu mando izquierdo: si mueves la izquierda, el arma la sigue. El giro de la muñeca derecha sigue tumbando el arma. Al soltar, el arma vuelve a ir solo con la derecha en ~0,1 s (sin tirón). Las balas salen hacia donde apunta el cañón, también con las dos manos.
+  - Se coge la dirección EN EL MOMENTO de agarrar: no hace falta tener el mando justo en el guardamanos, y al agarrar el arma no pega ningún salto.
+  - Tope de 100° (con las manos cruzadas no gira más).
+- **Botiquín: quitado** del mando (el agarre izq ya no lo usa).
+- **X izquierdo = PAUSA** (toque = Esc). Mantener X medio segundo sigue siendo la máscara. En los menús, X hace de Start (sirve para salir de la pausa).
+- **La linterna pasa a Y**: mantener Y medio segundo = linterna. Toque corto en Y = arma siguiente, como antes. (Antes Y mantenido era la pausa, que ahora está en X.)
+- Config (`metro_vr_config.txt`): `dos_manos=1` botón (por defecto) · `0` nunca · `2` siempre · `3` automático por cercanía (el de la E32, con `dos_manos_cm`). `dos_manos_ejes=1` el arma apunta a la mano izq (por defecto) · `0` solo se pega la mano, sin girar el arma.
+- Log: `MANO IZQ: DOS MANOS SI/NO (boton de agarre izq…)` al agarrar/soltar, y en la línea de cada 2 s `dos_manos=… (boton=… giro=… grados)`.
+- Sin probar en las gafas (la cuenta del giro sí se ha probado aparte: el cañón sigue a la mano izq y al soltar vuelve suave).
+
 ## E33 (rama `manos`) — Solo las manos, pero con el RELOJ
 - Problema (E30): al dejar solo las manos se ocultaban las 13 piezas pequenas guardadas (`ocultar_brazos`), que son **el reloj** de la muneca. El reloj hace falta (no solo es estetico).
 - Ahora (`reloj=1`, por defecto): con solo las manos (`manos=1`), **todas las piezas guardadas menos la grande** (la de los brazos, `isl_is_big`) se **pintan**. Con la mano izq en el mando izq (E31) se pintan con **la misma camara que la isla de esa mano** (`piece_skip` devuelve 3 y `LH_WHOLE` en MH_DI/MH_DII), asi el reloj va pegado a la mano izq; si no, con la camara del arma.
