@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E40 — Exportar el arma a Blender
+
+- **Re Pág** (en partida, con el VR puesto y mirando el arma): el mod guarda el arma que llevas en `%TEMP%\metro_vr_arma_<ic>_<si>.obj` (se abre en Blender: Archivo → Importar → Wavefront (.obj)). Suenan 3 pitidos al terminar.
+- Sale **un objeto por pieza y por hueso** (`pieza_<indices>_<inicio>_hueso_<n>`), también las manos (`_brazo`). Así se ve qué hueso mueve el cargador, el cerrojo, cada dedo…
+- Para leer los vértices el mod apunta desde el arranque cómo los guarda el juego (gancho en `CreateInputLayout`). El log apunta cada pieza con su formato (`EXPORTAR:`) y los huesos que tiene.
+- Sigue todo lo de la E39 (marcar cargador con Av Pág).
+
 ## E39 — Cargador de verdad, paso 1: marcar el cargador de cada arma (pruebas)
 
 - **Av Pág** oculta la siguiente pieza del arma (igual que F6). Cuando desaparezca el cargador: **Shift+Av Pág** lo guarda como cargador de esa arma (archivo `%TEMP%\metro_vr_cargadores.txt`, línea `arma_ic arma_si pieza_ic pieza_si`). **Ctrl+Av Pág** borra lo marcado de esa arma. Un arma puede tener varias piezas (cargador + balas, por ejemplo).

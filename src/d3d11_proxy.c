@@ -2212,6 +2212,253 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain *sc, UINT sync, UINT 
     last_exit = t1;
     return hr;
 }
+/* ===================== (E40) EXPORTAR EL ARMA A BLENDER =====================
+ * Re Pag: durante unos fotogramas se apuntan las piezas que se pintan con la camara del arma (arma, cargador, manos) y
+ * despues se leen sus vertices y se escribe %TEMP%\metro_vr_arma_<ic>_<si>.obj, con un objeto por pieza y por hueso.
+ * Para leer los vertices hace falta saber como estan guardados: por eso se apunta como se crea cada "plantilla de
+ * vertices" (CreateInputLayout, enganchado desde el principio). */
+typedef struct { char sem[16]; UINT si, fmt, slot, off; } ExpElem;
+typedef struct { void *lay; UINT n; ExpElem e[14]; } ExpLayout;
+#define MAXLAY 1536
+static ExpLayout g_lay[MAXLAY]; static int g_nlay = 0; static volatile LONG g_lay_lock = 0;
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateIL)(ID3D11Device *, const D3D11_INPUT_ELEMENT_DESC *, UINT, const void *, SIZE_T, ID3D11InputLayout **);
+static PFN_CreateIL g_tr_CreateIL = NULL;
+static UINT fmt_bytes(UINT f)
+{
+    if (f >= 1 && f <= 4) return 16;
+    if (f >= 5 && f <= 8) return 12;
+    if (f >= 9 && f <= 18) return 8;
+    if (f >= 19 && f <= 47) return 4;
+    if (f >= 48 && f <= 59) return 2;
+    if (f >= 60 && f <= 65) return 1;
+    if (f == 87 || f == 88) return 4;
+    return 4;
+}
+static HRESULT STDMETHODCALLTYPE hk_CreateIL(ID3D11Device *d, const D3D11_INPUT_ELEMENT_DESC *el, UINT n, const void *bc, SIZE_T bl, ID3D11InputLayout **o)
+{
+    HRESULT hr = g_tr_CreateIL(d, el, n, bc, bl, o);
+    if (SUCCEEDED(hr) && o && *o && el) {
+        while (InterlockedCompareExchange(&g_lay_lock, 1, 0) != 0) YieldProcessor();
+        int k = -1;
+        for (int i = 0; i < g_nlay; i++) if (g_lay[i].lay == (void *)*o) { k = i; break; }
+        if (k < 0 && g_nlay < MAXLAY) k = g_nlay++;
+        if (k >= 0) {
+            ExpLayout *L = &g_lay[k]; L->lay = (void *)*o; L->n = 0;
+            UINT acc[16]; memset(acc, 0, sizeof(acc));
+            for (UINT i = 0; i < n && L->n < 14; i++) {
+                ExpElem *e = &L->e[L->n++];
+                snprintf(e->sem, sizeof(e->sem), "%s", el[i].SemanticName ? el[i].SemanticName : "?");
+                e->si = el[i].SemanticIndex; e->fmt = (UINT)el[i].Format; e->slot = el[i].InputSlot & 15;
+                e->off = el[i].AlignedByteOffset == D3D11_APPEND_ALIGNED_ELEMENT ? acc[e->slot] : el[i].AlignedByteOffset;
+                acc[e->slot] = e->off + fmt_bytes(e->fmt);
+            }
+        }
+        InterlockedExchange(&g_lay_lock, 0);
+    }
+    return hr;
+}
+static int lay_get(void *lay, ExpLayout *out)
+{
+    int ok = 0;
+    while (InterlockedCompareExchange(&g_lay_lock, 1, 0) != 0) YieldProcessor();
+    for (int i = 0; i < g_nlay; i++) if (g_lay[i].lay == lay) { *out = g_lay[i]; ok = 1; break; }
+    InterlockedExchange(&g_lay_lock, 0);
+    return ok;
+}
+typedef struct { UINT ic, si; INT bv; ID3D11Buffer *ib; DXGI_FORMAT ifmt; UINT ioff; ID3D11Buffer *vb[4]; UINT st[4], vo[4]; ID3D11InputLayout *il; int arm; } ExpPiece;
+#define MAXEXP 48
+static ExpPiece g_exp[MAXEXP]; static int g_nexp = 0; static volatile LONG g_exp_lock = 0;
+static volatile LONG g_exp_state = 0; static ULONGLONG g_exp_t = 0;
+static void exp_capture(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv)
+{
+    if (!g_cb0_weapon || g_mode != 1 || ic < 3) return;
+    while (InterlockedCompareExchange(&g_exp_lock, 1, 0) != 0) YieldProcessor();
+    int dup = 0;
+    for (int i = 0; i < g_nexp; i++) if (g_exp[i].ic == ic && g_exp[i].si == si) { dup = 1; break; }
+    if (!dup && g_nexp < MAXEXP) {
+        ExpPiece *p = &g_exp[g_nexp]; memset(p, 0, sizeof(*p));
+        p->ic = ic; p->si = si; p->bv = bv;
+        ID3D11DeviceContext_IAGetIndexBuffer(c, &p->ib, &p->ifmt, &p->ioff);
+        ID3D11DeviceContext_IAGetVertexBuffers(c, 0, 4, p->vb, p->st, p->vo);
+        ID3D11DeviceContext_IAGetInputLayout(c, &p->il);
+        for (int k = 0; k < g_nhide; k++) if (g_hide[k].ic == ic && g_hide[k].si == si) p->arm = 1;
+        g_nexp++;
+    }
+    InterlockedExchange(&g_exp_lock, 0);
+}
+static void exp_release(void)
+{
+    for (int i = 0; i < g_nexp; i++) {
+        ExpPiece *p = &g_exp[i];
+        if (p->ib) ID3D11Buffer_Release(p->ib);
+        for (int s = 0; s < 4; s++) if (p->vb[s]) ID3D11Buffer_Release(p->vb[s]);
+        if (p->il) ID3D11InputLayout_Release(p->il);
+    }
+    g_nexp = 0;
+}
+static void exp_key(void)
+{
+    if (g_mode != 1) { vr_log(">>> Re Pag: exportar el arma solo funciona en partida, con el VR puesto"); Beep(400, 150); return; }
+    if (g_exp_state != 0) return;
+    while (InterlockedCompareExchange(&g_exp_lock, 1, 0) != 0) YieldProcessor();
+    exp_release();
+    InterlockedExchange(&g_exp_lock, 0);
+    g_exp_t = GetTickCount64();
+    g_exp_state = 1;
+    vr_log(">>> Re Pag: exportando el arma (no la muevas medio segundo)...");
+    Beep(800, 60);
+}
+static float half2f(USHORT h)
+{
+    UINT s = (h >> 15) & 1, e = (h >> 10) & 31, m = h & 1023; float v;
+    if (e == 0) v = ldexpf((float)m, -24); else if (e == 31) v = 65504.0f; else v = ldexpf((float)(m | 1024), (int)e - 25);
+    return s ? -v : v;
+}
+/* lee hasta 4 componentes; norm = 0 deja los enteros tal cual */
+static void read_comp(const BYTE *p, UINT f, float o[4], int norm)
+{
+    o[0] = o[1] = o[2] = 0; o[3] = 1;
+    switch (f) {
+    case 2: case 6: case 16: { int n = f == 2 ? 4 : f == 6 ? 3 : 2; for (int i = 0; i < n; i++) memcpy(&o[i], p + 4 * i, 4); break; }
+    case 10: case 34: { int n = f == 10 ? 4 : 2; for (int i = 0; i < n; i++) o[i] = half2f(((const USHORT *)p)[i]); break; }
+    case 11: case 12: case 35: case 36: { int n = (f == 11 || f == 12) ? 4 : 2; for (int i = 0; i < n; i++) o[i] = ((const USHORT *)p)[i] / ((norm && (f == 11 || f == 35)) ? 65535.0f : 1.0f); break; }
+    case 13: case 14: case 37: case 38: { int n = (f == 13 || f == 14) ? 4 : 2; for (int i = 0; i < n; i++) o[i] = ((const SHORT *)p)[i] / ((norm && (f == 13 || f == 37)) ? 32767.0f : 1.0f); break; }
+    case 28: case 30: case 87: case 88: for (int i = 0; i < 4; i++) o[i] = p[i] / ((norm && f != 30) ? 255.0f : 1.0f);
+        if (f >= 87) { float t = o[0]; o[0] = o[2]; o[2] = t; } break;
+    case 31: case 32: for (int i = 0; i < 4; i++) o[i] = ((const signed char *)p)[i] / ((norm && f == 31) ? 127.0f : 1.0f); break;
+    case 24: case 25: { UINT v = *(const UINT *)p; o[0] = (v & 1023); o[1] = ((v >> 10) & 1023); o[2] = ((v >> 20) & 1023); o[3] = (v >> 30);
+        if (norm && f == 24) { o[0] /= 1023; o[1] /= 1023; o[2] /= 1023; o[3] /= 3; } break; }
+    case 41: memcpy(&o[0], p, 4); break;
+    default: { UINT v; memcpy(&v, p, 4); o[0] = (float)v; break; }
+    }
+}
+static BYTE *exp_read(ID3D11Device *dv, ID3D11DeviceContext *ctx, ID3D11Buffer *src, UINT off, UINT len)
+{
+    if (!src || !len) return NULL;
+    D3D11_BUFFER_DESC sd; ID3D11Buffer_GetDesc(src, &sd);
+    if (off >= sd.ByteWidth) return NULL;
+    if (off + len > sd.ByteWidth) len = sd.ByteWidth - off;
+    D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
+    bd.ByteWidth = (len + 15) & ~15u; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ID3D11Buffer *st = NULL;
+    if (FAILED(ID3D11Device_CreateBuffer(dv, &bd, NULL, &st)) || !st) return NULL;
+    D3D11_BOX box = { off, 0, 0, off + len, 1, 1 };
+    ID3D11DeviceContext_CopySubresourceRegion(ctx, (ID3D11Resource *)st, 0, 0, 0, 0, (ID3D11Resource *)src, 0, &box);
+    BYTE *out = NULL;
+    D3D11_MAPPED_SUBRESOURCE ms;
+    if (SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+        out = (BYTE *)malloc(bd.ByteWidth);
+        if (out) { memset(out, 0, bd.ByteWidth); memcpy(out, ms.pData, len); }
+        ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)st, 0);
+    }
+    ID3D11Buffer_Release(st);
+    return out;
+}
+static const ExpElem *lay_find(const ExpLayout *L, const char *sem, UINT si)
+{
+    for (UINT i = 0; i < L->n; i++) if (!_stricmp(L->e[i].sem, sem) && L->e[i].si == si) return &L->e[i];
+    return NULL;
+}
+static void exp_run(IDXGISwapChain *sc)
+{
+    g_exp_state = 2;
+    while (InterlockedCompareExchange(&g_exp_lock, 1, 0) != 0) YieldProcessor();
+    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL; FILE *fp = NULL;
+    char path[MAX_PATH]; GetTempPathA(MAX_PATH, path);
+    size_t pl = strlen(path);
+    snprintf(path + pl, sizeof(path) - pl, "metro_vr_arma_%u_%u.obj", g_wpn_ic, g_wpn_si);
+    int npie = 0; UINT vbase = 1, ntri_all = 0;
+    if (!g_nexp) { vr_log("EXPORTAR: no se ha visto ninguna pieza del arma (mira el arma y vuelve a pulsar Re Pag)"); goto out; }
+    if (FAILED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) || !dv) goto out;
+    ID3D11Device_GetImmediateContext(dv, &ctx);
+    if (!ctx) goto out;
+    fp = fopen(path, "w");
+    if (!fp) { vr_log("EXPORTAR: no puedo crear %s", path); goto out; }
+    fprintf(fp, "# Metro Last Light Redux VR - arma %u/%u exportada por el mod (E40)\n# un objeto por pieza y por hueso: pieza_<indices>_<inicio>_hueso_<n>\n", g_wpn_ic, g_wpn_si);
+    for (int i = 0; i < g_nexp; i++) {
+        ExpPiece *p = &g_exp[i];
+        ExpLayout L; memset(&L, 0, sizeof(L));
+        char desc[700]; int dl = 0; desc[0] = 0;
+        if (!p->il || !lay_get(p->il, &L)) { vr_log("EXPORTAR: pieza %u/%u sin plantilla de vertices conocida (se salta)", p->ic, p->si); continue; }
+        for (UINT k = 0; k < L.n && dl < 600; k++) dl += snprintf(desc + dl, sizeof(desc) - dl, " %s%u(fmt%u,hueco%u,+%u)", L.e[k].sem, L.e[k].si, L.e[k].fmt, L.e[k].slot, L.e[k].off);
+        const ExpElem *ep = lay_find(&L, "POSITION", 0), *eb = lay_find(&L, "BLENDINDICES", 0), *ew = lay_find(&L, "BLENDWEIGHT", 0);
+        vr_log("EXPORTAR: pieza %u/%u%s bv=%d pasos=%u/%u/%u/%u plantilla:%s", p->ic, p->si, p->arm ? " (brazo)" : "", p->bv, p->st[0], p->st[1], p->st[2], p->st[3], desc);
+        if (!ep || !p->vb[ep->slot] || !p->st[ep->slot]) { vr_log("EXPORTAR:   sin posiciones, se salta"); continue; }
+        UINT isz = p->ifmt == DXGI_FORMAT_R16_UINT ? 2 : (p->ifmt == DXGI_FORMAT_R32_UINT ? 4 : 0);
+        if (!isz || p->ic % 3) continue;
+        BYTE *ib = exp_read(dv, ctx, p->ib, p->ioff + p->si * isz, p->ic * isz);
+        if (!ib) { vr_log("EXPORTAR:   no se pudieron leer los indices"); continue; }
+        UINT *idx = (UINT *)malloc(p->ic * sizeof(UINT));
+        if (!idx) { free(ib); continue; }
+        long long mn = 0x7fffffff, mx = -1;
+        for (UINT k = 0; k < p->ic; k++) {
+            long long v = (long long)(isz == 2 ? ((USHORT *)ib)[k] : ((UINT *)ib)[k]) + p->bv;
+            idx[k] = (UINT)(v < 0 ? 0 : v);
+            if ((long long)idx[k] < mn) mn = idx[k];
+            if ((long long)idx[k] > mx) mx = idx[k];
+        }
+        free(ib);
+        UINT nv = (UINT)(mx - mn + 1);
+        if (mx < 0 || nv > 2000000) { free(idx); continue; }
+        BYTE *vd[4] = { 0 };
+        int need[4] = { 0 }; need[ep->slot] = 1; if (eb) need[eb->slot] = 1; if (ew) need[ew->slot] = 1;
+        for (int s = 0; s < 4; s++) if (need[s] && p->vb[s] && p->st[s]) vd[s] = exp_read(dv, ctx, p->vb[s], p->vo[s] + (UINT)mn * p->st[s], nv * p->st[s]);
+        if (!vd[ep->slot]) { vr_log("EXPORTAR:   no se pudieron leer los vertices"); free(idx); for (int s = 0; s < 4; s++) free(vd[s]); continue; }
+        /* vertices */
+        fprintf(fp, "# pieza %u/%u%s: %u vertices, %u triangulos, plantilla:%s\n", p->ic, p->si, p->arm ? " (brazo)" : "", nv, p->ic / 3, desc);
+        int *vbone = (int *)malloc(nv * sizeof(int));
+        float b0[3] = { 0 }; int bfirst = 1;
+        for (UINT v = 0; v < nv; v++) {
+            float q[4]; read_comp(vd[ep->slot] + v * p->st[ep->slot] + ep->off, ep->fmt, q, 1);
+            if (bfirst) { b0[0] = q[0]; b0[1] = q[1]; b0[2] = q[2]; bfirst = 0; }
+            fprintf(fp, "v %.6f %.6f %.6f\n", q[0], q[1], q[2]);
+            int bone = -1;
+            if (eb && vd[eb->slot]) {
+                float bi[4], bw[4] = { 1, 0, 0, 0 };
+                read_comp(vd[eb->slot] + v * p->st[eb->slot] + eb->off, eb->fmt, bi, 0);
+                if (eb->fmt == 28 || eb->fmt == 87) for (int k = 0; k < 4; k++) bi[k] *= 255.0f;   /* UNORM: el byte tal cual */
+                if (ew && vd[ew->slot]) read_comp(vd[ew->slot] + v * p->st[ew->slot] + ew->off, ew->fmt, bw, 1);
+                int best = 0; for (int k = 1; k < 4; k++) if (bw[k] > bw[best]) best = k;
+                bone = (int)(bi[best] + 0.5f);
+            }
+            if (vbone) vbone[v] = bone;
+        }
+        (void)b0;
+        /* triangulos agrupados por el hueso de su primer vertice */
+        int bl[512]; int nb = 0;
+        UINT nt = p->ic / 3;
+        for (UINT t = 0; t < nt; t++) {
+            int b = vbone ? vbone[idx[3 * t] - (UINT)mn] : -1, f = 0;
+            for (int k = 0; k < nb; k++) if (bl[k] == b) { f = 1; break; }
+            if (!f && nb < 512) bl[nb++] = b;
+        }
+        char bonelist[700]; int bll = 0; bonelist[0] = 0;
+        for (int k = 0; k < nb; k++) {
+            int b = bl[k], cnt = 0;
+            if (b >= 0) fprintf(fp, "o pieza_%u_%u%s_hueso_%d\n", p->ic, p->si, p->arm ? "_brazo" : "", b);
+            else fprintf(fp, "o pieza_%u_%u%s\n", p->ic, p->si, p->arm ? "_brazo" : "");
+            for (UINT t = 0; t < nt; t++) {
+                int tb = vbone ? vbone[idx[3 * t] - (UINT)mn] : -1;
+                if (tb != b) continue;
+                fprintf(fp, "f %u %u %u\n", vbase + idx[3 * t] - (UINT)mn, vbase + idx[3 * t + 1] - (UINT)mn, vbase + idx[3 * t + 2] - (UINT)mn);
+                cnt++;
+            }
+            if (bll < 620) bll += snprintf(bonelist + bll, sizeof(bonelist) - bll, " %d:%d", b, cnt);
+        }
+        vr_log("EXPORTAR:   %u vertices, %u triangulos; huesos (hueso:triangulos):%s", nv, nt, bonelist);
+        vbase += nv; ntri_all += nt; npie++;
+        free(vbone); free(idx); for (int s = 0; s < 4; s++) free(vd[s]);
+    }
+out:
+    if (fp) fclose(fp);
+    if (npie) { vr_log("EXPORTAR: LISTO -> %s (%d piezas, %u triangulos)", path, npie, ntri_all); Beep(900, 80); Beep(1300, 80); Beep(1700, 150); }
+    else { vr_log("EXPORTAR: no se exporto nada"); Beep(400, 300); }
+    exp_release();
+    InterlockedExchange(&g_exp_lock, 0);
+    if (ctx) ID3D11DeviceContext_Release(ctx);
+    if (dv) ID3D11Device_Release(dv);
+    g_exp_state = 0;
+}
 /* (E29) lee una vez los indices de la pieza grande (copia a una caja "de lectura") y busca sus islas */
 static void isl_scan(IDXGISwapChain *sc)
 {
@@ -2306,6 +2553,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     if (t_in_present) return next(sc, sync, flags);
     t_in_present = 1;
     if (g_isl_state == 1) isl_scan(sc);   /* (E29) */
+    if (g_exp_state == 1 && GetTickCount64() - g_exp_t > 400) exp_run(sc);   /* (E40) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -5034,6 +5282,10 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             int dp = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
             if (dp && !prevpg) mag_key(rsh, (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
             prevpg = dp;
+            static int prevpu = 0;    /* (E40) Re Pag: exportar el arma a Blender */
+            int du = (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0;
+            if (du && !prevpu) exp_key();
+            prevpu = du;
         }
         /* Shift + H: buscar la camara del juego en memoria */
         {
@@ -5995,7 +6247,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
-    t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                      \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv); { int ps_ = piece_skip(c, ic, si);   \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv));                                           \
       if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
@@ -6006,7 +6258,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
-    t_in_draw = 1; { int ps_ = piece_skip(c, ic, si);                                                                   \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv); { int ps_ = piece_skip(c, ic, si);                \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst));                                \
       if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
@@ -6075,6 +6327,9 @@ static void dev_hooks(ID3D11DeviceContext *ctx)
     MH_STATUS s1 = MH_CreateHook(f1, (void *)hk_CreateBuf, (void **)&g_tr_CreateBuf); if (s1 == MH_OK) s1 = MH_EnableHook(f1);
     MH_STATUS s2 = MH_CreateHook(f2, (void *)hk_CreateTex, (void **)&g_tr_CreateTex); if (s2 == MH_OK) s2 = MH_EnableHook(f2);
     vr_log("CHIVATO: CreateBuffer -> %s, CreateTexture2D -> %s", MH_StatusToString(s1), MH_StatusToString(s2));
+    void *f3 = (void *)dev->lpVtbl->CreateInputLayout;   /* (E40) para poder leer los vertices al exportar */
+    MH_STATUS s3 = MH_CreateHook(f3, (void *)hk_CreateIL, (void **)&g_tr_CreateIL); if (s3 == MH_OK) s3 = MH_EnableHook(f3);
+    vr_log("EXPORTAR: CreateInputLayout -> %s", MH_StatusToString(s3));
     ID3D11Device_Release(dev);
 }
 static void mh_start(void)
@@ -6468,7 +6723,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E39: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E40: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
