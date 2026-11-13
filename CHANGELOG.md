@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E41 — Exportar el arma, separada por huesos
+
+- La E40 exportó bien la forma del arma, pero sin separar por huesos: el juego llama a esos datos `BONES` y `WEIGHTS` (no con el nombre estándar). Ahora se leen.
+- Las posiciones vienen como números enteros (formato 14); se dividen por 2048 para que en Blender salga a un tamaño manejable (no es la escala exacta).
+- Plantilla de los vértices del arma (para la siguiente fase): `POSITION` short4 entero, `NORMAL/TANGENT/BINORMAL` byte4, `BONES` byte4 entero, `WEIGHTS` byte4, `TEXCOORD` short2, y una matriz por instancia (`xform0-3`, hueco 1).
+
 ## E40 — Exportar el arma a Blender
 
 - **Re Pág** (en partida, con el VR puesto y mirando el arma): el mod guarda el arma que llevas en `%TEMP%\metro_vr_arma_<ic>_<si>.obj` (se abre en Blender: Archivo → Importar → Wavefront (.obj)). Suenan 3 pitidos al terminar.

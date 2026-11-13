@@ -2382,6 +2382,8 @@ static void exp_run(IDXGISwapChain *sc)
         if (!p->il || !lay_get(p->il, &L)) { vr_log("EXPORTAR: pieza %u/%u sin plantilla de vertices conocida (se salta)", p->ic, p->si); continue; }
         for (UINT k = 0; k < L.n && dl < 600; k++) dl += snprintf(desc + dl, sizeof(desc) - dl, " %s%u(fmt%u,hueco%u,+%u)", L.e[k].sem, L.e[k].si, L.e[k].fmt, L.e[k].slot, L.e[k].off);
         const ExpElem *ep = lay_find(&L, "POSITION", 0), *eb = lay_find(&L, "BLENDINDICES", 0), *ew = lay_find(&L, "BLENDWEIGHT", 0);
+        if (!eb) eb = lay_find(&L, "BONES", 0);     /* (E41) el motor 4A los llama BONES / WEIGHTS */
+        if (!ew) ew = lay_find(&L, "WEIGHTS", 0);
         vr_log("EXPORTAR: pieza %u/%u%s bv=%d pasos=%u/%u/%u/%u plantilla:%s", p->ic, p->si, p->arm ? " (brazo)" : "", p->bv, p->st[0], p->st[1], p->st[2], p->st[3], desc);
         if (!ep || !p->vb[ep->slot] || !p->st[ep->slot]) { vr_log("EXPORTAR:   sin posiciones, se salta"); continue; }
         UINT isz = p->ifmt == DXGI_FORMAT_R16_UINT ? 2 : (p->ifmt == DXGI_FORMAT_R32_UINT ? 4 : 0);
@@ -2411,7 +2413,8 @@ static void exp_run(IDXGISwapChain *sc)
         for (UINT v = 0; v < nv; v++) {
             float q[4]; read_comp(vd[ep->slot] + v * p->st[ep->slot] + ep->off, ep->fmt, q, 1);
             if (bfirst) { b0[0] = q[0]; b0[1] = q[1]; b0[2] = q[2]; bfirst = 0; }
-            fprintf(fp, "v %.6f %.6f %.6f\n", q[0], q[1], q[2]);
+            float sc = (ep->fmt == 14 || ep->fmt == 12) ? 1.0f / 2048.0f : 1.0f;   /* (E41) enteros del 4A: a un tamano manejable */
+            fprintf(fp, "v %.6f %.6f %.6f\n", q[0] * sc, q[1] * sc, q[2] * sc);
             int bone = -1;
             if (eb && vd[eb->slot]) {
                 float bi[4], bw[4] = { 1, 0, 0, 0 };
@@ -6723,7 +6726,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E40: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E41: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
