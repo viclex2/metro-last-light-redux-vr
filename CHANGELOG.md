@@ -2,6 +2,17 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E43 — Huesos del arma: el cargador desaparece de verdad
+
+- Lo aprendido exportando la metralleta (`16251/862638`): **cada parte del arma tiene su hueso**. La carcasa del cargador es el **hueso 15** de la pieza grande; cada bala del cargador tiene el suyo (30 balas, 30 huesos).
+- El mod pinta la pieza grande del arma con una **copia del cajón de huesos** (hecha en la gráfica, sin leerla) en la que el hueso del cargador está "encogido a nada". Así:
+  - **B (toque)**: desaparece la carcasa del cargador (y, como en la E39, las balas y el cartucho).
+  - **Coger de la cadera**: se pinta la carcasa (solo su hueso) en la **mano izquierda**.
+  - Al meterlo (o mantener B) vuelve a verse en el arma.
+- **Shift+Re Pág**: encoge los huesos del arma uno a uno (0, 3, 6…) para ver qué parte mueve cada uno (buscar el cerrojo para amartillar).
+- `metro_vr_huesos.txt` (`arma_ic arma_si parte hueso`; parte 1 = cargador, 2 = cerrojo). Se crea solo con la metralleta (`16251 862638 1 15`).
+- Log: `HUESOS:` con el tamaño de los cajones y unas filas del de huesos (para comprobar que el hueso 15 está donde creemos). Config: `huesos_hueco=8`, `huesos_desfase=0`.
+
 ## E42 — Exportar el arma con cada pieza en su sitio
 
 - Al abrir la E40 en Blender el arma salía enorme y con las piezas amontonadas: cada pieza trae su **propia colocación** (una matriz por pieza, `xform0-3` del hueco 1) y no se aplicaba. Ahora se aplica, y el log la apunta (`EXPORTAR:   colocacion …`).
