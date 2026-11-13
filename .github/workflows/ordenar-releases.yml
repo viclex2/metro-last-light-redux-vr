@@ -1,6 +1,6 @@
-# Pone orden en las Releases: la version que hay en VERSION de la rama main es la estable (Latest);
-# todas las demas quedan como Pre-release. Se lanza a mano (Actions > "Ordenar releases" > Run workflow)
-# o sola cuando cambia este archivo.
+# Pone orden en las Releases (13/11, decidido con Alex): SOLO una version es publica (la de PUBLICA, con el
+# nombre NOMBRE y marcada como Latest). Todas las demas pasan a BORRADOR (draft): solo las ve el dueno del repo.
+# Se lanza a mano (Actions > "Ordenar releases" > Run workflow) o sola cuando cambia este archivo.
 name: Ordenar releases
 
 on:
@@ -12,23 +12,25 @@ on:
 permissions:
   contents: write
 
+env:
+  PUBLICA: E35
+  NOMBRE: V-0.1-E35
+
 jobs:
   ordenar:
     runs-on: ubuntu-latest
     steps:
-      - name: Marcar estable / pruebas
+      - name: Una publica, las demas en borrador
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          ESTABLE="$(gh api "repos/$REPO/contents/VERSION?ref=main" -q .content | base64 -d | tr -d ' \r\n')"
-          echo "Estable (main): $ESTABLE"
-          gh api "repos/$REPO/releases" --paginate -q '.[] | "\(.id) \(.tag_name) \(.prerelease)"' |
-          while read id tag pre; do
-            if [ "$tag" = "$ESTABLE" ]; then
-              gh api -X PATCH "repos/$REPO/releases/$id" -F prerelease=false -f make_latest=true -q '"\(.tag_name): ESTABLE (Latest)"'
-            elif [ "$pre" = "false" ]; then
-              gh api -X PATCH "repos/$REPO/releases/$id" -F prerelease=true -f make_latest=false -q '"\(.tag_name): pre-release"'
+          gh api "repos/$REPO/releases" --paginate -q '.[] | "\(.id) \(.tag_name) \(.draft)"' |
+          while read id tag draft; do
+            if [ "$tag" = "$PUBLICA" ]; then
+              gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -F prerelease=false -f make_latest=true -f name="$NOMBRE" -q '"\(.tag_name): PUBLICA (\(.name), Latest)"'
+            elif [ "$draft" = "false" ]; then
+              gh api -X PATCH "repos/$REPO/releases/$id" -F draft=true -q '"\(.tag_name): borrador (privada)"'
             fi
           done
-          echo "Latest ahora: $(gh api "repos/$REPO/releases/latest" -q .tag_name)"
+          echo "Latest ahora: $(gh api "repos/$REPO/releases/latest" -q '.tag_name + " = " + .name')"

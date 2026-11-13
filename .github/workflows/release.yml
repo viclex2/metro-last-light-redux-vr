@@ -51,6 +51,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: notas.md
           prerelease: ${{ github.ref_name != 'main' }}
+          draft: ${{ github.ref_name != 'main' }}   # (13/11) las de pruebas salen privadas (borrador)
           make_latest: ${{ github.ref_name == 'main' && 'true' || 'false' }}
           files: d3d11.dll
 
