@@ -222,6 +222,8 @@ static int cfg_mano_izq_mando = 1;   /* (E31) mano izq en el mando izq */
 static int cfg_reloj = 1;            /* (E33) 1 = con "solo las manos" se sigue viendo el reloj (las piezas pequenas guardadas) */
 static volatile LONG g_watch_n = 0;  /* (E33) piezas del reloj pintadas (para el chivato) */
 static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton de agarre izq, 2 = siempre, 3 = automatico por cercania (el de la E32) */
+static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
+static int cfg_huesos_desfase = 0;   /* filas antes del hueso 0 (por si el cajon empieza con una cabecera) */
 static int cfg_dos_manos_ejes = 1;
 static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
 static int cfg_recarga_ms = 2200;    /* (E36) tiempo que la mano izq va con el arma tras meter el cargador (animacion del juego) */
@@ -2487,8 +2489,6 @@ out:
  * cajon de huesos, de 3 en 3). Para quitar o mover una parte se pinta la pieza con una COPIA de ese cajon (en la grafica,
  * sin leerlo) con las filas de ese hueso a cero (= encogido a nada) o con SOLO ese hueso (para pintarlo en la mano izq).
  * metro_vr_huesos.txt: "arma_ic arma_si parte hueso" (parte 1 = cargador, 2 = cerrojo). */
-static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
-static int cfg_huesos_desfase = 0;   /* filas antes del hueso 0 (por si el cajon empieza con una cabecera) */
 typedef struct { UINT wic, wsi; int part, bone; } BoneSig;
 #define MAXBONE 64
 static BoneSig g_bone[MAXBONE]; static int g_nbone = 0;
