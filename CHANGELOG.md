@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E44 — Recarga de verdad: sin la animación del juego
+
+- **Meter el cargador con la mano ya no pulsa R**: las balas pasan del inventario al arma con la misma función que usa el juego al coger un arma del suelo (virtual `+0xEC0` = `0x2C0080`, "cargar desde el inventario"). Gasta las balas de tu reserva igual que una recarga normal, pero **sin animación**.
+- Si el mod aún no sabe qué arma llevas (no has pulsado B ni disparado con ella), hace la recarga de siempre.
+- **Arreglado el hueso del cargador en la mano** (solo se veían las balas): el cajón de huesos empieza con una fila vacía, así que el hueso N está una fila más allá (`huesos_desfase=1`). Ahora tiene que verse la carcasa en la mano y no se deforma ninguna pieza de al lado.
+- Mantener B 1 s sigue siendo la recarga normal del juego (por si acaso). `recarga_real=0` vuelve a la de la E43.
+- Log: `RECARGA DE VERDAD: … balas X -> Y`.
+
 ## E43 — Huesos del arma: el cargador desaparece de verdad
 
 - Lo aprendido exportando la metralleta (`16251/862638`): **cada parte del arma tiene su hueso**. La carcasa del cargador es el **hueso 15** de la pieza grande; cada bala del cargador tiene el suyo (30 balas, 30 huesos).

@@ -223,8 +223,10 @@ static int cfg_reloj = 1;            /* (E33) 1 = con "solo las manos" se sigue 
 static volatile LONG g_watch_n = 0;  /* (E33) piezas del reloj pintadas (para el chivato) */
 static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton de agarre izq, 2 = siempre, 3 = automatico por cercania (el de la E32) */
 static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
-static int cfg_huesos_desfase = 0;   /* filas antes del hueso 0 (por si el cajon empieza con una cabecera) */
+static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vacia: el hueso N esta en las filas N+1..N+3 (log E43) */
 static int cfg_dos_manos_ejes = 1;
+static int cfg_recarga_real = 1;     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
+static volatile LONG g_load_req = 0, g_load_n = 0;
 static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
 static int cfg_recarga_ms = 2200;    /* (E36) tiempo que la mano izq va con el arma tras meter el cargador (animacion del juego) */
 static float cfg_cadera_cm = 22.0f;  /* (E36) radio de la "cartuchera" en la cadera izq */
@@ -473,6 +475,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "dos_manos_ejes"))   cfg_dos_manos_ejes = v;   /* (E34) */
     else if (!strcmp(s, "huesos_hueco"))     cfg_huesos_hueco = v;     /* (E43) */
     else if (!strcmp(s, "huesos_desfase"))   cfg_huesos_desfase = v;   /* (E43) */
+    else if (!strcmp(s, "recarga_real"))     cfg_recarga_real = v;     /* (E44) */
     else if (!strcmp(s, "recarga_manual"))   cfg_recarga_manual = v;   /* (E36) */
     else if (!strcmp(s, "recarga_ms"))       cfg_recarga_ms = v;       /* (E36) */
     else if (!strcmp(s, "cadera_cm"))        cfg_cadera_cm = fv;       /* (E36) */
@@ -3665,13 +3668,15 @@ static void reload_update(const OvrPose *rp)
     case 1:
         if (!grip) { g_mag_state = 0; vr_log("RECARGA: cargador soltado sin meterlo"); break; }
         if (dgun < 0.20f && dhip > cfg_cadera_cm * 0.01f) {
-            InterlockedExchange(&g_reload_req, 1); g_mag_state = 2; t_ins = GetTickCount64(); buzz = 4; haptic(2, 3000);
+            if (cfg_recarga_real && g_pw) InterlockedExchange(&g_load_req, 1);   /* (E44) balas puestas sin animacion */
+            else InterlockedExchange(&g_reload_req, 1);
+            g_mag_state = 2; t_ins = GetTickCount64(); buzz = 4; haptic(2, 3000);
             g_out_ic = 0;   /* (E39) el cargador vuelve a verse en el arma */
             InterlockedIncrement(&g_mag_ins); vr_log("RECARGA: cargador al arma (manos a %.0f cm) -> recarga", dgun * 100.0f);
         }
         break;
     case 2:
-        if (GetTickCount64() - t_ins > (ULONGLONG)cfg_recarga_ms) g_mag_state = 0;
+        if (GetTickCount64() - t_ins > (ULONGLONG)(g_load_n ? 300 : cfg_recarga_ms)) g_mag_state = 0;
         break;
     }
     prev_grip = grip;
@@ -3709,6 +3714,22 @@ static void expel_check(void *w)
     if (!is_player_wpn(w)) return;
     g_pw = w; g_pw_ic = g_wpn_ic; g_pw_si = g_wpn_si;
     if (g_expel_req) expel_do(w);
+}
+/* (E44) RECARGA DE VERDAD: el cargador metido con la mano -> las balas pasan del inventario al arma con la misma funcion
+ * que usa el juego al coger un arma (virtual +0xEC0 = 0x2C0080, "cargar desde el inventario", con 1). Sin animacion. */
+static void load_tick(void)
+{
+    void *w = g_pw;
+    if (!g_load_req || !w || g_mode != 1) return;
+    if (g_pw_ic != g_wpn_ic || g_pw_si != g_wpn_si || !is_player_wpn(w)) { InterlockedExchange(&g_load_req, 0); InterlockedExchange(&g_reload_req, 1); vr_log("RECARGA: no se sabe que arma es -> recarga normal"); return; }
+    InterlockedExchange(&g_load_req, 0);
+    void **vt = *(void ***)w;
+    typedef int (*PFN_Get)(void *); typedef int (*PFN_Load)(void *, int, int);
+    int before = ((PFN_Get)vt[0xEC8 / 8])(w);
+    ((PFN_Load)vt[0xEC0 / 8])(w, 1, 0);
+    int after = ((PFN_Get)vt[0xEC8 / 8])(w);
+    InterlockedIncrement(&g_load_n);
+    vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)", before, after);
 }
 /* (E38) cada paso del jugador (hilo del juego, ~100/s): si B esta pedido y sabemos cual es el arma que se ve, al momento */
 static void expel_tick(void)
@@ -4690,7 +4711,7 @@ static void mov_hook(void *pl, void *req, int prev, void *acc, float *mv, void *
         g_mov_seen = t;   /* (E20e) hay jugador: partida */
         InterlockedIncrement(&g_mov_calls);
         if (dt > 1e-6f) g_mov_run = t; else InterlockedIncrement(&g_mov_dt0);   /* (E20h) en la pausa el tiempo se para */
-        if (cfg_recarga_manual) expel_tick();   /* (E38) expulsar el cargador al momento */
+        if (cfg_recarga_manual) { expel_tick(); load_tick(); }   /* (E38) expulsar el cargador al momento; (E44) meterlo */
     }
     if ((BYTE *)__builtin_return_address(0) != g_mov_ret || !mv || !nat_active() || !g_nat_was) return;
     if (!isfinite(mv[0]) || !isfinite(mv[2])) return;
@@ -6887,7 +6908,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E43: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E44: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
