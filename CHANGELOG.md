@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E46 — Grabadora de la animación de recarga
+
+- Para hacer la recarga fiel a la del juego (palma que echa el cargador por el carril, cargador nuevo por la derecha, tapa que baja, palanca de carga), se **graban los movimientos de la animación del propio juego**.
+- Se graba sola 5 s al **mantener B** (la recarga normal del juego), o al pulsar **Ctrl+Re Pág**. En cada fotograma se copia el cajón de huesos del arma (12 huesos) y el de los brazos (46 huesos, dedos incluidos) y se escriben en `%TEMP%\metro_vr_grabacion.txt`. Dos pitidos al terminar; log `GRABADORA:`.
+- Lleva todo lo de la E45 (saber el arma sin disparar, recarga sin animación).
+
 ## E45 — Saber qué arma llevas sin disparar (para la recarga sin animación)
 
 - Prueba de la E44: la carcasa ya se ve en la mano izquierda, pero la recarga seguía con animación porque el mod **no sabía cuál era tu arma** (solo lo averiguaba al disparar, y lo olvidaba al pasar por un menú). Entonces hacía la recarga normal.

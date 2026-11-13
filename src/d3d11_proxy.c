@@ -2542,6 +2542,100 @@ static void bone_diag_run(IDXGISwapChain *sc)
     if (dv) ID3D11Device_Release(dv);
     ID3D11Buffer_Release(b);
 }
+/* ===================== (E46) GRABADORA DE LA ANIMACION =====================
+ * Mientras el juego hace su recarga (mantener B) o al pulsar Ctrl+Re Pag, durante 5 s se copia en cada fotograma el cajon
+ * de huesos del arma y el de los brazos (en la grafica, a cajas "de lectura") y despues se escriben en
+ * %TEMP%\metro_vr_grabacion.txt: por cada muestra, la matriz (3x4) de cada hueso. Asi se copian los movimientos del juego
+ * (carril del cargador, tapa, palanca de carga, dedos) en vez de inventarlos. */
+#define REC_RING 24
+typedef struct { ID3D11Buffer *st; LONG stamp; ULONGLONG t; int kind; volatile LONG busy; } RecSlot;
+static RecSlot g_rec[REC_RING]; static volatile LONG g_rec_i = 0;
+static volatile LONG g_rec_on = 0, g_rec_n = 0; static ULONGLONG g_rec_t0 = 0, g_rec_end = 0;
+static volatile LONG g_rec_frame_got[2] = { -1, -1 };
+static FILE *g_rec_fp = NULL;
+static volatile LONG g_frames_rec = 0;   /* copia de g_frames para la grabadora */
+static void rec_start(const char *why)
+{
+    if (g_rec_on) return;
+    g_rec_t0 = GetTickCount64(); g_rec_end = g_rec_t0 + 5000; g_rec_n = 0;
+    g_rec_on = 1;
+    vr_log("GRABADORA: grabando 5 s (%s) -> metro_vr_grabacion.txt", why);
+}
+/* en el dibujo (cualquier hilo): copia el cajon de huesos que esta puesto a una caja de lectura (kind 0 = arma, 1 = brazos) */
+static void rec_capture(ID3D11DeviceContext *c, int kind)
+{
+    if (!g_rec_on) return;
+    LONG fr = g_frames_rec;
+    if (InterlockedExchange(&g_rec_frame_got[kind], fr) == fr) return;   /* una vez por fotograma */
+    ID3D11Buffer *o = NULL;
+    ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    LONG i = InterlockedIncrement(&g_rec_i) % REC_RING;
+    RecSlot *s = &g_rec[i];
+    if (InterlockedCompareExchange(&s->busy, 1, 0) != 0) { ID3D11Buffer_Release(o); return; }   /* aun sin leer: se salta */
+    if (!s->st) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (dev) {
+            D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 4096; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ID3D11Device_CreateBuffer(dev, &bd, NULL, &s->st);
+            ID3D11Device_Release(dev);
+        }
+    }
+    if (s->st && d.ByteWidth <= 4096) {
+        D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
+        ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)s->st, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
+        s->stamp = fr; s->t = GetTickCount64(); s->kind = kind;
+        s->busy = 2;   /* copia pedida: se lee dentro de 2 fotogramas */
+    } else s->busy = 0;
+    ID3D11Buffer_Release(o);
+}
+/* en el Present: lee las copias que ya tienen 2 fotogramas y las escribe */
+static void rec_flush(IDXGISwapChain *sc)
+{
+    LONG fr = g_frames_rec;
+    int any = 0;
+    for (int i = 0; i < REC_RING; i++) if (g_rec[i].busy == 2 && fr - g_rec[i].stamp >= 2) { any = 1; break; }
+    if (any) {
+        ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
+        if (SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
+            ID3D11Device_GetImmediateContext(dv, &ctx);
+            if (!g_rec_fp) {
+                char path[MAX_PATH]; GetTempPathA(MAX_PATH, path); strcat(path, "metro_vr_grabacion.txt");
+                g_rec_fp = fopen(path, "a");
+                if (g_rec_fp) fprintf(g_rec_fp, "# Metro VR grabadora (E46): arma %u/%u. Cada muestra: ms desde el inicio, que (arma/brazos) y por hueso (valor BONES = 3*k) su matriz 3x4 por filas\n", g_wpn_ic, g_wpn_si);
+            }
+            for (int i = 0; i < REC_RING && ctx; i++) {
+                RecSlot *s = &g_rec[i];
+                if (s->busy != 2 || fr - s->stamp < 2) continue;
+                D3D11_MAPPED_SUBRESOURCE ms;
+                if (SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s->st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+                    const float *f = (const float *)ms.pData;
+                    int nb = s->kind == 0 ? 12 : 46;
+                    if (g_rec_fp) {
+                        fprintf(g_rec_fp, "T %llu %s\n", (unsigned long long)(s->t - g_rec_t0), s->kind == 0 ? "arma" : "brazos");
+                        for (int k = 0; k < nb; k++) {
+                            const float *m = f + 4 * (1 + 3 * k);
+                            fprintf(g_rec_fp, "h%d %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n", 3 * k,
+                                    m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+                        }
+                    }
+                    InterlockedIncrement(&g_rec_n);
+                    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)s->st, 0);
+                }
+                s->busy = 0;
+            }
+            if (ctx) ID3D11DeviceContext_Release(ctx);
+            ID3D11Device_Release(dv);
+        }
+    }
+    if (g_rec_on && GetTickCount64() > g_rec_end + 300) {
+        g_rec_on = 0;
+        if (g_rec_fp) { fclose(g_rec_fp); g_rec_fp = NULL; }
+        vr_log("GRABADORA: listo, %ld muestras guardadas en metro_vr_grabacion.txt", (long)g_rec_n);
+        Beep(900, 80); Beep(1300, 80);
+    }
+}
 /* (E29) lee una vez los indices de la pieza grande (copia a una caja "de lectura") y busca sus islas */
 static void isl_scan(IDXGISwapChain *sc)
 {
@@ -2638,6 +2732,8 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     if (g_isl_state == 1) isl_scan(sc);   /* (E29) */
     if (g_exp_state == 1 && GetTickCount64() - g_exp_t > 400) exp_run(sc);   /* (E40) */
     if (g_bdiag_buf) bone_diag_run(sc);   /* (E43) */
+    g_frames_rec = g_frames;
+    if (g_rec_on || g_rec_fp) rec_flush(sc);   /* (E46) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -4478,7 +4574,7 @@ static void mandos_step(float dt)
     static ULONGLONG bdown = 0; static int bdone = 0;
     int bb = rok && BTN(R, 1);
     if (bb && !bdown) { bdown = GetTickCount64(); bdone = 0; }
-    if (bb && !bdone && GetTickCount64() - bdown > 1000) { rl_hold = 4; bdone = 1; g_out_ic = 0; }
+    if (bb && !bdone && GetTickCount64() - bdown > 1000) { rl_hold = 4; bdone = 1; g_out_ic = 0; rec_start("recarga del juego, B mantenido"); }
     if (!bb && bdown) {
         if (!bdone) { if (cfg_recarga_manual) { InterlockedExchange(&g_expel_req, 1); g_out_si = g_wpn_si; g_out_ic = g_wpn_ic; haptic(2, 2500); } else rl_hold = 4; }
         bdown = 0;
@@ -5425,7 +5521,8 @@ static DWORD WINAPI keys_thread(LPVOID unused)
             static int prevpu = 0;    /* (E40) Re Pag: exportar el arma a Blender */
             int du = (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0;
             if (du && !prevpu) {
-                if (rsh) {   /* (E43) Shift+Re Pag: encoger el siguiente hueso del arma (para ver que parte mueve cada uno) */
+                if (GetAsyncKeyState(VK_CONTROL) & 0x8000) rec_start("Ctrl+Re Pag");   /* (E46) */
+                else if (rsh) {   /* (E43) Shift+Re Pag: encoger el siguiente hueso del arma (para ver que parte mueve cada uno) */
                     int b = g_bone_try < 0 ? 0 : g_bone_try + 3;
                     if (b > 60) { g_bone_try = -1; vr_log(">>> Shift+RePag: ningun hueso encogido (vuelta completa)"); Beep(600, 100); }
                     else { g_bone_try = b; g_bdiag_req = 1; vr_log(">>> Shift+RePag: encojo el hueso %d del arma %u/%u (lo que desaparece es esa parte)", b, g_wpn_ic, g_wpn_si); Beep(1000, 60); }
@@ -6386,6 +6483,10 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     if (!known && g_pc_ncur < MAXP) { g_pc_cur[g_pc_ncur].ic = ic; g_pc_cur[g_pc_ncur].si = si; g_pc_ncur++; }
     InterlockedExchange(&g_pc_lock, 0);
     if (g_try >= 0 && g_try_sig.ic == ic && g_try_sig.si == si) { InterlockedIncrement(&g_pc_hidden); return 1; }
+    if (g_rec_on) {   /* (E46) grabadora: huesos del arma (pieza grande) y de los brazos */
+        if (g_wpn_ic && ic == g_wpn_ic && si == g_wpn_si) rec_capture(c, 0);
+        else if (isl_is_big(ic, si)) rec_capture(c, 1);
+    }
     /* (E39) el cargador: fuera = no se pinta en el arma; en la mano izq (cogido de la cadera) = se pinta con la camara de esa mano
      * (4 = en el arma Y en la mano, si aun no se habia sacado el del arma) */
     if (g_nmag && g_wpn_ic && mag_is(g_wpn_ic, g_wpn_si, ic, si)) {
@@ -6947,7 +7048,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E45: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E46: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
