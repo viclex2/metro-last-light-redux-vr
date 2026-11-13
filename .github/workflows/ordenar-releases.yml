@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, manos]
-    paths: [.github/workflows/ordenar-releases.yml]
+    paths: [.github/workflows/ordenar-releases.yml, 'docs/RELEASE_*.md']
 
 permissions:
   contents: write
@@ -15,11 +15,13 @@ permissions:
 env:
   PUBLICA: E35
   NOMBRE: V-0.1-E35
+  NOTAS: docs/RELEASE_V-0.1-E35.md   # descripcion de la publica (si el archivo existe)
 
 jobs:
   ordenar:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Una publica, las demas en borrador
         env:
           GH_TOKEN: ${{ github.token }}
@@ -29,6 +31,7 @@ jobs:
           while read id tag draft; do
             if [ "$tag" = "$PUBLICA" ]; then
               gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -F prerelease=false -f make_latest=true -f name="$NOMBRE" -q '"\(.tag_name): PUBLICA (\(.name), Latest)"'
+              if [ -f "$NOTAS" ]; then gh api -X PATCH "repos/$REPO/releases/$id" -f body="$(cat "$NOTAS")" -q '"\(.tag_name): descripcion puesta"'; fi
             elif [ "$draft" = "false" ]; then
               gh api -X PATCH "repos/$REPO/releases/$id" -F draft=true -q '"\(.tag_name): borrador (privada)"'
             fi
