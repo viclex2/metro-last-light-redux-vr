@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E42 — Exportar el arma con cada pieza en su sitio
+
+- Al abrir la E40 en Blender el arma salía enorme y con las piezas amontonadas: cada pieza trae su **propia colocación** (una matriz por pieza, `xform0-3` del hueco 1) y no se aplicaba. Ahora se aplica, y el log la apunta (`EXPORTAR:   colocacion …`).
+- Incluye lo de la E41 (separar por huesos y tamaño manejable).
+
 ## E41 — Exportar el arma, separada por huesos
 
 - La E40 exportó bien la forma del arma, pero sin separar por huesos: el juego llama a esos datos `BONES` y `WEIGHTS` (no con el nombre estándar). Ahora se leen.

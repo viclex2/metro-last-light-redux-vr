@@ -2265,11 +2265,11 @@ static int lay_get(void *lay, ExpLayout *out)
     InterlockedExchange(&g_lay_lock, 0);
     return ok;
 }
-typedef struct { UINT ic, si; INT bv; ID3D11Buffer *ib; DXGI_FORMAT ifmt; UINT ioff; ID3D11Buffer *vb[4]; UINT st[4], vo[4]; ID3D11InputLayout *il; int arm; } ExpPiece;
+typedef struct { UINT ic, si; INT bv; ID3D11Buffer *ib; DXGI_FORMAT ifmt; UINT ioff; ID3D11Buffer *vb[4]; UINT st[4], vo[4]; ID3D11InputLayout *il; int arm; UINT sinst; } ExpPiece;
 #define MAXEXP 48
 static ExpPiece g_exp[MAXEXP]; static int g_nexp = 0; static volatile LONG g_exp_lock = 0;
 static volatile LONG g_exp_state = 0; static ULONGLONG g_exp_t = 0;
-static void exp_capture(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv)
+static void exp_capture(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv, UINT sinst)
 {
     if (!g_cb0_weapon || g_mode != 1 || ic < 3) return;
     while (InterlockedCompareExchange(&g_exp_lock, 1, 0) != 0) YieldProcessor();
@@ -2277,7 +2277,7 @@ static void exp_capture(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv)
     for (int i = 0; i < g_nexp; i++) if (g_exp[i].ic == ic && g_exp[i].si == si) { dup = 1; break; }
     if (!dup && g_nexp < MAXEXP) {
         ExpPiece *p = &g_exp[g_nexp]; memset(p, 0, sizeof(*p));
-        p->ic = ic; p->si = si; p->bv = bv;
+        p->ic = ic; p->si = si; p->bv = bv; p->sinst = sinst;
         ID3D11DeviceContext_IAGetIndexBuffer(c, &p->ib, &p->ifmt, &p->ioff);
         ID3D11DeviceContext_IAGetVertexBuffers(c, 0, 4, p->vb, p->st, p->vo);
         ID3D11DeviceContext_IAGetInputLayout(c, &p->il);
@@ -2406,6 +2406,18 @@ static void exp_run(IDXGISwapChain *sc)
         int need[4] = { 0 }; need[ep->slot] = 1; if (eb) need[eb->slot] = 1; if (ew) need[ew->slot] = 1;
         for (int s = 0; s < 4; s++) if (need[s] && p->vb[s] && p->st[s]) vd[s] = exp_read(dv, ctx, p->vb[s], p->vo[s] + (UINT)mn * p->st[s], nv * p->st[s]);
         if (!vd[ep->slot]) { vr_log("EXPORTAR:   no se pudieron leer los vertices"); free(idx); for (int s = 0; s < 4; s++) free(vd[s]); continue; }
+        /* (E42) cada pieza trae su propia colocacion (matriz por instancia xform0-3, hueco 1): sin ella salen todas apinadas */
+        float xf[16]; int hxf = 0;
+        const ExpElem *ex = lay_find(&L, "xform", 0);
+        if (ex && p->vb[ex->slot] && p->st[ex->slot]) {
+            BYTE *xb = exp_read(dv, ctx, p->vb[ex->slot], p->vo[ex->slot] + p->sinst * p->st[ex->slot] + ex->off, 64);
+            if (xb) { memcpy(xf, xb, 64); hxf = 1; free(xb); }
+        }
+        /* forma A: filas con la traslacion en la 4.a columna (xform3 = 0 0 0 1); forma B: traslacion en xform3 */
+        int xrow = hxf && fabsf(xf[12]) < 1e-4f && fabsf(xf[13]) < 1e-4f && fabsf(xf[14]) < 1e-4f;
+        float rl = hxf ? sqrtf(xf[0] * xf[0] + xf[1] * xf[1] + xf[2] * xf[2]) : 1.0f;
+        if (hxf) vr_log("EXPORTAR:   colocacion (%s, largo fila %.5f): %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+                        xrow ? "filas" : "columnas", rl, xf[0], xf[1], xf[2], xf[3], xf[4], xf[5], xf[6], xf[7], xf[8], xf[9], xf[10], xf[11], xf[12], xf[13], xf[14], xf[15]);
         /* vertices */
         fprintf(fp, "# pieza %u/%u%s: %u vertices, %u triangulos, plantilla:%s\n", p->ic, p->si, p->arm ? " (brazo)" : "", nv, p->ic / 3, desc);
         int *vbone = (int *)malloc(nv * sizeof(int));
@@ -2413,8 +2425,13 @@ static void exp_run(IDXGISwapChain *sc)
         for (UINT v = 0; v < nv; v++) {
             float q[4]; read_comp(vd[ep->slot] + v * p->st[ep->slot] + ep->off, ep->fmt, q, 1);
             if (bfirst) { b0[0] = q[0]; b0[1] = q[1]; b0[2] = q[2]; bfirst = 0; }
-            float sc = (ep->fmt == 14 || ep->fmt == 12) ? 1.0f / 2048.0f : 1.0f;   /* (E41) enteros del 4A: a un tamano manejable */
-            fprintf(fp, "v %.6f %.6f %.6f\n", q[0] * sc, q[1] * sc, q[2] * sc);
+            float sc = ((ep->fmt == 14 || ep->fmt == 12) && rl > 0.05f) ? 1.0f / 2048.0f : 1.0f;   /* (E41) enteros del 4A: a un tamano manejable */
+            float x = q[0] * sc, y = q[1] * sc, z = q[2] * sc, o[3] = { x, y, z };
+            if (hxf) {
+                if (xrow) for (int r = 0; r < 3; r++) o[r] = xf[4 * r] * x + xf[4 * r + 1] * y + xf[4 * r + 2] * z + xf[4 * r + 3];
+                else for (int r = 0; r < 3; r++) o[r] = xf[r] * x + xf[4 + r] * y + xf[8 + r] * z + xf[12 + r];
+            }
+            fprintf(fp, "v %.6f %.6f %.6f\n", o[0], o[1], o[2]);
             int bone = -1;
             if (eb && vd[eb->slot]) {
                 float bi[4], bw[4] = { 1, 0, 0, 0 };
@@ -6250,7 +6267,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
-    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv); { int ps_ = piece_skip(c, ic, si);   \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, 0); { int ps_ = piece_skip(c, ic, si); \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv));                                           \
       if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
@@ -6261,7 +6278,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
-    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv); { int ps_ = piece_skip(c, ic, si);                \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, sinst); { int ps_ = piece_skip(c, ic, si);         \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst));                                \
       if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
@@ -6726,7 +6743,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E41: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E42: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
