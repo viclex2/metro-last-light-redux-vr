@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E45 — Saber qué arma llevas sin disparar (para la recarga sin animación)
+
+- Prueba de la E44: la carcasa ya se ve en la mano izquierda, pero la recarga seguía con animación porque el mod **no sabía cuál era tu arma** (solo lo averiguaba al disparar, y lo olvidaba al pasar por un menú). Entonces hacía la recarga normal.
+- Ahora lo averigua solo: el juego pregunta muchas veces por segundo "¿cuántas balas tiene?" a tu arma activa (`metro.exe+0x2C0A40`, gancho MinHook). El mod cuenta las preguntas y cada medio segundo se queda con la más preguntada de tus armas. Log `RECARGA: arma activa encontrada sin disparar`.
+- Si aun así no lo sabe, el log lo dice (`RECARGA: aun no se cual es tu arma`). En `MANO IZQ:` salen `balas?=` (preguntas por 2 s) y `arma=si/no`.
+
 ## E44 — Recarga de verdad: sin la animación del juego
 
 - **Meter el cargador con la mano ya no pulsa R**: las balas pasan del inventario al arma con la misma función que usa el juego al coger un arma del suelo (virtual `+0xEC0` = `0x2C0080`, "cargar desde el inventario"). Gasta las balas de tu reserva igual que una recarga normal, pero **sin animación**.

@@ -3669,7 +3669,7 @@ static void reload_update(const OvrPose *rp)
         if (!grip) { g_mag_state = 0; vr_log("RECARGA: cargador soltado sin meterlo"); break; }
         if (dgun < 0.20f && dhip > cfg_cadera_cm * 0.01f) {
             if (cfg_recarga_real && g_pw) InterlockedExchange(&g_load_req, 1);   /* (E44) balas puestas sin animacion */
-            else InterlockedExchange(&g_reload_req, 1);
+            else { InterlockedExchange(&g_reload_req, 1); if (cfg_recarga_real) vr_log("RECARGA: aun no se cual es tu arma -> recarga normal (con animacion)"); }
             g_mag_state = 2; t_ins = GetTickCount64(); buzz = 4; haptic(2, 3000);
             g_out_ic = 0;   /* (E39) el cargador vuelve a verse en el arma */
             InterlockedIncrement(&g_mag_ins); vr_log("RECARGA: cargador al arma (manos a %.0f cm) -> recarga", dgun * 100.0f);
@@ -3752,6 +3752,37 @@ static void ar2_hook(void *w)
     if (cfg_recarga_manual && g_mode == 1) { expel_check(w); InterlockedIncrement(&g_ar2_blocked); return; }   /* todas sus salidas tempranas = no hacer nada */
     g_ar2_tramp(w);
 }
+/* (E45) cual es el arma que llevas, sin tener que disparar: el juego pregunta "cuantas balas tiene?" (virtual +0xEC8 =
+ * 0x2C0A40) muchas veces por segundo para el arma activa. Se cuentan las llamadas por arma del jugador y cada medio segundo
+ * se queda la mas preguntada (las del inventario casi no se preguntan). */
+static int (*g_ammo_tramp)(void *) = NULL;
+static void *volatile g_ac_w[8]; static volatile LONG g_ac_n[8]; static volatile LONG g_ammo_calls = 0;
+static int ammo_hook(void *w)
+{
+    InterlockedIncrement(&g_ammo_calls);
+    if (g_mode == 1 && cfg_recarga_manual && w) {
+        int k;
+        for (k = 0; k < 8; k++) if (g_ac_w[k] == w) { InterlockedIncrement(&g_ac_n[k]); break; }
+        if (k == 8 && is_player_wpn(w))
+            for (k = 0; k < 8; k++) if (InterlockedCompareExchangePointer((PVOID *)&g_ac_w[k], w, NULL) == NULL) { InterlockedIncrement(&g_ac_n[k]); break; }
+    }
+    return g_ammo_tramp(w);
+}
+/* cada medio segundo (hilo del juego): la mas preguntada pasa a ser "el arma del jugador" (si el arma visible no cambia) */
+static void ammo_pick(void)
+{
+    static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
+    if (now - t0 < 500) return;
+    t0 = now;
+    void *best = NULL; LONG bn = 0;
+    for (int k = 0; k < 8; k++) { LONG n = InterlockedExchange(&g_ac_n[k], 0); void *w = g_ac_w[k]; g_ac_w[k] = NULL; if (w && n > bn) { bn = n; best = w; } }
+    static UINT lic = 0, lsi = 0;
+    int stable = (g_wpn_ic == lic && g_wpn_si == lsi); lic = g_wpn_ic; lsi = g_wpn_si;
+    if (best && bn >= 5 && stable && g_wpn_ic && best != g_pw) {
+        g_pw = best; g_pw_ic = g_wpn_ic; g_pw_si = g_wpn_si;
+        vr_log("RECARGA: arma activa encontrada sin disparar (%ld preguntas en 0,5 s) = arma visible %u/%u", (long)bn, g_wpn_ic, g_wpn_si);
+    }
+}
 static void ar_install(void)
 {
     static int done = 0; if (done) return; done = 1;
@@ -3767,6 +3798,13 @@ static void ar_install(void)
         MH_STATUS st = MH_CreateHook(fn, h[k].hk, h[k].tr);
         if (st == MH_OK) st = MH_EnableHook(fn);
         vr_log("RECARGA: gancho en metro.exe+0x%X -> %s", h[k].rva, MH_StatusToString(st));
+    }
+    {   /* (E45) "cuantas balas?" para saber cual es el arma activa: mov rax,[rcx]; xor r8d,r8d; mov dl,1; jmp [rax+0x1348] */
+        BYTE *fn = base + 0x2C0A40;
+        static const BYTE s2[] = { 0x48, 0x8B, 0x01, 0x45, 0x33, 0xC0, 0xB2, 0x01, 0x48, 0xFF, 0xA0, 0x48, 0x13, 0x00, 0x00 };
+        if (memcmp(fn, s2, sizeof(s2))) vr_log("RECARGA: metro.exe+0x2C0A40 no es la esperada: el arma activa solo se sabra al disparar");
+        else { MH_STATUS st = MH_CreateHook(fn, (void *)ammo_hook, (void **)&g_ammo_tramp); if (st == MH_OK) st = MH_EnableHook(fn);
+               vr_log("RECARGA: gancho en metro.exe+0x2C0A40 (cuantas balas) -> %s", MH_StatusToString(st)); }
     }
 }
 static int ctrl_rel(const OvrPose *rp, uint32_t role, uint32_t *last, float A[4][4])
@@ -4711,7 +4749,7 @@ static void mov_hook(void *pl, void *req, int prev, void *acc, float *mv, void *
         g_mov_seen = t;   /* (E20e) hay jugador: partida */
         InterlockedIncrement(&g_mov_calls);
         if (dt > 1e-6f) g_mov_run = t; else InterlockedIncrement(&g_mov_dt0);   /* (E20h) en la pausa el tiempo se para */
-        if (cfg_recarga_manual) { expel_tick(); load_tick(); }   /* (E38) expulsar el cargador al momento; (E44) meterlo */
+        if (cfg_recarga_manual) { if (g_ammo_tramp) ammo_pick(); expel_tick(); load_tick(); }   /* (E38) expulsar el cargador al momento; (E44) meterlo */
     }
     if ((BYTE *)__builtin_return_address(0) != g_mov_ret || !mv || !nat_active() || !g_nat_was) return;
     if (!isfinite(mv[0]) || !isfinite(mv[2])) return;
@@ -6637,10 +6675,11 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
                                     (long)InterlockedExchange(&g_mag_hid_n, 0), (long)InterlockedExchange(&g_mag_hand_n, 0),
-                                    (long)InterlockedExchange(&g_bone_draws, 0), (long)InterlockedExchange(&g_bone_lh, 0), (long)InterlockedExchange(&g_bone_fail, 0), (long)InterlockedExchange(&g_lh_n, 0),
+                                    (long)InterlockedExchange(&g_bone_draws, 0), (long)InterlockedExchange(&g_bone_lh, 0), (long)InterlockedExchange(&g_bone_fail, 0),
+                                    (long)InterlockedExchange(&g_ammo_calls, 0), g_pw ? "si" : "no", (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
@@ -6908,7 +6947,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E44: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E45: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
