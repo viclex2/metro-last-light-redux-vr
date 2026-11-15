@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E50 — Palanca de carga con la mano
+
+- **Amartillar de verdad**: con la mano izquierda pegada al arma (a menos de 14 cm del mando derecho), aprieta el **agarre izquierdo** y **tira hacia atrás** (hacia la culata): la palanca de carga (hueso 33) **sigue tu mano** por su raíl, hasta 4,4 cm (el recorrido de la animación del juego). Al soltar vuelve sola. Vibra al llegar al final y al amartillar.
+- **Sin amartillar no dispara**: al meter un cargador en un arma vacía, el gatillo queda bloqueado (vibra un poco si lo aprietas) hasta que tiras de la palanca hasta el final.
+- Mientras sujetas la palanca no se activa el agarre a dos manos ni coger cargador de la cadera.
+- **Arreglo**: después de meter el cargador se avisa al juego para que repinte el cargador (antes se veía mal hasta el primer disparo).
+- Por dentro: cada fotograma se lee el cajón de huesos del arma (2 fotogramas de retraso) y al pintar se reescribe la fila del hueso de la palanca con su posición + el recorrido. Config: `palanca=1`, `palanca_cm=14`. Log `PALANCA:` y en `MANO IZQ:` `palanca= amartillar= amartilladas= gatillo_bloqueado=`.
+
 ## E49 — Arreglo: la recarga de verdad no se usaba con la metralleta
 
 - Prueba de la E48: no cambió nada porque la comprobación "¿es un arma de cargador?" fallaba con la metralleta: es una clase "hija" cuyas funciones de sacar/meter son versiones propias que acaban llamando a las mismas del juego. Por eso seguía con lo de antes (las balas se perdían al expulsar y al meter quedaba a 0).

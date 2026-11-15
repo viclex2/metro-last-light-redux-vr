@@ -225,6 +225,8 @@ static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton d
 static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
 static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vacia: el hueso N esta en las filas N+1..N+3 (log E43) */
 static int cfg_dos_manos_ejes = 1;
+static int cfg_palanca = 1;          /* (E50) palanca de carga con la mano izq + sin amartillar no dispara */
+static int cfg_palanca_cm = 14;      /* (E50) la mano izq a menos de esto del mando der = coger la palanca */
 static int cfg_recarga_real = 1;     /* (E48) meter: virtual +0x12E0; sacar: +0xEC0(0) */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
 static volatile LONG g_load_req = 0, g_load_n = 0;
 static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
@@ -476,6 +478,8 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "huesos_hueco"))     cfg_huesos_hueco = v;     /* (E43) */
     else if (!strcmp(s, "huesos_desfase"))   cfg_huesos_desfase = v;   /* (E43) */
     else if (!strcmp(s, "recarga_real"))     cfg_recarga_real = v;     /* (E44) */
+    else if (!strcmp(s, "palanca"))          cfg_palanca = v;          /* (E50) */
+    else if (!strcmp(s, "palanca_cm"))       cfg_palanca_cm = v;       /* (E50) */
     else if (!strcmp(s, "recarga_manual"))   cfg_recarga_manual = v;   /* (E36) */
     else if (!strcmp(s, "recarga_ms"))       cfg_recarga_ms = v;       /* (E36) */
     else if (!strcmp(s, "cadera_cm"))        cfg_cadera_cm = fv;       /* (E36) */
@@ -2645,6 +2649,58 @@ static void rec_flush(IDXGISwapChain *sc)
         Beep(900, 80); Beep(1300, 80);
     }
 }
+/* ===================== (E50) PALANCA DE CARGA CON LA MANO =====================
+ * Para MOVER un hueso hay que saber donde esta: cada fotograma se copia el cajon de huesos del arma a una caja de lectura
+ * (2 fotogramas de retraso) y se guarda en g_pal. Al pintar, la fila del hueso de la palanca se reescribe con su
+ * posicion + el recorrido (g_lever_s, en metros, por el eje grabado en la animacion del juego). */
+#define PAL_RING 4
+static RecSlot g_pal_slot[PAL_RING]; static volatile LONG g_pal_i = 0, g_pal_frame = -1;
+static float g_pal[1024]; static volatile LONG g_pal_ok = 0;
+static ID3D11Buffer *g_bmove = NULL;
+static volatile float g_lever_s = 0.0f;   /* recorrido actual de la palanca (m) */
+static volatile LONG g_lever_on = 0, g_need_rack = 0, g_rack_n = 0, g_fire_blocked = 0;
+static const float g_lever_ax[3] = { 0.007f, 0.0f, -1.0f }, g_lever_max = 0.044f;   /* de la grabacion (hueso 33, ejes del 21) */
+static __thread int t_bmn = 0, t_bm[2]; static __thread float t_bmv[2][3];
+static void pal_capture(ID3D11DeviceContext *c)
+{
+    LONG fr = g_frames_rec;
+    if (InterlockedExchange(&g_pal_frame, fr) == fr) return;
+    ID3D11Buffer *o = NULL;
+    ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    RecSlot *s = &g_pal_slot[InterlockedIncrement(&g_pal_i) % PAL_RING];
+    if (InterlockedCompareExchange(&s->busy, 1, 0) != 0) { ID3D11Buffer_Release(o); return; }
+    if (!s->st) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 4096; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                   ID3D11Device_CreateBuffer(dev, &bd, NULL, &s->st); ID3D11Device_Release(dev); }
+    }
+    if (s->st && d.ByteWidth <= 4096) {
+        D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
+        ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)s->st, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
+        s->stamp = fr; s->busy = 2;
+    } else s->busy = 0;
+    ID3D11Buffer_Release(o);
+}
+static void pal_flush(IDXGISwapChain *sc)
+{
+    LONG fr = g_frames_rec; int best = -1;
+    for (int i = 0; i < PAL_RING; i++) if (g_pal_slot[i].busy == 2 && fr - g_pal_slot[i].stamp >= 2 && (best < 0 || g_pal_slot[i].stamp > g_pal_slot[best].stamp)) best = i;
+    if (best < 0) return;
+    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
+    if (SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
+        ID3D11Device_GetImmediateContext(dv, &ctx);
+        D3D11_MAPPED_SUBRESOURCE ms;
+        if (ctx && SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)g_pal_slot[best].st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+            memcpy(g_pal, ms.pData, sizeof(g_pal)); g_pal_ok = 1;
+            ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)g_pal_slot[best].st, 0);
+        }
+        if (ctx) ID3D11DeviceContext_Release(ctx);
+        ID3D11Device_Release(dv);
+    }
+    for (int i = 0; i < PAL_RING; i++) if (g_pal_slot[i].busy == 2 && fr - g_pal_slot[i].stamp >= 2) g_pal_slot[i].busy = 0;
+}
 /* (E29) lee una vez los indices de la pieza grande (copia a una caja "de lectura") y busca sus islas */
 static void isl_scan(IDXGISwapChain *sc)
 {
@@ -2743,6 +2799,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     if (g_bdiag_buf) bone_diag_run(sc);   /* (E43) */
     g_frames_rec = g_frames;
     if (g_rec_on || g_rec_fp) rec_flush(sc);   /* (E46) */
+    if (cfg_palanca) pal_flush(sc);   /* (E50) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -3764,9 +3821,35 @@ static void reload_update(const OvrPose *rp)
         dgun = sqrtf(ex * ex + ey * ey + ez * ez);
     }
     if (buzz > 0) { haptic(1, 3000); buzz--; }
+    {   /* (E50) PALANCA: agarre izq con la mano pegada al arma (cerca del mando der) y tirar hacia atras (hacia la culata) */
+        static int lev = 0; static float p0[3], smax = 0;
+        if (cfg_palanca && g_mag_state != 1 && ri < 16 && rp[ri].valid) {
+            const OvrMat34 *R = &rp[ri].mat;
+            if (!lev && grip && !prev_grip && dgun < cfg_palanca_cm * 0.01f) {
+                lev = 1; smax = 0; p0[0] = L->m[0][3]; p0[1] = L->m[1][3]; p0[2] = L->m[2][3];
+                g_lever_on = 1; haptic(1, 1500); vr_log("PALANCA: cogida (mano a %.0f cm del mando der)", dgun * 100.0f);
+            }
+            if (lev) {
+                if (!grip) {
+                    if (smax >= g_lever_max * 0.75f) { InterlockedExchange(&g_need_rack, 0); InterlockedIncrement(&g_rack_n); haptic(2, 3500); haptic(1, 3500);
+                        vr_log("PALANCA: amartillada (recorrido %.1f cm) -> ya dispara", smax * 100.0f); }
+                    else vr_log("PALANCA: soltada sin llegar al final (%.1f cm de %.1f)", smax * 100.0f, g_lever_max * 100.0f);
+                    lev = 0; g_lever_on = 0; g_lever_s = 0;
+                } else {
+                    /* adelante del mando der = -Z; tirar hacia atras = moverse en +Z */
+                    float bx = R->m[0][2], by = R->m[1][2], bz = R->m[2][2];
+                    float pull = (L->m[0][3] - p0[0]) * bx + (L->m[1][3] - p0[1]) * by + (L->m[2][3] - p0[2]) * bz;
+                    if (pull < 0) pull = 0; if (pull > g_lever_max) pull = g_lever_max;
+                    if (pull >= g_lever_max && smax < g_lever_max) haptic(1, 2500);
+                    if (pull > smax) smax = pull;
+                    g_lever_s = pull;
+                }
+            }
+        } else if (lev) { lev = 0; g_lever_on = 0; g_lever_s = 0; }
+    }
     switch (g_mag_state) {
     case 0:
-        if (grip && !prev_grip && dhip < cfg_cadera_cm * 0.01f) {
+        if (grip && !prev_grip && dhip < cfg_cadera_cm * 0.01f && !g_lever_on) {
             g_mag_state = 1; buzz = 6; vr_log("RECARGA: cargador cogido de la cadera (mano a %.0f cm)", dhip * 100.0f);
         }
         break;
@@ -3855,6 +3938,11 @@ static void load_tick(void)
         ((PFN_Fill)vt[0x12E0 / 8])(w, 9999, 0, 0);
     } else ((PFN_Load)vt[0xEC0 / 8])(w, 1, 0);
     int after = ((PFN_Get)vt[0xEC8 / 8])(w);
+    if (after != before) {   /* (E50) que el juego repinte el cargador (lo que hace despues de recargar) y hay que amartillar */
+        typedef void (*PFN_Upd)(void *, int);
+        ((PFN_Upd)vt[0x10D0 / 8])(w, after); ((PFN_Upd)vt[0x10D8 / 8])(w, after);
+        if (cfg_palanca && before == 0) { int lb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 2, lb, 2)) { InterlockedExchange(&g_need_rack, 1); vr_log("PALANCA: arma vacia recargada -> hay que tirar de la palanca para disparar"); } }
+    }
     InterlockedIncrement(&g_load_n);
     vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)%s", before, after, after == before ? " NO HA CAMBIADO (sin balas en la reserva?)" : "");
 }
@@ -3991,7 +4079,7 @@ static void twohand_apply(const OvrPose *rp, float A[4][4], const float C0i[4][4
     float L[4][4]; int lok = ctrl_rel(rp, 1, &last_li, L);
     int want = 0; float dist = -1.0f;
     if (lok && !g_lhand_hold) {
-        if (cfg_dos_manos == 1) want = g_lgrip != 0 && g_mag_state != 1;   /* (E36) con el cargador en la mano no se agarra el arma */
+        if (cfg_dos_manos == 1) want = g_lgrip != 0 && g_mag_state != 1 && !g_lever_on;   /* (E36) con el cargador en la mano no se agarra el arma */
         else if (cfg_dos_manos == 2) want = 1;
         else if (cfg_dos_manos == 3) {   /* (E32) automatico: mando izq cerca del sitio de agarre (G * C0_izq) */
             float G0[4][4], T[4][4]; mul4(A, C0i, G0); mul4(G0, g_lhand_C0, T);
@@ -4621,7 +4709,11 @@ static void mandos_step(float dt)
     }
     /* derecho: disparar (gatillo), apuntar (agarre), usar (A), recargar (B), saltar/agacharse (stick arriba/abajo),
      * cuchillo (clic del stick), girar (stick a los lados) */
-    out_set(O_FIRE, rok && R.axis[1].x > 0.6f);
+    {   int trig = rok && R.axis[1].x > 0.6f;   /* (E50) sin amartillar despues de meter un cargador, el gatillo no dispara */
+        static int ptrig = 0;
+        if (trig && !ptrig && cfg_palanca && g_need_rack) { InterlockedIncrement(&g_fire_blocked); haptic(2, 800); }
+        out_set(O_FIRE, trig && !(cfg_palanca && g_need_rack));
+        ptrig = trig; }
     out_set(O_AIM, rok && BTN(R, 2));
     out_set(O_USE, rok && BTN(R, 7));
     static int rl_hold = 0;   /* (E36) cargador metido con el gesto: R pulsada unos fotogramas */
@@ -6498,6 +6590,22 @@ static int bone_bind(ID3D11DeviceContext *c, int keep)
             D3D11_BOX bx = { 0, 0, 0, 48, 1, 1 };
             ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, r, 0, 0, (ID3D11Resource *)g_bz, 0, &bx);
         }
+        /* (E50) huesos movidos: su matriz (leida hace 2 fotogramas) + un desplazamiento en sus propios ejes */
+        for (int k = 0; k < t_bmn && g_pal_ok; k++) {
+            UINT row = (UINT)(t_bm[k] + cfg_huesos_desfase); if ((row + 3) * 16 > W || row + 3 > 256) continue;
+            float m[12]; memcpy(m, g_pal + row * 4, sizeof(m));
+            for (int i = 0; i < 3; i++) m[4 * i + 3] += m[4 * i] * t_bmv[k][0] + m[4 * i + 1] * t_bmv[k][1] + m[4 * i + 2] * t_bmv[k][2];
+            if (!g_bmove) {
+                ID3D11Device *dv2 = NULL; ID3D11DeviceContext_GetDevice(c, &dv2);
+                if (dv2) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 48; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+                           ID3D11Buffer *nb = NULL; if (SUCCEEDED(ID3D11Device_CreateBuffer(dv2, &bd, NULL, &nb)) && nb) { if (InterlockedCompareExchangePointer((PVOID *)&g_bmove, nb, NULL) != NULL) ID3D11Buffer_Release(nb); }
+                           ID3D11Device_Release(dv2); }
+            }
+            if (!g_bmove) continue;
+            ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_bmove, 0, NULL, m, 0, 0);
+            D3D11_BOX bx = { 0, 0, 0, 48, 1, 1 };
+            ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, row * 16, 0, 0, (ID3D11Resource *)g_bmove, 0, &bx);
+        }
     } else {
         D3D11_BOX bw = { 0, 0, 0, W, 1, 1 };
         ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, 0, 0, 0, (ID3D11Resource *)g_bz, 0, &bw);
@@ -6552,13 +6660,19 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     }
     /* (E43) la pieza grande del arma: huesos encogidos (cargador fuera, o el que se prueba con Shift+Re Pag) o cargador en la mano */
     if (g_wpn_ic && ic == g_wpn_ic && si == g_wpn_si) {
-        t_bhn = 0; t_bkn = 0; t_blh = 0;
+        t_bhn = 0; t_bkn = 0; t_blh = 0; t_bmn = 0;
+        if (cfg_palanca) {   /* (E50) leer el cajon de huesos (para mover piezas) y la palanca */
+            int lb[2], nl = bone_list(ic, si, 2, lb, 2);
+            if (nl) { pal_capture(c);
+                float sl = g_lever_s;
+                if (sl > 0.0005f) { t_bm[0] = lb[0]; for (int a = 0; a < 3; a++) t_bmv[0][a] = g_lever_ax[a] * sl; t_bmn = 1; } }
+        }
         if (g_bone_try >= 0) t_bh[t_bhn++] = g_bone_try;
         int mb[8], nmb = bone_list(ic, si, 1, mb, 8);
         int out = cfg_recarga_manual && g_out_ic == ic && g_out_si == si;
         if (out) for (int k = 0; k < nmb && t_bhn < 8; k++) t_bh[t_bhn++] = mb[k];
         if (nmb && cfg_recarga_manual && g_mag_state == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; }
-        if (t_bhn || t_blh) { InterlockedIncrement(&g_pc_drawn); return 5; }
+        if (t_bhn || t_blh || t_bmn) { InterlockedIncrement(&g_pc_drawn); return 5; }
     }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
         if (g_hide[i].ic == ic && g_hide[i].si == si) {
@@ -6613,7 +6727,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
         else { lh_unbind(c); TW_DRAW(c, CALL); } } while (0)
 /* (E43) la pieza grande del arma con huesos encogidos (t_bh) y, si toca, el cargador en la mano izq (solo sus huesos, t_bk) */
 #define BONE_DRAW(c, CALL) do {                                                                                   \
-        if (t_bhn && bone_bind(c, 0)) { TW_DRAW(c, CALL); bone_unbind(c); } else TW_DRAW(c, CALL);             \
+        if ((t_bhn || t_bmn) && bone_bind(c, 0)) { TW_DRAW(c, CALL); bone_unbind(c); } else TW_DRAW(c, CALL);  \
         if (t_blh && bone_bind(c, 1)) { LH_WHOLE(c, CALL); bone_unbind(c); InterlockedIncrement(&g_bone_lh); }  \
     } while (0)
 #define MH_D(v) static void STDMETHODCALLTYPE mh_D##v(ID3D11DeviceContext *c, UINT vc, UINT sv) { \
@@ -6832,11 +6946,12 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
+            if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s palanca=%.1fcm amartillar=%ld amartilladas=%ld gatillo_bloqueado=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
                                     (long)InterlockedExchange(&g_mag_hid_n, 0), (long)InterlockedExchange(&g_mag_hand_n, 0),
                                     (long)InterlockedExchange(&g_bone_draws, 0), (long)InterlockedExchange(&g_bone_lh, 0), (long)InterlockedExchange(&g_bone_fail, 0),
-                                    (long)InterlockedExchange(&g_ammo_calls, 0), g_pw ? "si" : "no", (long)InterlockedExchange(&g_lh_n, 0),
+                                    (long)InterlockedExchange(&g_ammo_calls, 0), g_pw ? "si" : "no",
+                                    g_lever_s * 100.0f, (long)g_need_rack, (long)g_rack_n, (long)InterlockedExchange(&g_fire_blocked, 0), (long)InterlockedExchange(&g_lh_n, 0),
                                     (long)InterlockedExchange(&g_lh_draw, 0), (long)InterlockedExchange(&g_lh_nocam, 0), (long)g_isl_state, (long)InterlockedExchange(&g_watch_n, 0));
         }
     }
@@ -7104,7 +7219,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E49: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E50: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
