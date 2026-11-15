@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E53 — Recarga libre: arreglos tras la prueba de la E52 (pruebas)
+
+- Mientras la mano izquierda usa una pieza (cargador, palanca o tapa) ya no se agarra el arma a dos manos: antes, al meter el cargador, el arma se giraba hacia la mano izquierda (de ahí que "bailara"). Para volver a agarrar a dos manos hay que soltar el agarre y apretarlo otra vez.
+- Tras cerrar la tapa (con palmada o bajándola) hay 1,5 s en los que no cuenta la palmada al cargador: en la prueba, el golpe a la tapa echó el cargador recién metido.
+- Al sacar el cargador, la bala de la recámara se queda en el arma (como en un arma de verdad); las del cargador vuelven a la reserva. El log dice cuántas quedan.
+- E52 probada (15/11): 4 recargas completas seguidas (sacar con palmada, cargador de la cadera, meter por el carril, tapa con palmada, palanca a la primera: agarres de la palanca a 3-6 cm de su zona).
+
 ## E52 — Recarga libre más fácil: cada pieza en su sitio
 
 Lo que se vio en la prueba de la E51: costaba atinar, el cargador "bailaba" y se iba hacia un lado, y al ir a la tapa se caía el cargador.
