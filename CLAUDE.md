@@ -128,5 +128,5 @@
 
 ## D-Rey86 / Metro 2033 Redux VR
 - `https://github.com/D-Rey86/Metro2033ReduxVR`. Licencia **GPL-3**, montado sobre 3DMigoto. Sacará una versión grande el fin de semana del 14–15/11/2026.
-- Usar su código está permitido citándole. **Ojo:** si se copia código suyo, nuestro repositorio también tiene que ser GPL-3; ahora mismo no tiene archivo LICENSE. Pregunta al usuario antes de añadirlo.
+- Usar su código está permitido citándole. El repositorio ya es **GPL-3** (archivo `LICENSE`, decidido con el usuario el 16/11), así que se puede copiar código suyo citándole.
 - Discord: canal `new-vr-mods`, hilo "Metro 2033 Redux VR [WIP]". D-Rey está al tanto de nuestro mod y nos anima.

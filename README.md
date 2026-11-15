@@ -74,3 +74,8 @@ Al cambiar el archivo `VERSION` (por ejemplo, de `E5` a `E6`) y subirlo, GitHub 
 - Para saltar los vídeos de inicio, vacía los `.ogv` de logos y del aviso legal (guarda una copia `.bak`).
 - En `user.cfg` (`%LOCALAPPDATA%\4A Games\Metro Last Light Redux\<id>\`), `show_game_ui 0` quita el HUD.
 - **No cambies opciones gráficas con el mod puesto**, porque el juego se cierra (ver problemas conocidos).
+
+## Licencia
+
+Este mod es software libre bajo la licencia **GPL-3.0** (ver `LICENSE`): puedes usarlo, modificarlo y compartirlo, siempre que lo que publiques basado en él también sea GPL-3.0 y con su código.
+Incluye **MinHook** (`src/minhook`, © Tsuda Kageyu, licencia BSD-2), que mantiene su propio aviso de licencia.
