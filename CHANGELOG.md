@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E49 — Arreglo: la recarga de verdad no se usaba con la metralleta
+
+- Prueba de la E48: no cambió nada porque la comprobación "¿es un arma de cargador?" fallaba con la metralleta: es una clase "hija" cuyas funciones de sacar/meter son versiones propias que acaban llamando a las mismas del juego. Por eso seguía con lo de antes (las balas se perdían al expulsar y al meter quedaba a 0).
+- Ahora se llama a sacar (`+0xEC0` con 0) y meter (`+0x12E0`) **por la tabla del arma** (las versiones de su clase), y la comprobación es que su "¿cuántas balas?" sea el que vigila el mod. El log apunta a dónde apunta cada casilla de esa arma (`RECARGA: tabla del arma: …`).
+
 ## E48 — Recarga de verdad con las funciones del propio juego
 
 - El chivato de la E47 lo dejó claro: la recarga del juego hace dos cosas. Al **sacar** el cargador llama a la virtual `+0xEC0` (`0x2C0080`) con 0, que pone el arma a 0 y **devuelve las balas sobrantes a la reserva**. Al **meter** el nuevo llama a la virtual `+0x12E0` (`0x2BAB80`), que **coge balas de la reserva** hasta llenar el cargador y mete también la de la recámara (en la prueba: 0 y luego 30).

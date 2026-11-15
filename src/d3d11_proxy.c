@@ -3808,9 +3808,16 @@ static volatile UINT g_pw_ic = 0, g_pw_si = 0;   /* (E38) a que arma visible cor
  * Solo si la tabla del arma apunta a esas mismas funciones (armas de cargador); si no, como antes. */
 static int wpn_is_mag(void *w, BYTE **base_out)
 {
+    /* (E49) la metralleta es una clase "hija": sus casillas +0xEC0/+0x12E0 apuntan a versiones propias que acaban en las
+     * mismas funciones (p. ej. 0x2E63AD -> jmp 0x2BAB80). Se llama por la tabla; la guardia es que sea de la familia
+     * "con cargador" (su "cuantas balas?" +0xEC8 es 0x2C0A40, la que vigila el mod). */
     BYTE *base = (BYTE *)GetModuleHandleA(NULL); void **vt = *(void ***)w;
     if (base_out) *base_out = base;
-    return vt[0xEC0 / 8] == (void *)(base + 0x2C0080) && vt[0x12E0 / 8] == (void *)(base + 0x2BAB80);
+    static void *logged = NULL;
+    if (logged != (void *)vt) { logged = (void *)vt;
+        vr_log("RECARGA: tabla del arma: +0xEC0 -> metro.exe+0x%llX, +0x12E0 -> metro.exe+0x%llX, +0xEC8 -> metro.exe+0x%llX",
+               (unsigned long long)((BYTE *)vt[0xEC0 / 8] - base), (unsigned long long)((BYTE *)vt[0x12E0 / 8] - base), (unsigned long long)((BYTE *)vt[0xEC8 / 8] - base)); }
+    return vt[0xEC8 / 8] == (void *)(base + 0x2C0A40);
 }
 static void expel_do(void *w)
 {
@@ -7097,7 +7104,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E48: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E49: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
