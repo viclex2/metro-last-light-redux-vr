@@ -2,6 +2,18 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E51 — Recarga libre: el arma tiene estado y la mano hace lo que quiera
+
+- El arma sabe si tiene el cargador puesto, si la tapa está abierta y si hay que amartillar. **Dispara solo si está todo en su sitio** (cargador dentro, tapa cerrada y amartillada); si no, el gatillo vibra y no dispara.
+- Con la mano izquierda cerca del arma (20 cm) y el **agarre**, lo que hagas depende de **hacia dónde muevas la mano** primero:
+  - **hacia la derecha** (por el carril): sacas el cargador deslizándolo; a los 8 cm se suelta y **cae**;
+  - **hacia atrás**: la palanca de carga (como en la E50);
+  - **hacia abajo** con el cargador dentro y la tapa abierta: **bajas la tapa** y encaja (ahí se cargan las balas de la reserva).
+- **Palmadas sin agarre**: un golpe rápido hacia la derecha echa el cargador; un golpe rápido hacia abajo cierra la tapa.
+- **Cargador nuevo**: de la cadera **izquierda o derecha**, con el agarre. Llévalo a la **derecha del arma**: se engancha al carril y lo **deslizas hacia dentro**. Si lo sueltas a medio camino, se cae.
+- **B** sigue sirviendo: toque = echar el cargador (cae); mantener = recarga del juego (lo deja todo listo).
+- Las piezas se mueven con sus huesos: cargador (15) por su carril, tapa (3) y palanca (33), con las direcciones de la grabación del juego. Log `LIBRE:` (cada agarre apunta dónde está tu mano respecto al arma, para afinar). Config `recarga_libre=1`, `palanca_cm=20`.
+
 ## E50 — Palanca de carga con la mano
 
 - **Amartillar de verdad**: con la mano izquierda pegada al arma (a menos de 14 cm del mando derecho), aprieta el **agarre izquierdo** y **tira hacia atrás** (hacia la culata): la palanca de carga (hueso 33) **sigue tu mano** por su raíl, hasta 4,4 cm (el recorrido de la animación del juego). Al soltar vuelve sola. Vibra al llegar al final y al amartillar.
