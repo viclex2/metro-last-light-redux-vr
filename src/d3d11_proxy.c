@@ -225,7 +225,7 @@ static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton d
 static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
 static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vacia: el hueso N esta en las filas N+1..N+3 (log E43) */
 static int cfg_dos_manos_ejes = 1;
-static int cfg_recarga_real = 0;     /* (E47) apagado: la funcion +0xEC0 no recarga un arma vacia (0 -> 0); vuelve con la E48 */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
+static int cfg_recarga_real = 1;     /* (E48) meter: virtual +0x12E0; sacar: +0xEC0(0) */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
 static volatile LONG g_load_req = 0, g_load_n = 0;
 static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
 static int cfg_recarga_ms = 2200;    /* (E36) tiempo que la mano izq va con el arma tras meter el cargador (animacion del juego) */
@@ -3802,15 +3802,27 @@ static int is_player_wpn(void *w)
 }
 /* (E37) expulsar: balas del cargador a 0 (virtual +0x1350 = poner balas cargadas, la que usa cargar partida) */
 static volatile UINT g_pw_ic = 0, g_pw_si = 0;   /* (E38) a que arma visible corresponde g_pw */
+/* (E48) las dos funciones del juego para recargar (encontradas con el chivato de la E47, 15/11):
+ *  - virtual +0xEC0 = 0x2C0080 (arma, 0, 0): SACAR el cargador; las balas que quedaban vuelven a la reserva (asi empieza la recarga)
+ *  - virtual +0x12E0 = 0x2BAB80 (arma, n, 0, 0): METER hasta n balas de la reserva (asi termina la recarga; pone tambien la de la recamara)
+ * Solo si la tabla del arma apunta a esas mismas funciones (armas de cargador); si no, como antes. */
+static int wpn_is_mag(void *w, BYTE **base_out)
+{
+    BYTE *base = (BYTE *)GetModuleHandleA(NULL); void **vt = *(void ***)w;
+    if (base_out) *base_out = base;
+    return vt[0xEC0 / 8] == (void *)(base + 0x2C0080) && vt[0x12E0 / 8] == (void *)(base + 0x2BAB80);
+}
 static void expel_do(void *w)
 {
     if (!InterlockedExchange(&g_expel_req, 0)) return;
     void **vt = *(void ***)w;
-    typedef int (*PFN_Get)(void *); typedef void (*PFN_Set)(void *, int);
+    typedef int (*PFN_Get)(void *); typedef void (*PFN_Set)(void *, int); typedef int (*PFN_Unload)(void *, int, int);
     int before = ((PFN_Get)vt[0xEC8 / 8])(w);
-    ((PFN_Set)vt[0x1350 / 8])(w, 0);
+    if (cfg_recarga_real && wpn_is_mag(w, NULL)) ((PFN_Unload)vt[0xEC0 / 8])(w, 0, 0);   /* (E48) las balas vuelven a la reserva */
+    int mid = ((PFN_Get)vt[0xEC8 / 8])(w);
+    if (mid > 0) ((PFN_Set)vt[0x1350 / 8])(w, 0);
     InterlockedIncrement(&g_expel_n);
-    vr_log("RECARGA: cargador expulsado (tenia %d balas)", before);
+    vr_log("RECARGA: cargador expulsado (tenia %d balas, %s)", before, mid < before && mid == 0 ? "vuelven a la reserva" : "se pierden");
 }
 /* (E37/E38) el gancho de la recarga solo se llama al DISPARAR: aqui se apunta cual es el arma del jugador (y que arma se ve),
  * y si B estaba pedido y aun no se habia hecho, se hace ya (caso: arma recien cambiada) */
@@ -3831,10 +3843,13 @@ static void load_tick(void)
     void **vt = *(void ***)w;
     typedef int (*PFN_Get)(void *); typedef int (*PFN_Load)(void *, int, int);
     int before = ((PFN_Get)vt[0xEC8 / 8])(w);
-    ((PFN_Load)vt[0xEC0 / 8])(w, 1, 0);
+    if (wpn_is_mag(w, NULL)) {   /* (E48) meter balas de la reserva como al final de la recarga del juego */
+        typedef int (*PFN_Fill)(void *, int, int, int);
+        ((PFN_Fill)vt[0x12E0 / 8])(w, 9999, 0, 0);
+    } else ((PFN_Load)vt[0xEC0 / 8])(w, 1, 0);
     int after = ((PFN_Get)vt[0xEC8 / 8])(w);
     InterlockedIncrement(&g_load_n);
-    vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)", before, after);
+    vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)%s", before, after, after == before ? " NO HA CAMBIADO (sin balas en la reserva?)" : "");
 }
 /* (E38) cada paso del jugador (hilo del juego, ~100/s): si B esta pedido y sabemos cual es el arma que se ve, al momento */
 static void expel_tick(void)
@@ -7082,7 +7097,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E47: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E48: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

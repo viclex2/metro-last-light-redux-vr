@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E48 — Recarga de verdad con las funciones del propio juego
+
+- El chivato de la E47 lo dejó claro: la recarga del juego hace dos cosas. Al **sacar** el cargador llama a la virtual `+0xEC0` (`0x2C0080`) con 0, que pone el arma a 0 y **devuelve las balas sobrantes a la reserva**. Al **meter** el nuevo llama a la virtual `+0x12E0` (`0x2BAB80`), que **coge balas de la reserva** hasta llenar el cargador y mete también la de la recámara (en la prueba: 0 y luego 30).
+- Ahora el mod llama a esas mismas dos funciones: **B** saca el cargador (las balas que quedaban vuelven a tu reserva, ya no se pierden) y **meter el cargador con la mano** lo llena desde la reserva, **sin animación**.
+- Solo con armas de cargador (si la tabla del arma apunta a esas funciones); con otras armas, como antes.
+- Log: `RECARGA: cargador expulsado (… vuelven a la reserva)` y `RECARGA DE VERDAD: … balas X -> Y`.
+
 ## E47 — Chivato de la recarga y piezas de la metralleta
 
 - Prueba de la E46: el mod ya sabe cuál es tu arma sin disparar, pero la función que usé para meter las balas (`+0xEC0`) **no recarga un arma vacía** (log: `balas 0 -> 0`); por eso el cargador salía en el arma vacío. Es una función de "repartir munición al coger un arma", no la de recargar. Queda apagada (`recarga_real=0`): al meter el cargador se hace la recarga normal mientras tanto.
