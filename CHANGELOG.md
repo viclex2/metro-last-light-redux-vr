@@ -2,6 +2,16 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E52 — Recarga libre más fácil: cada pieza en su sitio
+
+Lo que se vio en la prueba de la E51: costaba atinar, el cargador "bailaba" y se iba hacia un lado, y al ir a la tapa se caía el cargador.
+
+- **Cada pieza tiene su zona en su sitio real**, calculada con la forma del arma (exportada en la E41) y con dónde cogiste la palanca: palanca a la derecha del arma, junto a tu mano; cargador a la **izquierda** (sale por ese lado); tapa encima del hueco del cargador. Al agarrar se coge **la pieza más cercana**, ya no se adivina por la dirección del movimiento.
+- **Un toquecito de vibración al entrar en una pieza que se puede coger**: así sabes dónde agarrar.
+- **El carril del cargador va hacia la izquierda** (antes lo puse al revés: por eso bailaba y se desplazaba). El cargador sigue tu mano suavizado; al meterlo, a 2,5 cm del final **encaja solo**; al sacarlo, a 5 cm **sale solo** y cae.
+- **Palmadas más difíciles de hacer sin querer**: echar el cargador solo con un golpe rápido hacia la izquierda junto al cargador y nunca en el segundo y medio después de meter uno; cerrar la tapa, golpe hacia abajo junto a la tapa.
+- La palanca se da por buena al 70 % del recorrido; la tapa baja con 2 cm de mano.
+
 ## E51 — Recarga libre: el arma tiene estado y la mano hace lo que quiera
 
 - El arma sabe si tiene el cargador puesto, si la tapa está abierta y si hay que amartillar. **Dispara solo si está todo en su sitio** (cargador dentro, tapa cerrada y amartillada); si no, el gatillo vibra y no dispara.
