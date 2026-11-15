@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E47 — Chivato de la recarga y piezas de la metralleta
+
+- Prueba de la E46: el mod ya sabe cuál es tu arma sin disparar, pero la función que usé para meter las balas (`+0xEC0`) **no recarga un arma vacía** (log: `balas 0 -> 0`); por eso el cargador salía en el arma vacío. Es una función de "repartir munición al coger un arma", no la de recargar. Queda apagada (`recarga_real=0`): al meter el cargador se hace la recarga normal mientras tanto.
+- **Chivato**: al recargar con el juego (mantener B), el log apunta qué función del juego pone las balas y desde dónde (`CHIVATO BALAS: … llamado desde metro.exe+…`). Con eso la E48 hará la recarga sin animación gastando balas del inventario como el juego.
+- **Piezas de la metralleta** (probado por el usuario): tapa del carril = hueso 3, palanca de carga = hueso 33 (se añaden solas a `metro_vr_huesos.txt`).
+- La grabación de la E46 funciona: en la animación del juego el cargador se desplaza ~32 cm y gira ~86° (cae), la tapa baja ~1,3 cm (a los 2,2 s) y la palanca recorre ~4,4 cm (a los 2,7 s).
+
 ## E46 — Grabadora de la animación de recarga
 
 - Para hacer la recarga fiel a la del juego (palma que echa el cargador por el carril, cargador nuevo por la derecha, tapa que baja, palanca de carga), se **graban los movimientos de la animación del propio juego**.

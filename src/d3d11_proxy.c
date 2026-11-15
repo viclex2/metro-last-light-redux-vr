@@ -225,7 +225,7 @@ static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton d
 static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
 static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vacia: el hueso N esta en las filas N+1..N+3 (log E43) */
 static int cfg_dos_manos_ejes = 1;
-static int cfg_recarga_real = 1;     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
+static int cfg_recarga_real = 0;     /* (E47) apagado: la funcion +0xEC0 no recarga un arma vacia (0 -> 0); vuelve con la E48 */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
 static volatile LONG g_load_req = 0, g_load_n = 0;
 static int cfg_recarga_manual = 1;   /* (E36) 1 = sin recarga automatica; cargador desde la cadera izq (agarre) y llevarlo al arma */
 static int cfg_recarga_ms = 2200;    /* (E36) tiempo que la mano izq va con el arma tras meter el cargador (animacion del juego) */
@@ -558,7 +558,7 @@ static void seed_files(const char *tmp)
 {
     static const struct { const char *name; const char *txt; } f[] = {
         { "metro_vr_brazos.txt", SEED_BRAZOS }, { "metro_vr_mano.txt", SEED_MANO }, { "metro_vr_mano_izq.txt", SEED_MANO_IZQ },
-        { "metro_vr_huesos.txt", "16251 862638 1 15\n" } };   /* (E43) metralleta: cargador = hueso 15 */
+        { "metro_vr_huesos.txt", "16251 862638 1 15\n16251 862638 2 33\n16251 862638 3 3\n" } };   /* (E43) metralleta: cargador = hueso 15 */
     for (int i = 0; i < 4; i++) {
         char path[MAX_PATH]; snprintf(path, sizeof(path), "%s%s", tmp, f[i].name);
         HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);   /* solo si no existe */
@@ -2510,6 +2510,15 @@ static void bone_load(void)
     UINT a, b; int c, d;
     while (g_nbone < MAXBONE && fscanf(fp, "%u %u %d %d", &a, &b, &c, &d) == 4) { g_bone[g_nbone].wic = a; g_bone[g_nbone].wsi = b; g_bone[g_nbone].part = c; g_bone[g_nbone].bone = d; g_nbone++; }
     fclose(fp);
+    {   /* (E47) metralleta: palanca de carga = hueso 33 (parte 2), tapa del carril = hueso 3 (parte 3) (probado 15/11) */
+        static const int add[2][2] = { { 2, 33 }, { 3, 3 } };
+        int changed = 0;
+        for (int k = 0; k < 2; k++) {
+            int have = 0; for (int i = 0; i < g_nbone; i++) if (g_bone[i].wic == 16251 && g_bone[i].wsi == 862638 && g_bone[i].part == add[k][0]) have = 1;
+            if (!have && g_nbone < MAXBONE) { g_bone[g_nbone].wic = 16251; g_bone[g_nbone].wsi = 862638; g_bone[g_nbone].part = add[k][0]; g_bone[g_nbone].bone = add[k][1]; g_nbone++; changed = 1; }
+        }
+        if (changed && (fp = fopen(path, "w"))) { for (int i = 0; i < g_nbone; i++) fprintf(fp, "%u %u %d %d\n", g_bone[i].wic, g_bone[i].wsi, g_bone[i].part, g_bone[i].bone); fclose(fp); }
+    }
     vr_log("HUESOS: %d partes de armas con hueso (%s), cajon de huesos en el hueco %d, desfase %d", g_nbone, path, cfg_huesos_hueco, cfg_huesos_desfase);
 }
 static int bone_list(UINT wic, UINT wsi, int part, int *out, int max)
@@ -3879,6 +3888,25 @@ static void ammo_pick(void)
         vr_log("RECARGA: arma activa encontrada sin disparar (%ld preguntas en 0,5 s) = arma visible %u/%u", (long)bn, g_wpn_ic, g_wpn_si);
     }
 }
+/* (E47) CHIVATO: quien pone las balas en tu arma. La virtual +0x1340 (0x2C0A60) es "poner balas (n, a la recamara si/no)".
+ * Al recargar normal (mantener B) el juego la llama desde la funcion que termina la recarga: se apunta desde donde
+ * (metro.exe+...) para llamarla nosotros despues (E48) y que la recarga de verdad gaste balas del inventario como el juego. */
+typedef void *(*PFN_SetAmmo)(void *, int, char);
+static PFN_SetAmmo g_setammo_tramp = NULL;
+static volatile LONG g_setammo_log = 0;
+static void *setammo_hook(void *w, int n, char ch)
+{
+    if (w && w == g_pw && g_setammo_log < 60) {
+        InterlockedIncrement(&g_setammo_log);
+        BYTE *base = (BYTE *)GetModuleHandleA(NULL);
+        BYTE *ra = (BYTE *)__builtin_return_address(0);
+        typedef int (*PFN_Get)(void *); void **vt = *(void ***)w;
+        int before = ((PFN_Get)vt[0xEC8 / 8])(w);
+        vr_log("CHIVATO BALAS: poner %d (recamara=%d) en tu arma (tenia %d), llamado desde metro.exe+0x%llX", n, (int)ch, before,
+               (unsigned long long)(ra >= base && ra < base + 0x2000000 ? (ULONG_PTR)(ra - base) : (ULONG_PTR)ra));
+    }
+    return g_setammo_tramp(w, n, ch);
+}
 static void ar_install(void)
 {
     static int done = 0; if (done) return; done = 1;
@@ -3894,6 +3922,12 @@ static void ar_install(void)
         MH_STATUS st = MH_CreateHook(fn, h[k].hk, h[k].tr);
         if (st == MH_OK) st = MH_EnableHook(fn);
         vr_log("RECARGA: gancho en metro.exe+0x%X -> %s", h[k].rva, MH_StatusToString(st));
+    }
+    {   /* (E47) chivato de "poner balas" */
+        BYTE *fn = base + 0x2C0A60;
+        static const BYTE s3[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57 };
+        if (!memcmp(fn, s3, sizeof(s3))) { MH_STATUS st = MH_CreateHook(fn, (void *)setammo_hook, (void **)&g_setammo_tramp); if (st == MH_OK) st = MH_EnableHook(fn);
+            vr_log("RECARGA: chivato en metro.exe+0x2C0A60 (poner balas) -> %s", MH_StatusToString(st)); }
     }
     {   /* (E45) "cuantas balas?" para saber cual es el arma activa: mov rax,[rcx]; xor r8d,r8d; mov dl,1; jmp [rax+0x1348] */
         BYTE *fn = base + 0x2C0A40;
@@ -7048,7 +7082,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E46: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E47: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
