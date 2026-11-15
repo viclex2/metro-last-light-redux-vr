@@ -225,6 +225,7 @@ static int cfg_dos_manos = 1;        /* (E34) 0 = nunca, 1 = MANTENER el boton d
 static int cfg_huesos_hueco = 8;     /* en que hueco (cajon de vertices) van los huesos */
 static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vacia: el hueso N esta en las filas N+1..N+3 (log E43) */
 static int cfg_dos_manos_ejes = 1;
+static int cfg_libre = 1;            /* (E51) recarga libre */
 static int cfg_palanca = 1;          /* (E50) palanca de carga con la mano izq + sin amartillar no dispara */
 static int cfg_palanca_cm = 20;      /* (E50) la mano izq a menos de esto del mando der = coger la palanca */
 static int cfg_recarga_real = 1;     /* (E48) meter: virtual +0x12E0; sacar: +0xEC0(0) */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
@@ -3805,7 +3806,6 @@ static void haptic(uint32_t role, int us)
  * Todo en ejes del mando derecho (el arma): X derecha, Y arriba, Z hacia atras. Ejes sacados de la grabacion del juego:
  *   carril del cargador hacia fuera = (0.716, -0.18, 0.675) (sale por la derecha, un poco atras y abajo); palanca = +Z; tapa = +Y.
  * Las piezas se mueven con sus huesos (parte 1 cargador, 2 palanca, 3 tapa de metro_vr_huesos.txt). */
-static int cfg_libre = 1;
 static volatile LONG g_ws = 0;
 static volatile float g_mag_off = 0.0f, g_mag_drop = 0.0f, g_cov_off = 0.0f;
 static volatile LONG g_eject_now = 0;   /* B toque: que caiga ya */
