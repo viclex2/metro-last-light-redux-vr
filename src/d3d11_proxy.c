@@ -261,7 +261,7 @@ static volatile LONG g_lw = 1, g_lg = 2, g_mag_hand = 1, g_libre_reset = 0;
 /* (E64) postura de mano puesta por el mod (0 = izq, 1 = der): g_hp_on = hay filas de huesos nuevas; g_hp_gun = esa mano se pinta con la
  * camara del ARMA (va pegada a una pieza del arma, p. ej. la palanca) */
 static volatile LONG g_hp_on[2] = { 0, 0 }, g_hp_gun[2] = { 0, 0 }, g_hp_n[2] = { 0, 0 };
-static int cfg_palanca_mano = 1; static float cfg_pal_izq_dy = 2.5f, cfg_pal_izq_dz = -9.5f;
+static int cfg_palanca_mano = 1; static float cfg_pal_izq_dy = 2.5f, cfg_pal_izq_dz = -13.0f;   /* (E64b) comprobado con el render: dedos justo delante del pomo */
 static float g_apal[1024]; static volatile LONG g_apal_ok = 0;
 static __thread int t_rW = 0;   /* (E62) cargador en la mano DER: se pinta movido con g_rW / g_rT15 */              /* cajon de huesos de los brazos (CPU, 2 fotogramas tarde) */
 static float g_rX[12], g_rT15[12], g_rW[12]; static volatile LONG g_rmag_ok = 0, g_rmag_n = 0, g_rgp_n = 0;
@@ -8209,7 +8209,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E64: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E64b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E64b — Mano izquierda bien puesta en la palanca (pruebas)
+
+- Revisado con imágenes del arma y la mano: con la E64 la mano izquierda se quedaba en la tapa del carril, por delante de la palanca. Ahora los dedos quedan justo delante del pomo de la palanca, enganchándolo (`palanca_izq_dz=-13`).
+- La mano derecha (animación del juego) ya agarraba el pomo bien.
+
 ## E64 — La mano agarra la palanca de verdad (pruebas)
 
 - Al tirar de la palanca, la mano que tira se pinta **pegada a la palanca** y se mueve con ella:
