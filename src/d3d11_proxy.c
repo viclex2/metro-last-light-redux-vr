@@ -248,7 +248,8 @@ static void expel_tick(void);   /* (E37) arma del jugador (la ve el gancho de la
 static volatile LONG g_ar_blocked = 0, g_ar2_blocked = 0, g_mag_ins = 0;   /* (E34) 1 = con las dos manos el arma apunta de la mano der hacia la izq (como Pavlov). 0 = no gira */
 static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo en partida) */
 static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
-static float cfg_dos_manos_cm = 12.0f;   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
+static float cfg_dos_manos_cm = 12.0f;
+static float cfg_carril_cm = 12.0f, cfg_carril_hueco_cm = 6.0f;   /* (E63) cuanto le falta al cargador para entrar del todo cuando se engancha; holgura arriba/abajo/delante/atras */   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
 static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
 /* (E61) ARMA LIBRE: el arma la lleva la mano que la agarra. 0 = la der (como siempre), 1 = la izq (G = mando_izq * K).
  * Con el arma en la izq, la mano der va suelta con su propia camara (juego 2 de las camaras de mano, g_rfree_G). */
@@ -494,6 +495,8 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "dos_manos_cm"))     cfg_dos_manos_cm = fv;    /* (E32) */
     else if (!strcmp(s, "dos_manos_ejes"))   cfg_dos_manos_ejes = v;   /* (E34) */
     else if (!strcmp(s, "arma_libre"))       cfg_arma_libre = v;       /* (E61) */
+    else if (!strcmp(s, "carril_cm"))        cfg_carril_cm = fv;       /* (E63) */
+    else if (!strcmp(s, "carril_hueco_cm"))  cfg_carril_hueco_cm = fv; /* (E63) */
     else if (!strcmp(s, "huesos_hueco"))     cfg_huesos_hueco = v;     /* (E43) */
     else if (!strcmp(s, "huesos_desfase"))   cfg_huesos_desfase = v;   /* (E43) */
     else if (!strcmp(s, "recarga_real"))     cfg_recarga_real = v;     /* (E44) */
@@ -3999,7 +4002,7 @@ static float dot3(const float *a, const float *b) { return a[0] * b[0] + a[1] * 
  * la palanca el usuario en la prueba de la E51 (x=+14, y=-4, z=-2 cm): modelo -> mando = (x, y, -z) + (0.116, -0.036, 0.010).
  * El cargador sale por la IZQUIERDA (modelo -X): su carril hacia fuera es -X del mando. */
 static const float Z_LEVER[3] = { 0.14f, -0.04f, -0.02f }, Z_MAG[3] = { -0.03f, -0.03f, -0.09f }, Z_COVER[3] = { 0.116f, -0.02f, -0.12f };
-static const float MAG_SEAT_X = 0.15f;    /* (E57) x de la mano que empuja el cargador por su punta derecha cuando esta metido */
+static const float MAG_SEAT_X = 0.15f, MAG_RAIL_LEN = 0.18f;   /* (E63) el cargador mide 18 cm (escala real) */    /* (E57) x de la mano que empuja el cargador por su punta derecha cuando esta metido */
 static const float Z_MAG_L[3] = { -0.10f, -0.03f, -0.09f };   /* (E57) punta izquierda del cargador: ahi se le da la palmada */
 static float dist3(const float *a, const float *b) { float d[3] = { a[0] - b[0], a[1] - b[1], a[2] - b[2] }; return sqrtf(dot3(d, d)); }
 static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R, int grip, int prev_grip, float dgun, float dhip_l, float dhip_r)
@@ -4092,15 +4095,18 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     if (g_mag_state == 1) {
         float s = lp[0] - MAG_SEAT_X;
         if (!grip) { g_mag_state = 0; vr_log("LIBRE: cargador nuevo soltado"); if (g_pw) InterlockedExchange(&g_expel_req, 1); }   /* (E55) se devuelven las balas */
-        else if (g_ws == 3 && s > -0.02f && s < 0.22f && fabsf(lp[1] - Z_MAG[1]) < 0.09f && fabsf(lp[2] - Z_MAG[2]) < 0.10f) {
-            g_mag_state = 0; act = 4; s_f = s < 0.22f ? (s > 0 ? s : 0) : 0.22f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(g_lw, 2000);
+        else if (g_ws == 3 && s > -0.02f && s < cfg_carril_cm * 0.01f && fabsf(lp[1] - Z_MAG[1]) < cfg_carril_hueco_cm * 0.01f && fabsf(lp[2] - Z_MAG[2]) < cfg_carril_hueco_cm * 0.012f) {
+            /* (E63) antes se enganchaba con la mano a 37 cm (las medidas iban a la escala del .obj, 1,33 veces grande: el cargador mide
+             * 18 cm, no 24): ahora solo cuando la punta del cargador ya esta en la boca del carril */
+            g_mag_state = 0; act = 4; s_f = s > 0 ? s : 0; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(g_lw, 2000);
+            vr_log("LIBRE: enganchado al carril con la mano en x=%.0f y=%.0f z=%.0f cm (recorrido que falta %.0f cm)", lp[0] * 100, lp[1] * 100, lp[2] * 100, s_f * 100);
         }
     }
     if (act == 4) {
-        float s = lp[0] - MAG_SEAT_X; if (s < 0) s = 0; if (s > 0.24f) s = 0.24f;
+        float s = lp[0] - MAG_SEAT_X; if (s < 0) s = 0; if (s > MAG_RAIL_LEN) s = MAG_RAIL_LEN;
         s_f = s_f * 0.6f + s * 0.4f;
         if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; vr_log("LIBRE: encajado con la mano en x=%.0f y=%.0f z=%.0f cm", lp[0] * 100, lp[1] * 100, lp[2] * 100); ws_set(5, "cargador metido (falta la tapa)"); haptic(g_lw, 3500); act = 0; }
-        else if (!grip || lp[0] - MAG_SEAT_X > 0.27f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
+        else if (!grip || lp[0] - MAG_SEAT_X > MAG_RAIL_LEN + 0.03f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
         else g_mag_off = s_f;
     }
     if (act || g_mag_state == 1) g_libre_busy = 1; else if (!grip) g_libre_busy = 0;
@@ -8060,7 +8066,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E62: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E63: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

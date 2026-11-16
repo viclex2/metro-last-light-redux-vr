@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E63 — El cargador ya no se engancha al carril desde lejos (pruebas)
+
+- Se enganchaba con la mano hasta a 37 cm del arma: las medidas del carril iban a la escala del `.obj`, que sale 1,33 veces grande (el cargador mide 18 cm, no 24). Ahora solo se engancha cuando la punta ya está en la boca del carril (le faltan 12 cm para entrar) y con menos holgura (6 cm).
+- Se puede ajustar en la config: `carril_cm=12` (cuánto le falta al engancharse; menos = hay que acercarlo más) y `carril_hueco_cm=6` (holgura arriba/abajo).
+- Log: `LIBRE: enganchado al carril con la mano en …`.
+
 ## E62 — Recarga con la mano derecha, como en la animación (pruebas)
 
 - Con el arma en la **izquierda** (E61), la que recarga es la **derecha**: coge el cargador nuevo de la cadera con el agarre derecho y la mano lo sujeta con la **postura del propio juego** (la de su animación de recarga, a los 0,72 s), con las balas dentro.
