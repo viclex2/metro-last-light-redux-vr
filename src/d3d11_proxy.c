@@ -257,7 +257,8 @@ static volatile LONG g_holder = 0, g_rgrip = 0, g_rfree_on = 0, g_tw_reset = 0, 
 static float g_hold_K[4][4], g_rfree_G[4][4];
 /* (E62) quien hace la recarga: 1 = la izq (el arma en la der), 2 = la der (el arma en la izq, como en la animacion del juego) */
 static volatile LONG g_lw = 1, g_lg = 2, g_mag_hand = 1, g_libre_reset = 0;
-static float g_apal[1024]; static volatile LONG g_apal_ok = 0;              /* cajon de huesos de los brazos (CPU, 2 fotogramas tarde) */
+static float g_apal[1024]; static volatile LONG g_apal_ok = 0;
+static __thread int t_rW = 0;   /* (E62) cargador en la mano DER: se pinta movido con g_rW / g_rT15 */              /* cajon de huesos de los brazos (CPU, 2 fotogramas tarde) */
 static float g_rX[12], g_rT15[12], g_rW[12]; static volatile LONG g_rmag_ok = 0, g_rmag_n = 0, g_rgp_n = 0;
 static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
 static void isl_default_mask(void)
@@ -7108,7 +7109,6 @@ static void bone_unbind(ID3D11DeviceContext *c)
 }
 /* ===== (E56) foto de las balas ===== */
 static __thread int t_bul = 0; static __thread float t_bul_d[3];
-static __thread int t_rW = 0;   /* (E62) cargador en la mano DER: se pinta movido con g_rW / g_rT15 */
 static void bul_file(char *p, UINT ic, UINT si) { GetTempPathA(MAX_PATH, p); sprintf(p + strlen(p), "metro_vr_balas_%u_%u.bin", ic, si); }
 static int bul_find(UINT ic, UINT si, int make)
 {
