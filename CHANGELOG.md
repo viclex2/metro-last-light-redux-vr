@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E59 — La mano izquierda agarra el cargador (pruebas)
+
+- Con el cargador nuevo en la mano, la mano izquierda (y el reloj) se pinta con la **postura de la propia recarga del juego** en el momento en que Artyom empuja el cargador por el carril (sacada de tu grabación de la E46, a 1,39 s): dedos cerrados sobre el cargador. La mano y el cargador van juntos, pegados a tu mando izquierdo.
+- `agarre_cargador=0` en `metro_vr_config.txt` lo apaga.
+- E58b probada (16/11): el usuario pide como imprescindible que se vea la mano agarrando el cargador.
+
 ## E58b — Cargador en la mano y mano pegada, de otra forma (pruebas)
 
 - E58 probada (16/11): el cargador salía lejos de la palma y al revés; la mano pegada a la palanca se movía bien pero quedaba lejos de la palanca. Causa: supuse que el arma está "recta" respecto al mando, y no lo está (en tu calibración el cañón va casi a lo largo del mando, hacia abajo).
