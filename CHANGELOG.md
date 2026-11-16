@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E62 — Recarga con la mano derecha, como en la animación (pruebas)
+
+- Con el arma en la **izquierda** (E61), la que recarga es la **derecha**: coge el cargador nuevo de la cadera con el agarre derecho y la mano lo sujeta con la **postura del propio juego** (la de su animación de recarga, a los 0,72 s), con las balas dentro.
+- Lo demás va igual que con la izquierda pero con la derecha: palmada al cargador para echarlo, meterlo por el carril de la derecha, bajar la tapa y tirar de la palanca. Las vibraciones van a la mano que trabaja.
+- Si sueltas el agarre izquierdo en mitad de la recarga, el arma vuelve a la derecha y lo que llevaras en la mano se suelta.
+- Con el arma en la derecha, todo sigue como antes (recarga con la izquierda).
+- Log: `LIBRE: ahora recarga la mano DER…`, `cargador nuevo cogido de la cadera … con la mano DER`.
+
 ## E61 — Arma libre: la izquierda también puede llevar el arma (pruebas)
 
 - Con el arma en la derecha, agarra el arma con la izquierda (agarre izq, como siempre) y **pulsa el agarre derecho**: la derecha la suelta y el arma se queda en la **izquierda**, tal cual la tenías. La mano derecha queda libre y sigue a su mando.

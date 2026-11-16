@@ -255,6 +255,10 @@ static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va
 static int cfg_arma_libre = 1;
 static volatile LONG g_holder = 0, g_rgrip = 0, g_rfree_on = 0, g_tw_reset = 0, g_hold_n = 0;
 static float g_hold_K[4][4], g_rfree_G[4][4];
+/* (E62) quien hace la recarga: 1 = la izq (el arma en la der), 2 = la der (el arma en la izq, como en la animacion del juego) */
+static volatile LONG g_lw = 1, g_lg = 2, g_mag_hand = 1, g_libre_reset = 0;
+static float g_apal[1024]; static volatile LONG g_apal_ok = 0;              /* cajon de huesos de los brazos (CPU, 2 fotogramas tarde) */
+static float g_rX[12], g_rT15[12], g_rW[12]; static volatile LONG g_rmag_ok = 0, g_rmag_n = 0, g_rgp_n = 0;
 static unsigned char g_isl_show[MAXISR];          /* 1 = esta isla se pinta */
 static void isl_default_mask(void)
 {
@@ -2795,6 +2799,7 @@ static void pal_capture(ID3D11DeviceContext *c)
     ID3D11Buffer_Release(o);
 }
 static void bul_flush(IDXGISwapChain *sc);
+static void rmag_update(void);   /* (E62) */
 static void pal_flush(IDXGISwapChain *sc)
 {
     LONG fr = g_frames_rec; int best = -1;
@@ -2812,6 +2817,48 @@ static void pal_flush(IDXGISwapChain *sc)
         ID3D11Device_Release(dv);
     }
     for (int i = 0; i < PAL_RING; i++) if (g_pal_slot[i].busy == 2 && fr - g_pal_slot[i].stamp >= 2) g_pal_slot[i].busy = 0;
+}
+/* (E62) lo mismo para los BRAZOS (pieza grande): hace falta la mano der de ahora para ponerle la postura de la animacion */
+static RecSlot g_apal_slot[PAL_RING]; static volatile LONG g_apal_i = 0, g_apal_frame = -1;
+static void apal_capture(ID3D11DeviceContext *c)
+{
+    LONG fr = g_frames_rec;
+    if (InterlockedExchange(&g_apal_frame, fr) == fr) return;
+    ID3D11Buffer *o = NULL;
+    ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    RecSlot *s = &g_apal_slot[InterlockedIncrement(&g_apal_i) % PAL_RING];
+    if (InterlockedCompareExchange(&s->busy, 1, 0) != 0) { ID3D11Buffer_Release(o); return; }
+    if (!s->st) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 4096; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                   ID3D11Device_CreateBuffer(dev, &bd, NULL, &s->st); ID3D11Device_Release(dev); }
+    }
+    if (s->st && d.ByteWidth <= 4096) {
+        D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
+        ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)s->st, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
+        s->stamp = fr; s->busy = 2;
+    } else s->busy = 0;
+    ID3D11Buffer_Release(o);
+}
+static void apal_flush(IDXGISwapChain *sc)
+{
+    LONG fr = g_frames_rec; int best = -1;
+    for (int i = 0; i < PAL_RING; i++) if (g_apal_slot[i].busy == 2 && fr - g_apal_slot[i].stamp >= 2 && (best < 0 || g_apal_slot[i].stamp > g_apal_slot[best].stamp)) best = i;
+    if (best < 0) return;
+    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
+    if (SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
+        ID3D11Device_GetImmediateContext(dv, &ctx);
+        D3D11_MAPPED_SUBRESOURCE ms;
+        if (ctx && SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)g_apal_slot[best].st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+            memcpy(g_apal, ms.pData, sizeof(g_apal)); g_apal_ok = 1;
+            ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)g_apal_slot[best].st, 0);
+        }
+        if (ctx) ID3D11DeviceContext_Release(ctx);
+        ID3D11Device_Release(dv);
+    }
+    for (int i = 0; i < PAL_RING; i++) if (g_apal_slot[i].busy == 2 && fr - g_apal_slot[i].stamp >= 2) g_apal_slot[i].busy = 0;
 }
 /* (E29) lee una vez los indices de la pieza grande (copia a una caja "de lectura") y busca sus islas */
 static void isl_scan(IDXGISwapChain *sc)
@@ -2912,6 +2959,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     g_frames_rec = g_frames;
     if (g_rec_on || g_rec_fp) rec_flush(sc);   /* (E46) */
     if (cfg_palanca) { pal_flush(sc); bul_flush(sc); }   /* (E50) (E56) */
+    apal_flush(sc); rmag_update();   /* (E62) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -3959,6 +4007,14 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     static float lp0[3], lprev[3], smax = 0, s_f = 0, x0 = 0; static ULONGLONG t_prev = 0, t_fall = 0, t_ins = 0;
     static int hover = 0;
     (void)rp; (void)dgun;
+    if (InterlockedExchange(&g_libre_reset, 0)) {   /* (E62) ha cambiado la mano que hace la recarga: se suelta lo que hubiera */
+        if (g_mag_state == 1) { g_mag_state = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); vr_log("LIBRE: cargador de la mano soltado (cambio de mano)"); }
+        if (act == 4) { t_fall = GetTickCount64(); ws_set(2, "cambio de mano: se cae"); if (g_pw) InterlockedExchange(&g_expel_req, 1); }
+        if (act == 2) { g_lever_on = 0; g_lever_s = 0; }
+        if (act == 3) { g_mag_off = 0; ws_set(5, "cambio de mano a medio sacar"); }
+        if (act == 5) g_cov_off = g_cov_max;
+        act = 0; g_snap_on = 0; g_libre_busy = 0;
+    }
     float lp[3], wp[3] = { L->m[0][3], L->m[1][3], L->m[2][3] };
     to_local(R, wp, lp);
     ULONGLONG now = GetTickCount64();
@@ -3968,11 +4024,11 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     float dl = dist3(lp, Z_LEVER), dm = dist3(lp, Z_MAG), dc = dist3(lp, Z_COVER);
     int in_lever = dl < 0.07f, in_mag = (g_ws == 0 || g_ws == 5) && dm < 0.08f, in_cover = g_ws == 5 && dc < 0.07f;
     if (InterlockedExchange(&g_eject_now, 0) && (g_ws == 0 || g_ws == 5)) { g_mag_off = 0.03f; t_fall = now; g_cov_off = g_cov_max; ws_set(2, "B"); }
-    if (grip && !prev_grip) vr_log("LIBRE: agarre izq en x=%.0f y=%.0f z=%.0f cm (palanca a %.0f, cargador a %.0f, tapa a %.0f), estado %ld",
-                                   lp[0] * 100, lp[1] * 100, lp[2] * 100, dl * 100, dm * 100, dc * 100, (long)g_ws);
+    if (grip && !prev_grip) vr_log("LIBRE: agarre (mano %ld) en x=%.0f y=%.0f z=%.0f cm (palanca a %.0f, cargador a %.0f, tapa a %.0f), estado %ld",
+                                   (long)g_lw, lp[0] * 100, lp[1] * 100, lp[2] * 100, dl * 100, dm * 100, dc * 100, (long)g_ws);
     /* toque en el mando al entrar en una pieza que se puede coger: asi se sabe donde agarrar */
     {   int h = act ? 0 : (in_cover ? 3 : in_lever ? 1 : (in_mag && g_mag_state == 0) ? 2 : 0);
-        if (h && h != hover) haptic(1, 900);
+        if (h && h != hover) haptic(g_lw, 900);
         hover = h; }
     if (g_ws == 2) {   /* cayendo */
         float t = (now - t_fall) / 1000.0f;
@@ -3982,9 +4038,9 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     /* palmadas (sin agarre): echar el cargador dandole en su punta izquierda hacia la derecha, cerrar la tapa hacia abajo */
     if (!grip && act == 0 && now - t_ins > 1500) {
         if (g_ws == 0 && dist3(lp, Z_MAG_L) < 0.09f && vel[0] > 1.0f) {
-            InterlockedExchange(&g_expel_req, 1); g_cov_off = g_cov_max; g_mag_off = 0.03f; t_fall = now; ws_set(2, "palmada al cargador"); haptic(1, 3000); haptic(2, 2000);
+            InterlockedExchange(&g_expel_req, 1); g_cov_off = g_cov_max; g_mag_off = 0.03f; t_fall = now; ws_set(2, "palmada al cargador"); haptic(g_lw, 3000); haptic(g_lg, 2000);
         } else if (g_ws == 5 && dc < 0.09f && vel[1] < -0.8f) {
-            g_cov_off = 0; t_ins = now; ws_set(0, "palmada a la tapa"); haptic(1, 3000); InterlockedExchange(&g_load_req, g_pw ? 1 : 0); if (!g_pw) InterlockedExchange(&g_reload_req, 1);
+            g_cov_off = 0; t_ins = now; ws_set(0, "palmada a la tapa"); haptic(g_lw, 3000); InterlockedExchange(&g_load_req, g_pw ? 1 : 0); if (!g_pw) InterlockedExchange(&g_reload_req, 1);
         }
     }
     /* agarrar: la pieza mas cercana de las que estan a mano */
@@ -3994,9 +4050,9 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         if (in_lever && dl < best) { best = dl; which = 2; }
         if (in_mag && dm < best) { best = dm; which = 3; }
         memcpy(lp0, lp, sizeof(lp0));
-        if (which == 2) { act = 2; smax = 0; g_lever_on = 1; haptic(1, 1500); vr_log("PALANCA: cogida"); }
-        else if (which == 3) { act = 3; x0 = lp[0]; g_cov_off = g_cov_max; ws_set(1, "sacando el cargador"); haptic(1, 1500); }
-        else if (which == 5) { act = 5; haptic(1, 1500); }
+        if (which == 2) { act = 2; smax = 0; g_lever_on = 1; haptic(g_lw, 1500); vr_log("PALANCA: cogida"); }
+        else if (which == 3) { act = 3; x0 = lp[0]; g_cov_off = g_cov_max; ws_set(1, "sacando el cargador"); haptic(g_lw, 1500); }
+        else if (which == 5) { act = 5; haptic(g_lw, 1500); }
     }
     switch (act) {
     case 2: {   /* palanca: hacia atras (+Z); al 70 % se completa sola */
@@ -4004,45 +4060,45 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
             if (smax >= g_lever_max * 0.7f) {
                 if (g_ws == 0) { InterlockedExchange(&g_need_rack, 0); vr_log("PALANCA: amartillada -> ya dispara"); }
                 else vr_log("PALANCA: amartillada sin cargador puesto (no entra bala)");
-                InterlockedIncrement(&g_rack_n); haptic(2, 3500); haptic(1, 3500);
+                InterlockedIncrement(&g_rack_n); haptic(g_lg, 3500); haptic(g_lw, 3500);
             }
             act = 0; g_lever_on = 0; g_lever_s = 0; break;
         }
         float pull = lp[2] - lp0[2]; if (pull < 0) pull = 0; if (pull > g_lever_max) pull = g_lever_max;
-        if (pull >= g_lever_max * 0.7f && smax < g_lever_max * 0.7f) haptic(1, 2500);
+        if (pull >= g_lever_max * 0.7f && smax < g_lever_max * 0.7f) haptic(g_lw, 2500);
         if (pull > smax) smax = pull;
         g_lever_s = pull;
         break; }
     case 3: {   /* sacar el cargador hacia la derecha; a 5 cm sale solo y cae */
         float s = lp[0] - x0; if (s < 0) s = 0; if (s > 0.12f) s = 0.12f;
         g_mag_off = g_mag_off * 0.5f + s * 0.5f;
-        if (s >= 0.05f) { InterlockedExchange(&g_expel_req, 1); t_fall = now; ws_set(2, "sacado del carril"); haptic(1, 3000); act = 0; break; }
+        if (s >= 0.05f) { InterlockedExchange(&g_expel_req, 1); t_fall = now; ws_set(2, "sacado del carril"); haptic(g_lw, 3000); act = 0; break; }
         if (!grip) { g_mag_off = 0; ws_set(5, "soltado a medio sacar"); act = 0; }
         break; }
     case 5: {   /* bajar la tapa: 2 cm de mano hacia abajo */
         float down = lp0[1] - lp[1]; if (down < 0) down = 0;
         float c = g_cov_max * (1.0f - down / 0.02f); if (c < 0) c = 0;
         g_cov_off = c;
-        if (c <= 0) { t_ins = now; ws_set(0, "tapa cerrada"); haptic(1, 3000); InterlockedExchange(&g_load_req, g_pw ? 1 : 0); if (!g_pw) InterlockedExchange(&g_reload_req, 1); act = 0; break; }
+        if (c <= 0) { t_ins = now; ws_set(0, "tapa cerrada"); haptic(g_lw, 3000); InterlockedExchange(&g_load_req, g_pw ? 1 : 0); if (!g_pw) InterlockedExchange(&g_reload_req, 1); act = 0; break; }
         if (!grip) { g_cov_off = g_cov_max; act = 0; }
         break; }
     }
     /* cargador nuevo de cualquier cadera; se engancha al carril si la mano esta a la izquierda del arma, a su altura */
     if (g_mag_state == 0 && grip && !prev_grip && act == 0 && g_ws == 3 && (dhip_l < cfg_cadera_cm * 0.01f || dhip_r < cfg_cadera_cm * 0.01f)) {
-        g_mag_state = 1; haptic(1, 3000); vr_log("LIBRE: cargador nuevo cogido de la cadera %s", dhip_l < dhip_r ? "izquierda" : "derecha");
+        g_mag_state = 1; g_mag_hand = g_lw; haptic(g_lw, 3000); vr_log("LIBRE: cargador nuevo cogido de la cadera %s con la mano %s", dhip_l < dhip_r ? "izquierda" : "derecha", g_lw == 2 ? "DER" : "izq");
         if (g_pw) InterlockedExchange(&g_load_req, 2);   /* (E55) el juego lo llena ya: asi se ve con balas en la mano */
     }
     if (g_mag_state == 1) {
         float s = lp[0] - MAG_SEAT_X;
         if (!grip) { g_mag_state = 0; vr_log("LIBRE: cargador nuevo soltado"); if (g_pw) InterlockedExchange(&g_expel_req, 1); }   /* (E55) se devuelven las balas */
         else if (g_ws == 3 && s > -0.02f && s < 0.22f && fabsf(lp[1] - Z_MAG[1]) < 0.09f && fabsf(lp[2] - Z_MAG[2]) < 0.10f) {
-            g_mag_state = 0; act = 4; s_f = s < 0.22f ? (s > 0 ? s : 0) : 0.22f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(1, 2000);
+            g_mag_state = 0; act = 4; s_f = s < 0.22f ? (s > 0 ? s : 0) : 0.22f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(g_lw, 2000);
         }
     }
     if (act == 4) {
         float s = lp[0] - MAG_SEAT_X; if (s < 0) s = 0; if (s > 0.24f) s = 0.24f;
         s_f = s_f * 0.6f + s * 0.4f;
-        if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; vr_log("LIBRE: encajado con la mano en x=%.0f y=%.0f z=%.0f cm", lp[0] * 100, lp[1] * 100, lp[2] * 100); ws_set(5, "cargador metido (falta la tapa)"); haptic(1, 3500); act = 0; }
+        if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; vr_log("LIBRE: encajado con la mano en x=%.0f y=%.0f z=%.0f cm", lp[0] * 100, lp[1] * 100, lp[2] * 100); ws_set(5, "cargador metido (falta la tapa)"); haptic(g_lw, 3500); act = 0; }
         else if (!grip || lp[0] - MAG_SEAT_X > 0.27f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
         else g_mag_off = s_f;
     }
@@ -4053,6 +4109,7 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     else if (act == 5) { g_snap_pt[0] = lp0[0]; g_snap_pt[1] = lp0[1] - (g_cov_max - g_cov_off) * 1.5f; g_snap_pt[2] = lp0[2]; g_snap_on = 1; }
     else if (act == 3) { g_snap_pt[0] = lp0[0] + g_mag_off; g_snap_pt[1] = lp0[1]; g_snap_pt[2] = lp0[2]; g_snap_on = 1; }
     else g_snap_on = 0;
+    if (g_lw != 1) g_snap_on = 0;   /* (E62) la mano pegada es solo para la izq (la der se hara despues) */
 }
 static void reload_update(const OvrPose *rp)
 {
@@ -4078,7 +4135,30 @@ static void reload_update(const OvrPose *rp)
         dgun = sqrtf(ex * ex + ey * ey + ez * ez);
     }
     if (buzz > 0) { haptic(1, 3000); buzz--; }
-    if (g_holder == 1) { prev_grip = grip; return; }   /* (E61) el arma va en la izq: su agarre es para sujetarla (la recarga con la der llega en la E63) */
+    {   /* (E62) quien recarga: con el arma en la izq, la DER (como en la animacion); si no, la izq */
+        static LONG last_w = 1;
+        LONG w = g_holder == 1 ? 2 : 1;
+        if (w != last_w) { last_w = w; g_lw = w; g_lg = 3 - w; InterlockedExchange(&g_libre_reset, 1); prev_grip = 0;
+                           vr_log("LIBRE: ahora recarga la mano %s", w == 2 ? "DER (el arma la lleva la izq)" : "izq"); }
+    }
+    if (g_holder == 1) {
+        static int prev_rg = 0;
+        int rg = g_rgrip != 0;
+        if (!(libre_has() && ri < 16 && rp[ri].valid && g_hand_ok && g_hand_C0ok)) { prev_rg = rg; prev_grip = grip; return; }
+        /* el "mando der virtual": donde estaria tu mando der si sujetara el arma (G * C0 der), pasado a SteamVR */
+        float Av[4][4]; mul4(g_hand_G, (const float (*)[4])g_hand_C0cur, Av);
+        OvrMat34 V; float Rr[3][3], tr[3] = { Av[0][3], Av[1][3], -Av[2][3] };
+        for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) Rr[a][b] = Av[a][b] * ((a == 2) != (b == 2) ? -1.0f : 1.0f);
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) V.m[a][b] = H->m[a][0] * Rr[0][b] + H->m[a][1] * Rr[1][b] + H->m[a][2] * Rr[2][b];
+            V.m[a][3] = H->m[a][3] + H->m[a][0] * tr[0] + H->m[a][1] * tr[1] + H->m[a][2] * tr[2];
+        }
+        const OvrMat34 *Rw = &rp[ri].mat;
+        float hipl[3] = { H->m[0][3] - rx * 0.18f, H->m[1][3] - 0.55f, H->m[2][3] - rz * 0.18f }, hipr[3] = { H->m[0][3] + rx * 0.18f, H->m[1][3] - 0.55f, H->m[2][3] + rz * 0.18f };
+        float a1[3] = { Rw->m[0][3] - hipl[0], Rw->m[1][3] - hipl[1], Rw->m[2][3] - hipl[2] }, a2[3] = { Rw->m[0][3] - hipr[0], Rw->m[1][3] - hipr[1], Rw->m[2][3] - hipr[2] };
+        libre_update(rp, Rw, &V, rg, prev_rg, dgun, sqrtf(a1[0] * a1[0] + a1[1] * a1[1] + a1[2] * a1[2]), sqrtf(a2[0] * a2[0] + a2[1] * a2[1] + a2[2] * a2[2]));
+        prev_rg = rg; prev_grip = grip; return;
+    }
     if (libre_has() && ri < 16 && rp[ri].valid) {   /* (E51) recarga libre */
         float hipr[3] = { H->m[0][3] + rx * 0.18f, H->m[1][3] - 0.55f, H->m[2][3] + rz * 0.18f };
         float ex = L->m[0][3] - hipr[0], ey = L->m[1][3] - hipr[1], ez = L->m[2][3] - hipr[2];
@@ -4467,7 +4547,7 @@ static void holder_update(const OvrPose *rp, const float Araw[4][4], const float
         int back = 0; const char *why = "";
         if (!lok) { back = 1; why = "no se ve el mando izq"; }
         else if (!g_lgrip) { back = 1; why = "has soltado el agarre izq: vuelve a la der"; }
-        else if (rg_edge) {
+        else if (rg_edge && !g_libre_busy && g_mag_state == 0) {   /* (E62) si el agarre der ha cogido una pieza del arma (recarga), no cuenta */
             float Gl[4][4], P[4][4]; mul4(L, g_hold_K, Gl); mul4(Gl, C0, P);   /* donde iria el mando der si cogiera la empunadura */
             float dx = Araw[0][3] - P[0][3], dy = Araw[1][3] - P[1][3], dz = Araw[2][3] - P[2][3], dd = sqrtf(dx * dx + dy * dy + dz * dz);
             if (dd < cfg_dos_manos_cm * 0.015f) { back = 1; why = "la der ha cogido la empunadura"; }
@@ -7004,6 +7084,16 @@ static int bone_bind(ID3D11DeviceContext *c, int keep)
             D3D11_BOX bx = { 0, 0, 0, 48, 1, 1 };
             ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, row * 16, 0, 0, (ID3D11Resource *)g_bmove, 0, &bx);
         }
+        /* (E62) cargador en la mano der: su matriz es la de la animacion (T15), llevada a la mano */
+        if (t_rW && g_rmag_ok && g_bmove && t_bkn) {
+            UINT row = (UINT)(t_bk[0] + cfg_huesos_desfase);
+            if ((row + 3) * 16 <= W) {
+                float m[12]; memcpy(m, g_rT15, sizeof(m));
+                ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_bmove, 0, NULL, m, 0, 0);
+                D3D11_BOX bx = { 0, 0, 0, 48, 1, 1 };
+                ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, row * 16, 0, 0, (ID3D11Resource *)g_bmove, 0, &bx);
+            }
+        }
     }
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, slot, 1, &cp);
     t_borig = o;
@@ -7018,6 +7108,7 @@ static void bone_unbind(ID3D11DeviceContext *c)
 }
 /* ===== (E56) foto de las balas ===== */
 static __thread int t_bul = 0; static __thread float t_bul_d[3];
+static __thread int t_rW = 0;   /* (E62) cargador en la mano DER: se pinta movido con g_rW / g_rT15 */
 static void bul_file(char *p, UINT ic, UINT si) { GetTempPathA(MAX_PATH, p); sprintf(p + strlen(p), "metro_vr_balas_%u_%u.bin", ic, si); }
 static int bul_find(UINT ic, UINT si, int make)
 {
@@ -7107,6 +7198,12 @@ static int bul_bind(ID3D11DeviceContext *c)
     float AR[3][3], At[3]; static __thread float *tmp = NULL; if (!tmp) tmp = (float *)malloc(BULMAX * 4); if (!tmp) { ID3D11Buffer_Release(o); return 0; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) AR[i][j] = n[4 * i] * f[4 * j] + n[4 * i + 1] * f[4 * j + 1] + n[4 * i + 2] * f[4 * j + 2];
     for (int i = 0; i < 3; i++) At[i] = n[4 * i + 3] - (AR[i][0] * f[3] + AR[i][1] * f[7] + AR[i][2] * f[11]) + t_bul_d[i];
+    if (t_rW && g_rmag_ok) {   /* (E62) en la mano der: ademas, W (del cargador lleno de ahora a la mano) */
+        float w[12], A2[3][3], t2[3]; memcpy(w, g_rW, sizeof(w));
+        for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) A2[i][j] = w[4 * i] * AR[0][j] + w[4 * i + 1] * AR[1][j] + w[4 * i + 2] * AR[2][j];
+                                      t2[i] = w[4 * i] * At[0] + w[4 * i + 1] * At[1] + w[4 * i + 2] * At[2] + w[4 * i + 3]; }
+        memcpy(AR, A2, sizeof(AR)); memcpy(At, t2, sizeof(At));
+    }
     memcpy(tmp, b->d, W);
     UINT rows = W / 16;
     for (UINT r = (UINT)cfg_huesos_desfase; r + 3 <= rows; r += 3) {
@@ -7133,57 +7230,57 @@ static void bul_unbind(ID3D11DeviceContext *c)
  * los 46 huesos de los brazos y el hueso 15 (cargador) del arma en ese instante. Con el cargador en la mano, la isla de la mano
  * izq (y el reloj) se pinta con la camara del cargador (juego 1) y con esos huesos, movidos lo mismo que se ha movido el cargador:
  * fila = X * fila_grabada, X = M15(ahora, lleno) * M15(grabado)^-1. Asi la mano queda agarrandolo como en la animacion. */
-/* grabacion E46 n.8: arma t=1390, brazos t=1390 */
-static const float GRIP_M15[12] = { 0.99510f, -0.05780f, 0.08020f, 0.26190f, 0.03540f, 0.96590f, 0.25650f, -0.13810f, -0.09230f, -0.25240f, 0.96320f, 0.37620f };
+/* grabacion E46 n.8: arma t=718, brazos t=718 (la mano DER sujeta el cargador nuevo, a 3,6 cm de la palma) */
+static const float GRIP_M15[12] = { 0.74050f, 0.40730f, 0.53450f, 0.38420f, -0.43560f, 0.89660f, -0.07970f, -0.23160f, -0.51170f, -0.17380f, 0.84140f, 0.35160f };
 #define GRIP_NB 46
 static const unsigned char GRIP_K[GRIP_NB] = { 0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120, 123, 126, 129, 132, 135 };
 static const float GRIP_ARM[GRIP_NB][12] = {
     { 0.68190f, -0.37950f, 0.62530f, -0.01080f, 0.51190f, 0.85820f, -0.03730f, -0.09260f, -0.52250f, 0.34550f, 0.77950f, -0.01780f },
-    { -0.75380f, -0.13060f, -0.64400f, -0.53380f, 0.00070f, -0.98020f, 0.19790f, -0.20770f, -0.65710f, 0.14870f, 0.73900f, -0.00120f },
-    { -0.75380f, -0.13060f, -0.64400f, -0.53380f, 0.00070f, -0.98020f, 0.19790f, -0.20770f, -0.65710f, 0.14870f, 0.73900f, -0.00120f },
-    { -0.42880f, 0.10000f, -0.89780f, -0.21850f, -0.29560f, -0.95470f, 0.03490f, -0.44920f, -0.85370f, 0.28030f, 0.43890f, -0.13910f },
-    { -0.38390f, -0.38990f, -0.83700f, -0.20210f, -0.66460f, -0.51260f, 0.54360f, -0.78320f, -0.64100f, 0.76500f, -0.06230f, 0.04770f },
-    { -0.60680f, 0.05660f, -0.79290f, -0.41040f, -0.63410f, 0.56690f, 0.52580f, -0.74630f, 0.47930f, 0.82180f, -0.30810f, 1.11190f },
-    { -0.48620f, 0.29730f, -0.82170f, -0.28690f, -0.16210f, 0.89340f, 0.41910f, -0.27870f, 0.85870f, 0.33690f, -0.38620f, 1.46830f },
-    { -0.53550f, 0.00320f, -0.84460f, -0.34560f, -0.80740f, -0.29520f, 0.51080f, -0.91790f, -0.24770f, 0.95540f, 0.16070f, 0.38550f },
-    { -0.33390f, 0.37600f, -0.86440f, -0.15470f, -0.71760f, 0.49320f, 0.49170f, -0.83160f, 0.61120f, 0.78450f, 0.10510f, 1.19510f },
-    { -0.00730f, 0.45980f, -0.88800f, 0.16410f, -0.20950f, 0.86760f, 0.45100f, -0.32950f, 0.97780f, 0.18930f, 0.09000f, 1.53600f },
-    { -0.67610f, 0.23520f, -0.69830f, -0.47840f, -0.72420f, -0.38710f, 0.57070f, -0.84490f, -0.13600f, 0.89150f, 0.43200f, 0.48240f },
-    { -0.33450f, 0.60850f, -0.71970f, -0.15740f, -0.80910f, 0.20610f, 0.55030f, -0.92220f, 0.48320f, 0.76630f, 0.42340f, 1.06130f },
-    { 0.16920f, 0.65950f, -0.73240f, 0.32700f, -0.47740f, 0.70500f, 0.52450f, -0.59160f, 0.86220f, 0.26100f, 0.43410f, 1.41230f },
-    { -0.47230f, 0.43970f, -0.76390f, -0.29480f, -0.87120f, -0.10090f, 0.48050f, -0.97990f, 0.13420f, 0.89250f, 0.43070f, 0.72770f },
-    { -0.15150f, 0.63100f, -0.76080f, 0.00630f, -0.85880f, 0.29710f, 0.41740f, -0.96530f, 0.48940f, 0.71660f, 0.49690f, 1.05820f },
-    { 0.21970f, 0.65290f, -0.72490f, 0.36020f, -0.66060f, 0.64630f, 0.38190f, -0.76850f, 0.71790f, 0.39500f, 0.57320f, 1.26830f },
-    { -0.63930f, -0.73730f, 0.21830f, -0.44780f, -0.42850f, 0.57730f, 0.69500f, -0.54910f, -0.63850f, 0.35080f, -0.68500f, 0.02460f },
-    { -0.70180f, -0.67850f, -0.21690f, -0.49670f, -0.37600f, 0.09420f, 0.92180f, -0.51110f, -0.60500f, 0.72850f, -0.32130f, 0.05380f },
-    { -0.75890f, -0.37310f, -0.53370f, -0.53960f, -0.36640f, -0.43290f, 0.82360f, -0.50720f, -0.53840f, 0.82060f, 0.19180f, 0.10710f },
-    { -0.67180f, -0.34970f, -0.65300f, -0.46980f, -0.27030f, -0.70500f, 0.65560f, -0.43240f, -0.68960f, 0.61700f, 0.37910f, -0.01540f },
-    { -0.10290f, -0.70490f, 0.70180f, -0.15000f, 0.40340f, 0.61540f, 0.67720f, -0.11540f, -0.90920f, 0.35280f, 0.22100f, -0.08340f },
-    { -0.09450f, -0.74780f, 0.65720f, -0.14700f, 0.40030f, 0.57590f, 0.71280f, -0.11550f, -0.91150f, 0.33040f, 0.24490f, -0.08360f },
-    { -0.09840f, -0.72810f, 0.67840f, -0.14840f, 0.40170f, 0.59460f, 0.69640f, -0.11550f, -0.91050f, 0.34110f, 0.23400f, -0.08350f },
+    { -0.69770f, 0.05320f, -0.71440f, -0.48940f, -0.04120f, -0.99860f, -0.03410f, -0.27560f, -0.71520f, 0.00560f, 0.69890f, -0.05460f },
+    { -0.69770f, 0.05320f, -0.71440f, -0.48940f, -0.04120f, -0.99860f, -0.03410f, -0.27560f, -0.71520f, 0.00560f, 0.69890f, -0.05460f },
+    { -0.30990f, 0.26580f, -0.91280f, -0.12540f, -0.24070f, -0.95080f, -0.19510f, -0.43230f, -0.91980f, 0.15930f, 0.35860f, -0.19490f },
+    { -0.20740f, -0.32940f, -0.92110f, -0.05600f, -0.62240f, -0.68200f, 0.38400f, -0.78130f, -0.75470f, 0.65300f, -0.06350f, -0.05320f },
+    { -0.50060f, -0.10520f, -0.85930f, -0.33270f, -0.79800f, 0.44090f, 0.41090f, -0.93970f, 0.33570f, 0.89140f, -0.30470f, 0.98400f },
+    { -0.49750f, 0.09690f, -0.86200f, -0.32440f, -0.37270f, 0.87350f, 0.31330f, -0.51480f, 0.78340f, 0.47710f, -0.39840f, 1.40850f },
+    { -0.35230f, 0.00160f, -0.93590f, -0.19120f, -0.84670f, -0.42650f, 0.31810f, -0.98810f, -0.39870f, 0.90450f, 0.15160f, 0.24970f },
+    { -0.22530f, 0.22410f, -0.94820f, -0.07090f, -0.84840f, 0.43330f, 0.30400f, -0.98790f, 0.47890f, 0.87300f, 0.09250f, 1.07740f },
+    { -0.02670f, 0.27020f, -0.96240f, 0.12280f, -0.34840f, 0.89990f, 0.26230f, -0.49150f, 0.93700f, 0.34230f, 0.07010f, 1.50840f },
+    { -0.51300f, 0.25050f, -0.82100f, -0.34130f, -0.80800f, -0.46390f, 0.36330f, -0.95570f, -0.28990f, 0.84970f, 0.44040f, 0.34340f },
+    { -0.20030f, 0.50850f, -0.83740f, -0.04770f, -0.91870f, 0.19950f, 0.34090f, -1.05690f, 0.34040f, 0.83760f, 0.42720f, 0.93300f },
+    { 0.20510f, 0.49280f, -0.84560f, 0.34070f, -0.55950f, 0.76790f, 0.31180f, -0.69820f, 0.80300f, 0.40920f, 0.43330f, 1.36610f },
+    { -0.30170f, 0.39510f, -0.86770f, -0.15050f, -0.95310f, -0.14840f, 0.26380f, -1.08920f, -0.02450f, 0.90660f, 0.42130f, 0.58390f },
+    { -0.01190f, 0.51600f, -0.85650f, 0.12110f, -0.93440f, 0.29940f, 0.19330f, -1.06830f, 0.35620f, 0.80260f, 0.47860f, 0.93870f },
+    { 0.29900f, 0.48940f, -0.81920f, 0.41650f, -0.70710f, 0.69010f, 0.15420f, -0.84290f, 0.64080f, 0.53320f, 0.55240f, 1.20340f },
+    { -0.65470f, -0.72060f, 0.22830f, -0.46040f, -0.37180f, 0.56990f, 0.73280f, -0.53920f, -0.65820f, 0.39480f, -0.64100f, 0.00180f },
+    { -0.72540f, -0.63770f, -0.25900f, -0.51570f, -0.31580f, -0.02590f, 0.94850f, -0.49940f, -0.61150f, 0.76990f, -0.18260f, 0.04130f },
+    { -0.78500f, -0.24920f, -0.56720f, -0.55990f, -0.32170f, -0.61850f, 0.71690f, -0.50820f, -0.52950f, 0.74520f, 0.40540f, 0.10590f },
+    { -0.56280f, -0.24360f, -0.78990f, -0.38230f, -0.28480f, -0.83990f, 0.46190f, -0.48010f, -0.77600f, 0.48500f, 0.40340f, -0.09270f },
+    { -0.09210f, -0.68680f, 0.72100f, -0.14850f, 0.47220f, 0.60730f, 0.63890f, -0.10210f, -0.87670f, 0.39930f, 0.26840f, -0.07890f },
+    { -0.08700f, -0.71420f, 0.69450f, -0.14670f, 0.47020f, 0.58510f, 0.66070f, -0.10220f, -0.87820f, 0.38400f, 0.28490f, -0.07900f },
+    { -0.08940f, -0.70150f, 0.70700f, -0.14760f, 0.47120f, 0.59560f, 0.65050f, -0.10210f, -0.87750f, 0.39130f, 0.27730f, -0.07890f },
     { 0.31630f, 0.07480f, 0.94570f, 0.02320f, -0.19060f, 0.98160f, -0.01390f, -0.10350f, -0.92930f, -0.17580f, 0.32470f, 0.03160f },
-    { 0.14570f, 0.97990f, -0.13600f, 0.19890f, -0.03030f, 0.14180f, 0.98940f, -0.11270f, 0.98890f, -0.14010f, 0.05040f, -0.41960f },
-    { 0.28210f, 0.95440f, -0.09710f, 0.08000f, 0.04440f, 0.08810f, 0.99510f, -0.17870f, 0.95830f, -0.28510f, -0.01750f, -0.39630f },
-    { 0.12270f, 0.98840f, -0.08920f, 0.21920f, 0.26600f, 0.05390f, 0.96250f, -0.36970f, 0.95610f, -0.14180f, -0.25630f, -0.36660f },
-    { -0.07000f, 0.99610f, -0.05350f, 0.35950f, 0.02820f, 0.05550f, 0.99810f, -0.15140f, 0.99710f, 0.06830f, -0.03200f, -0.42570f },
-    { -0.43820f, 0.88900f, -0.13290f, 0.70830f, -0.00680f, 0.14460f, 0.98950f, -0.11740f, 0.89890f, 0.43450f, -0.05730f, -0.32960f },
-    { -0.64260f, 0.74560f, -0.17620f, 0.90340f, -0.04630f, 0.19170f, 0.98040f, -0.07780f, 0.76480f, 0.63820f, -0.08870f, -0.19390f },
-    { -0.44440f, 0.89500f, -0.03790f, 0.69460f, 0.13650f, 0.10950f, 0.98460f, -0.24880f, 0.88530f, 0.43240f, -0.17080f, -0.32220f },
-    { -0.69970f, 0.71130f, -0.06750f, 0.93530f, 0.09160f, 0.18300f, 0.97880f, -0.20630f, 0.70860f, 0.67870f, -0.19320f, -0.15480f },
-    { -0.87610f, 0.48210f, -0.00210f, 1.09870f, 0.15180f, 0.28010f, 0.94790f, -0.26130f, 0.45750f, 0.83010f, -0.31860f, 0.09540f },
-    { -0.61220f, 0.79060f, -0.00790f, 0.84400f, 0.18790f, 0.15520f, 0.96980f, -0.29540f, 0.76800f, 0.59230f, -0.24360f, -0.21800f },
-    { -0.95330f, 0.29060f, 0.08250f, 1.16130f, 0.10000f, 0.04600f, 0.99390f, -0.21360f, 0.28510f, 0.95570f, -0.07290f, 0.23530f },
-    { -0.90840f, -0.34440f, 0.23700f, 1.10240f, 0.13020f, 0.30560f, 0.94320f, -0.23600f, -0.39720f, 0.88770f, -0.23280f, 0.88810f },
-    { -0.62490f, 0.75290f, 0.20650f, 0.85730f, 0.24130f, -0.06530f, 0.96820f, -0.34230f, 0.74250f, 0.65480f, -0.14090f, -0.19340f },
-    { -0.93390f, 0.02880f, 0.35650f, 1.14050f, 0.35740f, 0.11260f, 0.92710f, -0.44940f, -0.01340f, 0.99320f, -0.11550f, 0.51520f },
-    { -0.52900f, -0.72810f, 0.43590f, 0.73750f, 0.28460f, 0.33170f, 0.89940f, -0.37500f, -0.79940f, 0.59990f, 0.03170f, 1.25430f },
-    { 0.19760f, 0.72300f, -0.66200f, 0.15600f, 0.27250f, 0.60810f, 0.74560f, -0.35300f, 0.94160f, -0.32780f, -0.07690f, -0.37800f },
-    { 0.15540f, 0.94600f, -0.28450f, 0.19090f, 0.22960f, 0.24550f, 0.94180f, -0.32170f, 0.96080f, -0.21170f, -0.17900f, -0.39230f },
-    { 0.09700f, 0.98360f, 0.15220f, 0.23740f, 0.20850f, -0.16960f, 0.96320f, -0.30800f, 0.97320f, -0.06170f, -0.22150f, -0.40110f },
-    { -0.23670f, 0.96870f, 0.07470f, 0.50360f, 0.15710f, -0.03770f, 0.98690f, -0.26610f, 0.95880f, 0.24530f, -0.14330f, -0.38740f },
-    { 0.54420f, 0.71050f, -0.44620f, -0.01700f, -0.21040f, 0.63050f, 0.74720f, -0.10080f, 0.81220f, -0.31270f, 0.49250f, -0.28950f },
-    { 0.49870f, 0.51200f, -0.69940f, -0.00170f, -0.24070f, 0.85700f, 0.45560f, -0.09680f, 0.83270f, -0.05880f, 0.55060f, -0.29920f },
-    { 0.51910f, 0.61730f, -0.59120f, -0.00880f, -0.22430f, 0.76580f, 0.60270f, -0.09950f, 0.82480f, -0.18030f, 0.53600f, -0.29510f },
+    { 0.70610f, -0.08750f, -0.70270f, -0.20500f, 0.09920f, 0.99480f, -0.02410f, -0.25340f, 0.70110f, -0.05270f, 0.71110f, -0.19120f },
+    { 0.69870f, -0.19780f, -0.68760f, -0.20510f, 0.29130f, 0.95640f, 0.02080f, -0.42040f, 0.65350f, -0.21490f, 0.72580f, -0.15980f },
+    { 0.81060f, -0.35970f, -0.46210f, -0.32980f, 0.43250f, 0.89970f, 0.05840f, -0.54880f, 0.39480f, -0.24720f, 0.88490f, 0.04910f },
+    { 0.41490f, 0.40260f, -0.81600f, 0.04760f, -0.28880f, 0.90870f, 0.30150f, 0.06370f, 0.86280f, 0.11060f, 0.49330f, -0.31930f },
+    { -0.03960f, 0.40060f, -0.91540f, 0.47920f, -0.94530f, 0.28190f, 0.16430f, 0.68240f, 0.32390f, 0.87180f, 0.36750f, 0.19810f },
+    { -0.14730f, 0.31360f, -0.93810f, 0.58160f, -0.98740f, 0.00850f, 0.15790f, 0.71630f, 0.05750f, 0.94950f, 0.30840f, 0.45920f },
+    { 0.27310f, 0.55480f, -0.78590f, 0.17280f, -0.56570f, 0.75340f, 0.33530f, 0.31480f, 0.77810f, 0.35300f, 0.51960f, -0.24750f },
+    { -0.52860f, 0.48810f, -0.69450f, 0.92490f, -0.79970f, -0.01190f, 0.60030f, 0.52660f, 0.28470f, 0.87270f, 0.39660f, 0.22110f },
+    { -0.76830f, -0.38860f, -0.50860f, 1.13030f, -0.25910f, -0.53780f, 0.80230f, -0.01510f, -0.58530f, 0.74810f, 0.31250f, 1.06250f },
+    { 0.22990f, 0.60570f, -0.76170f, 0.21160f, -0.54010f, 0.73050f, 0.41790f, 0.29230f, 0.80960f, 0.31540f, 0.49510f, -0.27570f },
+    { -0.09470f, 0.82520f, -0.55680f, 0.51630f, -0.75090f, 0.30810f, 0.58420f, 0.48810f, 0.65360f, 0.47340f, 0.59050f, -0.12910f },
+    { -0.79860f, 0.24390f, -0.55020f, 1.17700f, -0.58610f, -0.52310f, 0.61880f, 0.30930f, -0.13690f, 0.81660f, 0.56070f, 0.63770f },
+    { 0.42390f, 0.46440f, -0.77760f, 0.03800f, -0.19950f, 0.88530f, 0.42000f, -0.01430f, 0.88350f, -0.02290f, 0.46790f, -0.34150f },
+    { -0.29810f, 0.78340f, -0.54530f, 0.71990f, -0.59370f, 0.29520f, 0.74860f, 0.35420f, 0.74740f, 0.54700f, 0.37710f, -0.21050f },
+    { -0.84930f, 0.32870f, -0.41320f, 1.23400f, -0.50080f, -0.25370f, 0.82760f, 0.25300f, 0.16720f, 0.90970f, 0.38000f, 0.35030f },
+    { 0.35810f, 0.71070f, -0.60560f, 0.08330f, 0.11410f, 0.61040f, 0.78380f, -0.27260f, 0.92670f, -0.34970f, 0.13750f, -0.37110f },
+    { 0.37190f, 0.52540f, -0.76530f, 0.07110f, 0.14590f, 0.78110f, 0.60710f, -0.29650f, 0.91670f, -0.33750f, 0.21390f, -0.36310f },
+    { 0.37730f, 0.30630f, -0.87400f, 0.06530f, 0.18060f, 0.90130f, 0.39380f, -0.32300f, 0.90830f, -0.30640f, 0.28470f, -0.35630f },
+    { 0.52000f, 0.35520f, -0.77680f, -0.04840f, -0.17790f, 0.93450f, 0.30830f, -0.03660f, 0.83540f, -0.02220f, 0.54920f, -0.29620f },
+    { 0.57450f, 0.70370f, -0.41810f, -0.02280f, -0.22150f, 0.62540f, 0.74820f, -0.09870f, 0.78790f, -0.33730f, 0.51520f, -0.28480f },
+    { 0.53020f, 0.52090f, -0.66900f, -0.00800f, -0.25100f, 0.85010f, 0.46300f, -0.09480f, 0.80990f, -0.07750f, 0.58140f, -0.29500f },
+    { 0.55020f, 0.61860f, -0.56090f, -0.01490f, -0.23500f, 0.75920f, 0.60690f, -0.09750f, 0.80130f, -0.20210f, 0.56310f, -0.29060f }
 };
 
 static __thread int t_grip = 0; static __thread ID3D11Buffer *t_gp_orig = NULL;
@@ -7192,10 +7289,85 @@ static ID3D11Buffer *g_gp_buf = NULL, *g_gp_rows = NULL; static UINT g_gp_w = 0;
 static volatile LONG g_gpd_try[2], g_gpd_ok[2], g_gpd_off[2], g_gpd_nopal[2], g_gpd_small[2], g_gpd_nobuf[2]; static volatile LONG g_gpd_w[2];
 static volatile ULONGLONG g_gp_hand_t = 0;
 static __thread int t_gp_kind = 0;
+/* (E62) matrices 3x4 por filas (como en el cajon de huesos): o = a * b ; inversa de una rigida */
+static void m34mul(const float *a, const float *b, float *o)
+{
+    float t[12];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) t[4 * i + j] = a[4 * i] * b[j] + a[4 * i + 1] * b[4 + j] + a[4 * i + 2] * b[8 + j];
+        t[4 * i + 3] = a[4 * i] * b[3] + a[4 * i + 1] * b[7] + a[4 * i + 2] * b[11] + a[4 * i + 3];
+    }
+    memcpy(o, t, sizeof(t));
+}
+static void m34inv(const float *a, float *o)
+{
+    float t[12];
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) t[4 * i + j] = a[4 * j + i];
+    for (int i = 0; i < 3; i++) t[4 * i + 3] = -(t[4 * i] * a[3] + t[4 * i + 1] * a[7] + t[4 * i + 2] * a[11]);
+    memcpy(o, t, sizeof(t));
+}
+/* (E62) LA MANO DER SUJETA EL CARGADOR COMO EN LA ANIMACION: X lleva la mano der grabada (t=718 ms) a donde esta ahora la mano der
+ * (que con su camara propia va pegada al mando der). Brazos: fila = X * grabada. Cargador: T15 = X * M15 grabado.
+ * Balas (pegadas al cargador lleno de ahora): W = T15 * M15(lleno, ahora)^-1. Se calcula en el Present. */
+static void rmag_update(void)
+{
+    g_rmag_ok = 0;
+    if (!g_apal_ok || !g_pal_ok || !g_wpn_ic) return;
+    int mb[2]; if (!bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) return;
+    int ki = -1; for (int k = 0; k < GRIP_NB; k++) if (GRIP_K[k] == 126) ki = k;
+    if (ki < 0) return;
+    float S[12], Gi[12], X[12], T15[12], M15[12], Mi[12], W[12];
+    memcpy(S, g_apal + (126 + cfg_huesos_desfase) * 4, sizeof(S));
+    m34inv(GRIP_ARM[ki], Gi); m34mul(S, Gi, X);
+    m34mul(X, GRIP_M15, T15);
+    memcpy(M15, g_pal + (mb[0] + cfg_huesos_desfase) * 4, sizeof(M15));
+    float fv[3]; if (mag_pose_vec(mb[0], 21, 0.0f, fv)) for (int i = 0; i < 3; i++) M15[4 * i + 3] += M15[4 * i] * fv[0] + M15[4 * i + 1] * fv[1] + M15[4 * i + 2] * fv[2];
+    m34inv(M15, Mi); m34mul(T15, Mi, W);
+    memcpy(g_rX, X, sizeof(X)); memcpy(g_rT15, T15, sizeof(T15)); memcpy(g_rW, W, sizeof(W));
+    g_rmag_ok = 1;
+}
+static ID3D11Buffer *g_rg_buf = NULL, *g_rg_rows = NULL; static UINT g_rg_w = 0; static __thread ID3D11Buffer *t_rg_orig = NULL;
+static int rgrip_bind(ID3D11DeviceContext *c)
+{
+    if (g_mag_state != 1 || g_mag_hand != 2 || !g_rmag_ok) return 0;
+    ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return 0;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    if (d.ByteWidth < (GRIP_NB * 3 + 1) * 16) { ID3D11Buffer_Release(o); return 0; }
+    ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+    if (!dev) { ID3D11Buffer_Release(o); return 0; }
+    if (!g_rg_buf || g_rg_w != d.ByteWidth) {
+        D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = d.ByteWidth; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ID3D11Buffer *nb = NULL; if (SUCCEEDED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &nb)) && nb) { g_rg_buf = nb; g_rg_w = d.ByteWidth; }
+    }
+    if (!g_rg_rows) {
+        D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = (GRIP_NB * 3 * 16 + 15) & ~15u; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ID3D11Buffer *nb = NULL; if (SUCCEEDED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &nb)) && nb) { if (InterlockedCompareExchangePointer((PVOID *)&g_rg_rows, nb, NULL) != NULL) ID3D11Buffer_Release(nb); }
+    }
+    ID3D11Device_Release(dev);
+    if (!g_rg_buf || !g_rg_rows) { ID3D11Buffer_Release(o); return 0; }
+    static __thread float tmp[GRIP_NB * 12];
+    float X[12]; memcpy(X, g_rX, sizeof(X));
+    for (int k = 0; k < GRIP_NB; k++) m34mul(X, GRIP_ARM[k], tmp + k * 12);
+    ID3D11DeviceContext_CopyResource(c, (ID3D11Resource *)g_rg_buf, (ID3D11Resource *)o);
+    ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_rg_rows, 0, NULL, tmp, 0, 0);
+    D3D11_BOX bx = { 0, 0, 0, GRIP_NB * 3 * 16, 1, 1 };
+    ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)g_rg_buf, 0, (UINT)(GRIP_K[0] + cfg_huesos_desfase) * 16, 0, 0, (ID3D11Resource *)g_rg_rows, 0, &bx);
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &g_rg_buf);
+    t_rg_orig = o; InterlockedIncrement(&g_rgp_n);
+    return 1;
+}
+static void rgrip_unbind(ID3D11DeviceContext *c)
+{
+    if (!t_rg_orig) return;
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &t_rg_orig);
+    ID3D11Buffer_Release(t_rg_orig); t_rg_orig = NULL;
+}
 static int grip_bind(ID3D11DeviceContext *c)
 {
     int K = t_gp_kind & 1;
-    if (!cfg_agarre_cargador || g_mag_state != 1) return 0;
+    if (!cfg_agarre_cargador || g_mag_state != 1 || g_mag_hand != 1) return 0;
+    return 0;   /* (E62) la postura grabada es la de la mano DER: la izq tendra la suya (Blender, E64) */
     InterlockedIncrement(&g_gpd_try[K]);
     if (!g_lmag_ok || !g_pal_ok || !g_wpn_ic) { InterlockedIncrement(&g_gpd_off[K]); return 0; }
     int mb[2]; if (!bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) { InterlockedIncrement(&g_gpd_off[K]); return 0; }
@@ -7272,7 +7444,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     }
     /* (E39) el cargador: fuera = no se pinta en el arma; en la mano izq (cogido de la cadera) = se pinta con la camara de esa mano
      * (4 = en el arma Y en la mano, si aun no se habia sacado el del arma) */
-    t_bul = 0; t_lh_set = 0; t_grip = 0;
+    t_bul = 0; t_lh_set = 0; t_grip = 0; t_rW = 0;
     if (g_nmag && g_wpn_ic && mag_is(g_wpn_ic, g_wpn_si, ic, si)) {
         int out = cfg_recarga_manual && g_out_ic == g_wpn_ic && g_out_si == g_wpn_si;
         LONG ws = cfg_libre ? g_ws : 0; int rep = 0;
@@ -7290,7 +7462,8 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
                 }
             }
         }
-        if (cfg_recarga_manual && g_mag_state == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); if (g_lmag_ok) t_lh_set = 1; return out ? 3 : 4; }
+        if (cfg_recarga_manual && g_mag_state == 1 && g_mag_hand == 2 && g_rfree_on && g_rmag_ok) { InterlockedIncrement(&g_mag_hand_n); t_lh_set = 2; t_rW = 1; return out ? 3 : 4; }   /* (E62) en la der */
+        if (cfg_recarga_manual && g_mag_state == 1 && g_mag_hand == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); if (g_lmag_ok) t_lh_set = 1; return out ? 3 : 4; }
         if (out && !(rep && ws == 4)) { InterlockedIncrement(&g_mag_hid_n); InterlockedIncrement(&g_pc_hidden); return 1; }
         if (rep) return 0;
     }
@@ -7323,7 +7496,8 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         } else if (fix && t_bmn < 3) { t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = fv[a]; t_bmn++; }
         {   int cb[2]; float co = g_cov_off;   /* (E51) tapa */
             if (cfg_libre && co > 0.0005f && t_bmn < 3 && bone_list(ic, si, 3, cb, 2)) { t_bm[t_bmn] = cb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_cov_ax[a] * co; t_bmn++; } }
-        if (nmb && cfg_recarga_manual && g_mag_state == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; if (g_lmag_ok) t_lh_set = 1; }
+        if (nmb && cfg_recarga_manual && g_mag_state == 1 && g_mag_hand == 2 && g_rfree_on && g_rmag_ok) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; t_lh_set = 2; t_rW = 1; }   /* (E62) */
+        else if (nmb && cfg_recarga_manual && g_mag_state == 1 && g_mag_hand == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; if (g_lmag_ok) t_lh_set = 1; }
         if (t_bhn || t_blh || t_bmn) { InterlockedIncrement(&g_pc_drawn); return 5; }
     }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
@@ -7331,6 +7505,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
             g_arm_seen = GetTickCount64();
             if (i == g_show) break;
             if (isl_is_big(ic, si)) {   /* (E29) la pieza grande: se apunta su buffer para buscar islas */
+                if (g_holder == 1) apal_capture(c);   /* (E62) mano der de ahora (para la postura del cargador) */
                 if (g_isl_state == 0 && InterlockedCompareExchange(&g_isl_state, 1, 0) == 0) {
                     ID3D11Buffer *b = NULL; DXGI_FORMAT f = DXGI_FORMAT_UNKNOWN; UINT o = 0;
                     ID3D11DeviceContext_IAGetIndexBuffer(c, &b, &f, &o);
@@ -7362,14 +7537,14 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define ISL_DRAW(c, ic, si, CALL) do { int nr_ = isl_nranges(), lh_ = 0, rh_ = 0, rf_ = g_rfree_on != 0;           \
         for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_; int k_ = isl_range(r_, ic, si, &s_, &n_);               \
             if (k_ == 1) { if (rf_) rh_ = 1; else TW_DRAW(c, CALL); } else if (k_ == 2) lh_ = 1; }               \
-        if (rh_) { t_lh_set = 2;                                                                                \
+        if (rh_) { int rg_ = rgrip_bind(c); t_lh_set = 2;                                                       \
             if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
                 if (tw2_ == 2) { RH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); RH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
                 else if (tw2_ == 1) { tw_swap(c); RH_RANGES(c, ic, si, CALL); tw_end(c, 1); }                    \
                 else { RH_RANGES(c, ic, si, CALL); }                                                             \
                 lh_unbind(c); }                                                                                  \
             else { lh_unbind(c); RH_RANGES(c, ic, si, TW_DRAW(c, CALL)); }                                       \
-            t_lh_set = 0; }                                                                                      \
+            if (rg_) rgrip_unbind(c); t_lh_set = 0; }                                                            \
         if (lh_) { t_gp_kind = 0; int gp_ = grip_bind(c);                                                                     \
             if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
                 if (tw2_ == 2) { LH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
@@ -7885,7 +8060,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E61: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E62: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
