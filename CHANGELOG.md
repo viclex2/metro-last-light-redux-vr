@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E56 — Las balas del cargador nuevo se ven (pruebas)
+
+- El juego solo repinta las balas del cargador al disparar. Ahora el mod hace una "foto" de las balas justo después de un disparo con el cargador lleno (se guarda en `%TEMP%\metro_vr_balas_<pieza>.bin`, así sirve para las siguientes partidas) y la pone cuando el cargador está en la mano, mientras lo metes por el carril, con la tapa abierta y recién metido, hasta el primer disparo.
+- La primera vez hace falta disparar una vez con un cargador lleno para que el mod haga la foto (log `BALAS: foto ...`).
+- Se puede apagar con `balas_foto=0` en `metro_vr_config.txt`.
+- E55 probada (16/11): el cargador se carga al cogerlo de la cadera (`balas 1 -> 31`), soltarlo devuelve las balas; tres recargas completas. En el vídeo: el cargador cuelga 10-15 cm por debajo y a la izquierda de la mano, torcido, y la mano va abierta.
+
 ## E55 — El cargador nuevo se ve con balas en la mano (pruebas)
 
 - Al coger un cargador de la cadera, el juego ya lo llena (sin disparar: el gatillo sigue bloqueado hasta meterlo, cerrar la tapa y, si estaba vacía, tirar de la palanca). Así las balas se ven en la mano y al meterlo.

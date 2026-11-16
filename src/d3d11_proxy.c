@@ -227,6 +227,7 @@ static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vaci
 static int cfg_dos_manos_ejes = 1;
 static int cfg_libre = 1;            /* (E51) recarga libre */
 static int cfg_palanca = 1;          /* (E50) palanca de carga con la mano izq + sin amartillar no dispara */
+static int cfg_balas_foto = 1;       /* (E56) foto de las balas del cargador */
 static int cfg_palanca_cm = 20;      /* (E50) la mano izq a menos de esto del mando der = coger la palanca */
 static int cfg_recarga_real = 1;     /* (E48) meter: virtual +0x12E0; sacar: +0xEC0(0) */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
 static volatile LONG g_load_req = 0, g_load_n = 0;
@@ -481,6 +482,7 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "recarga_real"))     cfg_recarga_real = v;     /* (E44) */
     else if (!strcmp(s, "palanca"))          cfg_palanca = v;          /* (E50) */
     else if (!strcmp(s, "palanca_cm"))       cfg_palanca_cm = v;       /* (E50) */
+    else if (!strcmp(s, "balas_foto"))       cfg_balas_foto = v;       /* (E56) */
     else if (!strcmp(s, "recarga_libre"))    cfg_libre = v;            /* (E51) */
     else if (!strcmp(s, "recarga_manual"))   cfg_recarga_manual = v;   /* (E36) */
     else if (!strcmp(s, "recarga_ms"))       cfg_recarga_ms = v;       /* (E36) */
@@ -2663,6 +2665,15 @@ static float g_pal[1024]; static volatile LONG g_pal_ok = 0;
  * El juego solo lo recoloca al disparar: tras meter uno nuevo se quedaba donde estaba el viejo. Con g_mag_full el mod lo
  * pone en su sitio (segun las balas metidas) hasta el siguiente disparo; en la mano y metiendolo, siempre lleno. */
 static volatile LONG g_mag_full = 0, g_mag_full_n = 0, g_mag_fix_n = 0;
+/* (E56) BALAS DEL CARGADOR: el juego solo repinta las balas al disparar. Se hace una "foto" del cajon de huesos de las piezas
+ * de balas justo despues de un disparo con el cargador casi lleno y se vuelve a poner (pegada al armazon, hueso 21) cuando
+ * el cargador nuevo esta en la mano, metiendose o recien metido. La foto se guarda en %TEMP%\metro_vr_balas_<ic>_<si>.bin */
+#define NBUL 2
+typedef struct { UINT ic, si, w; LONG n; int ok, tried; float f21[12]; float d[1024]; } BulSnap;
+static BulSnap g_bul[NBUL];
+static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_n = 0;
+static RecSlot g_bul_slot[4][NBUL]; static volatile LONG g_bul_si[NBUL]; static UINT g_bul_slw[4][NBUL];
+static ID3D11Buffer *g_bul_buf[NBUL];
 static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
 {
     if (!g_pal_ok) return 0;
@@ -2705,6 +2716,7 @@ static void pal_capture(ID3D11DeviceContext *c)
     } else s->busy = 0;
     ID3D11Buffer_Release(o);
 }
+static void bul_flush(IDXGISwapChain *sc);
 static void pal_flush(IDXGISwapChain *sc)
 {
     LONG fr = g_frames_rec; int best = -1;
@@ -2821,7 +2833,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     if (g_bdiag_buf) bone_diag_run(sc);   /* (E43) */
     g_frames_rec = g_frames;
     if (g_rec_on || g_rec_fp) rec_flush(sc);   /* (E46) */
-    if (cfg_palanca) pal_flush(sc);   /* (E50) */
+    if (cfg_palanca) { pal_flush(sc); bul_flush(sc); }   /* (E50) (E56) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -4172,6 +4184,9 @@ static PFN_SetAmmo g_setammo_tramp = NULL;
 static volatile LONG g_setammo_log = 0;
 static void *setammo_hook(void *w, int n, char ch)
 {
+    if (w && w == g_pw && (BYTE *)__builtin_return_address(0) == (BYTE *)GetModuleHandleA(NULL) + 0x2BF6A7) {   /* (E56) disparo */
+        if (n >= 28 && n >= g_bul_best) { g_bul_best = n; g_bul_want = 4; } else g_bul_want = 0;
+    }
     if (w && w == g_pw && g_mag_full && n < g_mag_full_n) { g_mag_full = 0; vr_log("RECARGA: primer disparo tras meter el cargador -> el juego vuelve a colocar el cargador (%d balas)", n); }
     if (w && w == g_pw && g_setammo_log < 60) {
         InterlockedIncrement(&g_setammo_log);
@@ -6806,6 +6821,110 @@ static void bone_unbind(ID3D11DeviceContext *c)
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &t_borig);
     ID3D11Buffer_Release(t_borig); t_borig = NULL;
 }
+/* ===== (E56) foto de las balas ===== */
+static __thread int t_bul = 0; static __thread float t_bul_d[3];
+static void bul_file(char *p, UINT ic, UINT si) { GetTempPathA(MAX_PATH, p); sprintf(p + strlen(p), "metro_vr_balas_%u_%u.bin", ic, si); }
+static int bul_find(UINT ic, UINT si, int make)
+{
+    for (int k = 0; k < NBUL; k++) if (g_bul[k].ic == ic && g_bul[k].si == si) return k;
+    if (!make) return -1;
+    for (int k = 0; k < NBUL; k++) if (!g_bul[k].ic) {
+        g_bul[k].ic = ic; g_bul[k].si = si;
+        char p[MAX_PATH]; bul_file(p, ic, si); FILE *f = fopen(p, "rb");
+        if (f) { BulSnap t; if (fread(&t, sizeof(t), 1, f) == 1 && t.ic == ic && t.si == si && t.w && t.w <= 4096) { t.tried = 1; g_bul[k] = t; g_bul[k].ok = 1; g_bul_best = t.n;
+                 vr_log("BALAS: foto cargada de %s (%ld balas, %u bytes)", p, (long)t.n, t.w); } fclose(f); }
+        return k;
+    }
+    return -1;
+}
+static void bul_capture(ID3D11DeviceContext *c, int k)
+{
+    ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    int i = InterlockedIncrement(&g_bul_si[k]) & 3; RecSlot *s = &g_bul_slot[i][k];
+    if (InterlockedCompareExchange(&s->busy, 1, 0) != 0) { ID3D11Buffer_Release(o); return; }
+    if (!s->st) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 4096; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                   ID3D11Device_CreateBuffer(dev, &bd, NULL, &s->st); ID3D11Device_Release(dev); }
+    }
+    if (s->st && d.ByteWidth <= 4096) {
+        D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
+        ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)s->st, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
+        g_bul_slw[i][k] = d.ByteWidth; s->stamp = g_frames_rec; s->busy = 2;
+    } else s->busy = 0;
+    ID3D11Buffer_Release(o);
+}
+static void bul_flush(IDXGISwapChain *sc)
+{
+    LONG fr = g_frames_rec;
+    if (g_bul_want > 0) g_bul_want--;   /* se hace la foto 3 fotogramas despues del disparo (cuando el juego ya ha repintado) */
+    for (int k = 0; k < NBUL; k++) for (int i = 0; i < 4; i++) {
+        RecSlot *s = &g_bul_slot[i][k];
+        if (s->busy != 2 || fr - s->stamp < 2) continue;
+        ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
+        if (g_pal_ok && SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
+            ID3D11Device_GetImmediateContext(dv, &ctx);
+            D3D11_MAPPED_SUBRESOURCE ms;
+            if (ctx && SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s->st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+                BulSnap *b = &g_bul[k]; UINT w = g_bul_slw[i][k];
+                memcpy(b->d, ms.pData, w); b->w = w; b->n = g_bul_best; b->ok = 1; b->tried = 1;
+                memcpy(b->f21, g_pal + (21 + cfg_huesos_desfase) * 4, sizeof(b->f21));
+                ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)s->st, 0);
+                InterlockedIncrement(&g_bul_cap_n);
+                char p[MAX_PATH]; bul_file(p, b->ic, b->si); FILE *f = fopen(p, "wb"); if (f) { fwrite(b, sizeof(*b), 1, f); fclose(f); }
+                if (g_bul_cap_n < 20) vr_log("BALAS: foto de la pieza %u/%u tras un disparo (%ld balas, %u bytes) guardada", b->ic, b->si, (long)b->n, w);
+            }
+            if (ctx) ID3D11DeviceContext_Release(ctx);
+            ID3D11Device_Release(dv);
+        }
+        s->busy = 0;
+    }
+}
+/* pone la foto (movida con el armazon y, si se esta metiendo, por el carril) en el hueco de huesos para este dibujo */
+static __thread ID3D11Buffer *t_bul_orig = NULL;
+static int bul_bind(ID3D11DeviceContext *c)
+{
+    int k = t_bul - 1; if (k < 0 || k >= NBUL || !g_bul[k].ok || !g_pal_ok) return 0;
+    BulSnap *b = &g_bul[k]; UINT W = b->w;
+    ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+    if (!o) return 0;
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    if (d.ByteWidth != W) { ID3D11Buffer_Release(o); return 0; }
+    if (!g_bul_buf[k]) {
+        ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = W; bd.Usage = D3D11_USAGE_DEFAULT; bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+                   ID3D11Buffer *nb = NULL; if (SUCCEEDED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &nb)) && nb) { if (InterlockedCompareExchangePointer((PVOID *)&g_bul_buf[k], nb, NULL) != NULL) ID3D11Buffer_Release(nb); }
+                   ID3D11Device_Release(dev); }
+    }
+    if (!g_bul_buf[k]) { ID3D11Buffer_Release(o); return 0; }
+    /* A = M21(ahora) * inversa(M21 de la foto) + desplazamiento del carril */
+    const float *n = g_pal + (21 + cfg_huesos_desfase) * 4, *f = b->f21;
+    float AR[3][3], At[3], tmp[1024];
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) AR[i][j] = n[4 * i] * f[4 * j] + n[4 * i + 1] * f[4 * j + 1] + n[4 * i + 2] * f[4 * j + 2];
+    for (int i = 0; i < 3; i++) At[i] = n[4 * i + 3] - (AR[i][0] * f[3] + AR[i][1] * f[7] + AR[i][2] * f[11]) + t_bul_d[i];
+    memcpy(tmp, b->d, W);
+    UINT rows = W / 16;
+    for (UINT r = (UINT)cfg_huesos_desfase; r + 3 <= rows; r += 3) {
+        float *m = tmp + r * 4, o2[12];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) o2[4 * i + j] = AR[i][0] * m[j] + AR[i][1] * m[4 + j] + AR[i][2] * m[8 + j];
+            o2[4 * i + 3] = AR[i][0] * m[3] + AR[i][1] * m[7] + AR[i][2] * m[11] + At[i];
+        }
+        memcpy(m, o2, sizeof(o2));
+    }
+    ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_bul_buf[k], 0, NULL, tmp, 0, 0);
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &g_bul_buf[k]);
+    t_bul_orig = o; InterlockedIncrement(&g_bul_rep_n);
+    return 1;
+}
+static void bul_unbind(ID3D11DeviceContext *c)
+{
+    if (!t_bul_orig) return;
+    ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &t_bul_orig);
+    ID3D11Buffer_Release(t_bul_orig); t_bul_orig = NULL;
+}
 /* (E17) 1 = no pintar esta pieza (es de los brazos, o es la que se esta probando con F6); (E29) 2 = pintarla por trozos;
  * (E33) 3 = pintarla entera con la camara de la mano izq (el reloj) */
 static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
@@ -6833,10 +6952,27 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     }
     /* (E39) el cargador: fuera = no se pinta en el arma; en la mano izq (cogido de la cadera) = se pinta con la camara de esa mano
      * (4 = en el arma Y en la mano, si aun no se habia sacado el del arma) */
+    t_bul = 0;
     if (g_nmag && g_wpn_ic && mag_is(g_wpn_ic, g_wpn_si, ic, si)) {
         int out = cfg_recarga_manual && g_out_ic == g_wpn_ic && g_out_si == g_wpn_si;
+        LONG ws = cfg_libre ? g_ws : 0; int rep = 0;
+        if (cfg_libre && cfg_balas_foto) {   /* (E56) foto de las balas */
+            int k = bul_find(ic, si, 1);
+            if (k >= 0) {
+                if (g_bul_want == 1 && ws == 0 && !g_mag_full && g_pal_ok) bul_capture(c, k);
+                rep = g_bul[k].ok && g_pal_ok && (g_mag_state == 1 || ws == 4 || ws == 5 || (ws == 0 && g_mag_full));
+                if (rep) {
+                    t_bul = k + 1; t_bul_d[0] = t_bul_d[1] = t_bul_d[2] = 0;
+                    if (ws == 4) {   /* por el carril: lo mismo que se mueve la carcasa (hueso 15, en sus ejes) */
+                        int mb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) { const float *m = g_pal + (mb[0] + cfg_huesos_desfase) * 4; float so = g_mag_off;
+                            for (int i = 0; i < 3; i++) t_bul_d[i] = (m[4 * i] * g_rail_model[0] + m[4 * i + 1] * g_rail_model[1] + m[4 * i + 2] * g_rail_model[2]) * so; }
+                    }
+                }
+            }
+        }
         if (cfg_recarga_manual && g_mag_state == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); return out ? 3 : 4; }
-        if (out) { InterlockedIncrement(&g_mag_hid_n); InterlockedIncrement(&g_pc_hidden); return 1; }
+        if (out && !(rep && ws == 4)) { InterlockedIncrement(&g_mag_hid_n); InterlockedIncrement(&g_pc_hidden); return 1; }
+        if (rep) return 0;
     }
     /* (E43) la pieza grande del arma: huesos encogidos (cargador fuera, o el que se prueba con Shift+Re Pag) o cargador en la mano */
     if (g_wpn_ic && ic == g_wpn_ic && si == g_wpn_si) {
@@ -6931,11 +7067,11 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DI(v) static void STDMETHODCALLTYPE mh_DI##v(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv) { \
     PFN_DrawIdx tr = (PFN_DrawIdx)g_mh_tr[1][v]; g_mh_calls[1]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, si, bv); return; }                                                          \
-    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, 0); { int ps_ = piece_skip(c, ic, si); \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, 0); { int ps_ = piece_skip(c, ic, si); int bu_ = t_bul ? bul_bind(c) : 0; \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, si, bv)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, s_, bv));                                           \
       else if (ps_ == 5) BONE_DRAW(c, tr(c, ic, si, bv));                                                  \
-      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, si, bv)); } t_in_draw = 0; }
+      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, si, bv)); if (bu_) bul_unbind(c); } t_in_draw = 0; }
 #define MH_DN(v) static void STDMETHODCALLTYPE mh_DN##v(ID3D11DeviceContext *c, UINT vc, UINT ni, UINT sv, UINT si) { \
     PFN_DrawInst tr = (PFN_DrawInst)g_mh_tr[2][v]; g_mh_calls[2]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, vc, ni, sv, si); return; }                                                               \
@@ -6943,11 +7079,11 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define MH_DII(v) static void STDMETHODCALLTYPE mh_DII##v(ID3D11DeviceContext *c, UINT ic, UINT ni, UINT si, INT bv, UINT sinst) { \
     PFN_DrawIdxInst tr = (PFN_DrawIdxInst)g_mh_tr[3][v]; g_mh_calls[3]++; if (c == g_hud_ctx && g_hud_bound) g_bb_draws++; \
     if (t_in_draw) { tr(c, ic, ni, si, bv, sinst); return; }                                                                    \
-    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, sinst); { int ps_ = piece_skip(c, ic, si);         \
+    t_in_draw = 1; if (g_exp_state == 1) exp_capture(c, ic, si, bv, sinst); { int ps_ = piece_skip(c, ic, si); int bu_ = t_bul ? bul_bind(c) : 0; \
       if (ps_ == 0 || ps_ == 4) { int h = hud_pre(c, 0); TW_DRAW(c, tr(c, ic, ni, si, bv, sinst)); if (h) hud_post(c); } \
       else if (ps_ == 2) ISL_DRAW(c, ic, si, tr(c, n_, ni, s_, bv, sinst));                                \
       else if (ps_ == 5) BONE_DRAW(c, tr(c, ic, ni, si, bv, sinst));                                       \
-      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); } t_in_draw = 0; }
+      if (ps_ == 3 || ps_ == 4) LH_WHOLE(c, tr(c, ic, ni, si, bv, sinst)); if (bu_) bul_unbind(c); } t_in_draw = 0; }
 #define MH_US(v) static void STDMETHODCALLTYPE mh_US##v(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, const D3D11_BOX *box, const void *src, UINT rp, UINT dp) \
     { upd_core((PFN_UpdateSub)g_mh_tr[4][v], c, r, sub, box, src, rp, dp); }
 /* (E27) borrar, copiar, resolver, mipmaps y calculo: para las copias del ojo derecho */
@@ -7414,7 +7550,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E55: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E56: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
