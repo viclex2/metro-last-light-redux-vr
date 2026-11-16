@@ -2,6 +2,14 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E59b — Chivato del agarre del cargador (pruebas)
+
+- E59 probada (16/11): al coger el cargador, el reloj salta al centro del mando con el cargador encima, y la mano se queda detrás con la postura de sujetar el guardamanos. Es decir: la postura de agarrar le llega al reloj pero NO a la mano.
+- Ahora el reloj solo cambia si la mano también ha cambiado (si no, sigue con la mano como antes).
+- Log `AGARRE:` cada 2 s con el cargador en la mano: cuántas veces se intentó poner la postura a la mano y al reloj, cuántas se hizo y, si no, por qué.
+- Comprobado aquí con tu exportación del arma (que también trae los brazos) y tu grabación: brazos y arma comparten espacio, así que la postura grabada sí casa con el cargador.
+- Acordado con el usuario: si con esto no queda bien, se pasa a Blender.
+
 ## E59 — La mano izquierda agarra el cargador (pruebas)
 
 - Con el cargador nuevo en la mano, la mano izquierda (y el reloj) se pinta con la **postura de la propia recarga del juego** en el momento en que Artyom empuja el cargador por el carril (sacada de tu grabación de la E46, a 1,39 s): dedos cerrados sobre el cargador. La mano y el cargador van juntos, pegados a tu mando izquierdo.

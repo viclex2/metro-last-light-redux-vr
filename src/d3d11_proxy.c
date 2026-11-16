@@ -7054,15 +7054,22 @@ static const float GRIP_ARM[GRIP_NB][12] = {
 
 static __thread int t_grip = 0; static __thread ID3D11Buffer *t_gp_orig = NULL;
 static ID3D11Buffer *g_gp_buf = NULL, *g_gp_rows = NULL; static UINT g_gp_w = 0; static volatile LONG g_gp_n = 0;
+/* (E59b) chivatos: [0] mano (isla), [1] reloj; intentos, hechos y por que no */
+static volatile LONG g_gpd_try[2], g_gpd_ok[2], g_gpd_off[2], g_gpd_nopal[2], g_gpd_small[2], g_gpd_nobuf[2]; static volatile LONG g_gpd_w[2];
+static volatile ULONGLONG g_gp_hand_t = 0;
+static __thread int t_gp_kind = 0;
 static int grip_bind(ID3D11DeviceContext *c)
 {
-    if (!cfg_agarre_cargador || g_mag_state != 1 || !g_lmag_ok || !g_pal_ok || !g_wpn_ic) return 0;
-    int mb[2]; if (!bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) return 0;
+    int K = t_gp_kind & 1;
+    if (!cfg_agarre_cargador || g_mag_state != 1) return 0;
+    InterlockedIncrement(&g_gpd_try[K]);
+    if (!g_lmag_ok || !g_pal_ok || !g_wpn_ic) { InterlockedIncrement(&g_gpd_off[K]); return 0; }
+    int mb[2]; if (!bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) { InterlockedIncrement(&g_gpd_off[K]); return 0; }
     ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
-    if (!o) return 0;
-    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    if (!o) { InterlockedIncrement(&g_gpd_nopal[K]); return 0; }
+    D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d); g_gpd_w[K] = (LONG)d.ByteWidth;
     UINT rows = GRIP_NB * 3 + 1;
-    if (d.ByteWidth < rows * 16) { ID3D11Buffer_Release(o); return 0; }
+    if (d.ByteWidth < rows * 16) { InterlockedIncrement(&g_gpd_small[K]); ID3D11Buffer_Release(o); return 0; }
     ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
     if (!dev) { ID3D11Buffer_Release(o); return 0; }
     if (!g_gp_buf || g_gp_w != d.ByteWidth) {
@@ -7074,7 +7081,7 @@ static int grip_bind(ID3D11DeviceContext *c)
         ID3D11Buffer *nb = NULL; if (SUCCEEDED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &nb)) && nb) { if (InterlockedCompareExchangePointer((PVOID *)&g_gp_rows, nb, NULL) != NULL) ID3D11Buffer_Release(nb); }
     }
     ID3D11Device_Release(dev);
-    if (!g_gp_buf || !g_gp_rows) { ID3D11Buffer_Release(o); return 0; }
+    if (!g_gp_buf || !g_gp_rows) { InterlockedIncrement(&g_gpd_nobuf[K]); ID3D11Buffer_Release(o); return 0; }
     /* M15 ahora (con el cargador en su sitio de lleno) */
     float m[12]; memcpy(m, g_pal + (mb[0] + cfg_huesos_desfase) * 4, sizeof(m));
     float fv[3]; if (mag_pose_vec(mb[0], 21, 0.0f, fv)) for (int i = 0; i < 3; i++) m[4 * i + 3] += m[4 * i] * fv[0] + m[4 * i + 1] * fv[1] + m[4 * i + 2] * fv[2];
@@ -7094,7 +7101,7 @@ static int grip_bind(ID3D11DeviceContext *c)
     D3D11_BOX bx = { 0, 0, 0, GRIP_NB * 3 * 16, 1, 1 };
     ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)g_gp_buf, 0, (UINT)(GRIP_K[0] + cfg_huesos_desfase) * 16, 0, 0, (ID3D11Resource *)g_gp_rows, 0, &bx);
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &g_gp_buf);
-    t_gp_orig = o; t_lh_set = 1; InterlockedIncrement(&g_gp_n);
+    t_gp_orig = o; t_lh_set = 1; InterlockedIncrement(&g_gp_n); InterlockedIncrement(&g_gpd_ok[K]); if (K == 0) g_gp_hand_t = GetTickCount64();
     return 1;
 }
 static void grip_unbind(ID3D11DeviceContext *c)
@@ -7220,7 +7227,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define ISL_DRAW(c, ic, si, CALL) do { int nr_ = isl_nranges(), lh_ = 0;                                         \
         for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_; int k_ = isl_range(r_, ic, si, &s_, &n_);               \
             if (k_ == 1) TW_DRAW(c, CALL); else if (k_ == 2) lh_ = 1; }                                         \
-        if (lh_) { int gp_ = grip_bind(c);                                                                       \
+        if (lh_) { t_gp_kind = 0; int gp_ = grip_bind(c);                                                                     \
             if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
                 if (tw2_ == 2) { LH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
                 else if (tw2_ == 1) { tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 1); }                    \
@@ -7230,7 +7237,7 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
             if (gp_) grip_unbind(c); }                                                                           \
     } while (0)
 /* (E33) una pieza entera (el reloj) con la camara de la mano izq, igual que ISL_DRAW pero sin trozos */
-#define LH_WHOLE(c, CALL) do { int gpw_ = t_grip ? grip_bind(c) : 0;                                           \
+#define LH_WHOLE(c, CALL) do { t_gp_kind = 1; int gpw_ = (t_grip && GetTickCount64() - g_gp_hand_t < 300) ? grip_bind(c) : 0;                                         \
         if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                            \
             if (tw2_ == 2) { CALL; lh_bind(c, 1); tw_swap(c); CALL; tw_end(c, 2); }                             \
             else if (tw2_ == 1) { tw_swap(c); CALL; tw_end(c, 1); }                                             \
@@ -7459,6 +7466,7 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
+            if (g_mode == 1 && g_mag_state == 1) vr_log("AGARRE: mano intentos=%ld hechos=%ld (no: apagado=%ld sin_huesos=%ld cajon_pequeno=%ld(%ld B) sin_buffer=%ld) | reloj intentos=%ld hechos=%ld (cajon %ld B)", (long)g_gpd_try[0], (long)g_gpd_ok[0], (long)g_gpd_off[0], (long)g_gpd_nopal[0], (long)g_gpd_small[0], (long)g_gpd_w[0], (long)g_gpd_nobuf[0], (long)g_gpd_try[1], (long)g_gpd_ok[1], (long)g_gpd_w[1]);
             if (g_mode == 1 && cfg_balas_foto) vr_log("BALAS: disparos=%ld piezas_de_balas_vistas=%ld (con el cargador puesto %ld) fotos_intentadas=%ld fotos=%ld foto_lista=%d/%d puestas=%ld", (long)g_bul_shots, (long)InterlockedExchange(&g_bul_seen, 0), (long)InterlockedExchange(&g_bul_seen0, 0), (long)g_bul_try, (long)g_bul_cap_n, g_bul[0].ok, g_bul[1].ok, (long)InterlockedExchange(&g_bul_rep_n, 0));
             if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s palanca=%.1fcm amartillar=%ld amartilladas=%ld gatillo_bloqueado=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
@@ -7734,7 +7742,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E59: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E59b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
