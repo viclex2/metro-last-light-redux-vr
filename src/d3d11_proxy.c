@@ -2672,7 +2672,8 @@ static volatile LONG g_mag_full = 0, g_mag_full_n = 0, g_mag_fix_n = 0;
 #define BULMAX 16384   /* floats (64 KB, lo maximo de un cajon) */
 typedef struct { UINT ic, si, w; LONG n; int ok, tried; float f21[12]; float d[BULMAX]; } BulSnap;
 static BulSnap g_bul[NBUL];
-static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_n = 0, g_bul_shots = 0, g_bul_try = 0, g_bul_dlog = 0;
+static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_n = 0, g_bul_shots = 0, g_bul_try = 0, g_bul_dlog = 0, g_bul_seen = 0, g_bul_seen0 = 0;
+static volatile ULONGLONG g_bul_tshot = 0;
 static RecSlot g_bul_slot[4][NBUL]; static volatile LONG g_bul_si[NBUL]; static UINT g_bul_slw[4][NBUL];
 static ID3D11Buffer *g_bul_buf[NBUL];
 static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
@@ -4187,7 +4188,7 @@ static void *setammo_hook(void *w, int n, char ch)
 {
     if (w && w == g_pw && (BYTE *)__builtin_return_address(0) == (BYTE *)GetModuleHandleA(NULL) + 0x2BF6A7) {   /* (E56) disparo */
         InterlockedIncrement(&g_bul_shots);
-        if (n >= 28 && n >= g_bul_best) { g_bul_best = n; g_bul_want = 4; } else g_bul_want = 0;
+        if (n >= 28 && n >= g_bul_best) { g_bul_best = n; g_bul_want = 1; g_bul_tshot = GetTickCount64(); } else g_bul_want = 0;
     }
     if (w && w == g_pw && g_mag_full && n < g_mag_full_n) { g_mag_full = 0; vr_log("RECARGA: primer disparo tras meter el cargador -> el juego vuelve a colocar el cargador (%d balas)", n); }
     if (w && w == g_pw && g_setammo_log < 60) {
@@ -6863,10 +6864,13 @@ static void bul_capture(ID3D11DeviceContext *c, int k)
 static void bul_flush(IDXGISwapChain *sc)
 {
     LONG fr = g_frames_rec;
-    if (g_bul_want > 0) g_bul_want--;   /* se hace la foto 3 fotogramas despues del disparo (cuando el juego ya ha repintado) */
-    for (int k = 0; k < NBUL; k++) for (int i = 0; i < 4; i++) {
-        RecSlot *s = &g_bul_slot[i][k];
-        if (s->busy != 2 || fr - s->stamp < 2) continue;
+    if (g_bul_want && GetTickCount64() - g_bul_tshot > 400) g_bul_want = 0;   /* (E56c) fotos entre 40 y 400 ms tras el disparo; vale la ultima */
+    for (int k = 0; k < NBUL; k++) {
+        int best = -1;
+        for (int i = 0; i < 4; i++) { RecSlot *q = &g_bul_slot[i][k]; if (q->busy == 2 && fr - q->stamp >= 2 && (best < 0 || q->stamp > g_bul_slot[best][k].stamp)) best = i; }
+        for (int i = 0; i < 4; i++) if (i != best && g_bul_slot[i][k].busy == 2 && fr - g_bul_slot[i][k].stamp >= 2) g_bul_slot[i][k].busy = 0;
+        if (best < 0) continue;
+        int i = best; RecSlot *s = &g_bul_slot[i][k];
         ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
         if (!g_pal_ok && InterlockedIncrement(&g_bul_dlog) < 10) vr_log("BALAS: foto descartada (aun no se conocen los huesos del arma)");
         if (g_pal_ok && SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
@@ -6966,7 +6970,8 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         if (cfg_libre && cfg_balas_foto) {   /* (E56) foto de las balas */
             int k = bul_find(ic, si, 1);
             if (k >= 0) {
-                if (g_bul_want == 1 && ws == 0 && !g_mag_full && g_pal_ok) bul_capture(c, k);
+                InterlockedIncrement(&g_bul_seen); if (ws == 0) InterlockedIncrement(&g_bul_seen0);
+                if (g_bul_want && GetTickCount64() - g_bul_tshot > 40 && ws == 0 && !g_mag_full && g_pal_ok) bul_capture(c, k);
                 rep = g_bul[k].ok && g_pal_ok && (g_mag_state == 1 || ws == 4 || ws == 5 || (ws == 0 && g_mag_full));
                 if (rep) {
                     t_bul = k + 1; t_bul_d[0] = t_bul_d[1] = t_bul_d[2] = 0;
@@ -7283,7 +7288,7 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
-            if (g_mode == 1 && cfg_balas_foto) vr_log("BALAS: disparos=%ld fotos_intentadas=%ld fotos=%ld foto_lista=%d/%d puestas=%ld", (long)g_bul_shots, (long)g_bul_try, (long)g_bul_cap_n, g_bul[0].ok, g_bul[1].ok, (long)InterlockedExchange(&g_bul_rep_n, 0));
+            if (g_mode == 1 && cfg_balas_foto) vr_log("BALAS: disparos=%ld piezas_de_balas_vistas=%ld (con el cargador puesto %ld) fotos_intentadas=%ld fotos=%ld foto_lista=%d/%d puestas=%ld", (long)g_bul_shots, (long)InterlockedExchange(&g_bul_seen, 0), (long)InterlockedExchange(&g_bul_seen0, 0), (long)g_bul_try, (long)g_bul_cap_n, g_bul[0].ok, g_bul[1].ok, (long)InterlockedExchange(&g_bul_rep_n, 0));
             if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s palanca=%.1fcm amartillar=%ld amartilladas=%ld gatillo_bloqueado=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
                                     (long)InterlockedExchange(&g_mag_hid_n, 0), (long)InterlockedExchange(&g_mag_hand_n, 0),
@@ -7558,7 +7563,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E56b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E56c: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

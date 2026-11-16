@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E56c — Foto de las balas: otra forma de pillar el momento (pruebas)
+
+- E56b probada: 65 disparos contados pero ninguna foto intentada. La foto solo se intentaba en un fotograma exacto y nunca coincidía. Ahora se intenta durante 40-400 ms tras cada disparo y vale la última. Más datos en el log (`piezas_de_balas_vistas`).
+
 ## E56b — Las balas del cargador nuevo se ven, arreglo (pruebas)
 
 - La E56 no llegó a hacer ninguna foto (sin línea `BALAS: foto`). Sospecha: el cajón de huesos de las balas es mayor de 4 KB y se descartaba sin avisar. Ahora acepta hasta 64 KB y el log dice qué pasa (`BALAS: disparos=… fotos_intentadas=… fotos=… puestas=…`).
