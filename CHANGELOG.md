@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E60 — Exportar la mano con su esqueleto (pruebas)
+
+- **Re Pág** sigue sacando el `.obj` de siempre y además ahora saca `%TEMP%\metro_vr_piel_<arma>.txt`: todos los vértices con sus **4 huesos y 4 pesos**, los triángulos y el **cajón de huesos** del juego en ese mismo instante (de cada pieza: arma, cargador, balas y brazos).
+- Con eso se puede montar en Blender la mano con su esqueleto de verdad (los dedos se doblan bien, no a trozos) y posarla agarrando el cargador. Log: `EXPORTAR: piel (huesos y pesos) -> …`.
+
 ## E59b — Chivato del agarre del cargador (pruebas)
 
 - E59 probada (16/11): al coger el cargador, el reloj salta al centro del mando con el cargador encima, y la mano se queda detrás con la postura de sujetar el guardamanos. Es decir: la postura de agarrar le llega al reloj pero NO a la mano.

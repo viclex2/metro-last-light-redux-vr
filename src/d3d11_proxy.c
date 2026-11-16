@@ -2301,7 +2301,7 @@ static int lay_get(void *lay, ExpLayout *out)
     InterlockedExchange(&g_lay_lock, 0);
     return ok;
 }
-typedef struct { UINT ic, si; INT bv; ID3D11Buffer *ib; DXGI_FORMAT ifmt; UINT ioff; ID3D11Buffer *vb[4]; UINT st[4], vo[4]; ID3D11InputLayout *il; int arm; UINT sinst; } ExpPiece;
+typedef struct { UINT ic, si; INT bv; ID3D11Buffer *ib; DXGI_FORMAT ifmt; UINT ioff; ID3D11Buffer *vb[4]; UINT st[4], vo[4]; ID3D11InputLayout *il; int arm; UINT sinst; ID3D11Buffer *pal; UINT palsz; } ExpPiece;
 #define MAXEXP 48
 static ExpPiece g_exp[MAXEXP]; static int g_nexp = 0; static volatile LONG g_exp_lock = 0;
 static volatile LONG g_exp_state = 0; static ULONGLONG g_exp_t = 0;
@@ -2318,6 +2318,25 @@ static void exp_capture(ID3D11DeviceContext *c, UINT ic, UINT si, INT bv, UINT s
         ID3D11DeviceContext_IAGetVertexBuffers(c, 0, 4, p->vb, p->st, p->vo);
         ID3D11DeviceContext_IAGetInputLayout(c, &p->il);
         for (int k = 0; k < g_nhide; k++) if (g_hide[k].ic == ic && g_hide[k].si == si) p->arm = 1;
+        /* (E60) foto del cajon de huesos tal cual lo puso el juego (antes de que el mod lo cambie): para la "piel" */
+        ID3D11Buffer *o = NULL;
+        ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
+        if (o) {
+            D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+            if (d.ByteWidth >= 256 && d.ByteWidth <= 65536) {
+                ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
+                if (dev) {
+                    D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = d.ByteWidth; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                    if (SUCCEEDED(ID3D11Device_CreateBuffer(dev, &bd, NULL, &p->pal)) && p->pal) {
+                        D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
+                        ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)p->pal, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
+                        p->palsz = d.ByteWidth;
+                    }
+                    ID3D11Device_Release(dev);
+                }
+            }
+            ID3D11Buffer_Release(o);
+        }
         g_nexp++;
     }
     InterlockedExchange(&g_exp_lock, 0);
@@ -2329,6 +2348,7 @@ static void exp_release(void)
         if (p->ib) ID3D11Buffer_Release(p->ib);
         for (int s = 0; s < 4; s++) if (p->vb[s]) ID3D11Buffer_Release(p->vb[s]);
         if (p->il) ID3D11InputLayout_Release(p->il);
+        if (p->pal) ID3D11Buffer_Release(p->pal);
     }
     g_nexp = 0;
 }
@@ -2399,8 +2419,10 @@ static void exp_run(IDXGISwapChain *sc)
 {
     g_exp_state = 2;
     while (InterlockedCompareExchange(&g_exp_lock, 1, 0) != 0) YieldProcessor();
-    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL; FILE *fp = NULL;
+    ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL; FILE *fp = NULL, *fs = NULL;
     char path[MAX_PATH]; GetTempPathA(MAX_PATH, path);
+    char spath[MAX_PATH]; GetTempPathA(MAX_PATH, spath);
+    { size_t sl = strlen(spath); snprintf(spath + sl, sizeof(spath) - sl, "metro_vr_piel_%u_%u.txt", g_wpn_ic, g_wpn_si); }
     size_t pl = strlen(path);
     snprintf(path + pl, sizeof(path) - pl, "metro_vr_arma_%u_%u.obj", g_wpn_ic, g_wpn_si);
     int npie = 0; UINT vbase = 1, ntri_all = 0;
@@ -2410,6 +2432,9 @@ static void exp_run(IDXGISwapChain *sc)
     if (!ctx) goto out;
     fp = fopen(path, "w");
     if (!fp) { vr_log("EXPORTAR: no puedo crear %s", path); goto out; }
+    fs = fopen(spath, "w");
+    if (fs) fprintf(fs, "# Metro VR piel (E60): arma %u/%u. Por pieza: 'pieza ic si brazo nv nt', 'xf' (16), 'pal n' + n filas 'r i x y z w' (cajon de huesos del juego en ese fotograma),\n"
+                        "# 'v x y z b0 b1 b2 b3 w0 w1 w2 w3' (posicion como en el .obj; b = valor BONES, filas b+1..b+3) y 't a b c' (indices desde 0 dentro de la pieza)\n", g_wpn_ic, g_wpn_si);
     fprintf(fp, "# Metro Last Light Redux VR - arma %u/%u exportada por el mod (E40)\n# un objeto por pieza y por hueso: pieza_<indices>_<inicio>_hueso_<n>\n", g_wpn_ic, g_wpn_si);
     for (int i = 0; i < g_nexp; i++) {
         ExpPiece *p = &g_exp[i];
@@ -2456,6 +2481,22 @@ static void exp_run(IDXGISwapChain *sc)
                         xrow ? "filas" : "columnas", rl, xf[0], xf[1], xf[2], xf[3], xf[4], xf[5], xf[6], xf[7], xf[8], xf[9], xf[10], xf[11], xf[12], xf[13], xf[14], xf[15]);
         /* vertices */
         fprintf(fp, "# pieza %u/%u%s: %u vertices, %u triangulos, plantilla:%s\n", p->ic, p->si, p->arm ? " (brazo)" : "", nv, p->ic / 3, desc);
+        if (fs) {
+            fprintf(fs, "pieza %u %u %d %u %u\n", p->ic, p->si, p->arm, nv, p->ic / 3);
+            if (hxf) fprintf(fs, "xf %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g %.7g\n", xf[0], xf[1], xf[2], xf[3], xf[4], xf[5], xf[6], xf[7], xf[8], xf[9], xf[10], xf[11], xf[12], xf[13], xf[14], xf[15]);
+            BYTE *pb = NULL;
+            if (p->pal && p->palsz) {
+                D3D11_MAPPED_SUBRESOURCE ms;
+                if (SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)p->pal, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+                    pb = (BYTE *)malloc(p->palsz); if (pb) memcpy(pb, ms.pData, p->palsz);
+                    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)p->pal, 0);
+                }
+            }
+            UINT nr = pb ? p->palsz / 16 : 0;
+            fprintf(fs, "pal %u\n", nr);
+            for (UINT r = 0; r < nr; r++) { const float *f = (const float *)(pb + 16 * r); fprintf(fs, "r %u %.7g %.7g %.7g %.7g\n", r, f[0], f[1], f[2], f[3]); }
+            free(pb);
+        }
         int *vbone = (int *)malloc(nv * sizeof(int));
         float b0[3] = { 0 }; int bfirst = 1;
         for (UINT v = 0; v < nv; v++) {
@@ -2469,17 +2510,19 @@ static void exp_run(IDXGISwapChain *sc)
             }
             fprintf(fp, "v %.6f %.6f %.6f\n", o[0], o[1], o[2]);
             int bone = -1;
+            float bi[4] = { 0, 0, 0, 0 }, bw[4] = { 1, 0, 0, 0 };
             if (eb && vd[eb->slot]) {
-                float bi[4], bw[4] = { 1, 0, 0, 0 };
                 read_comp(vd[eb->slot] + v * p->st[eb->slot] + eb->off, eb->fmt, bi, 0);
                 if (eb->fmt == 28 || eb->fmt == 87) for (int k = 0; k < 4; k++) bi[k] *= 255.0f;   /* UNORM: el byte tal cual */
                 if (ew && vd[ew->slot]) read_comp(vd[ew->slot] + v * p->st[ew->slot] + ew->off, ew->fmt, bw, 1);
                 int best = 0; for (int k = 1; k < 4; k++) if (bw[k] > bw[best]) best = k;
                 bone = (int)(bi[best] + 0.5f);
             }
+            if (fs) fprintf(fs, "v %.6f %.6f %.6f %d %d %d %d %.4f %.4f %.4f %.4f\n", o[0], o[1], o[2], (int)(bi[0] + 0.5f), (int)(bi[1] + 0.5f), (int)(bi[2] + 0.5f), (int)(bi[3] + 0.5f), bw[0], bw[1], bw[2], bw[3]);
             if (vbone) vbone[v] = bone;
         }
         (void)b0;
+        if (fs) for (UINT t = 0; t < p->ic / 3; t++) fprintf(fs, "t %u %u %u\n", idx[3 * t] - (UINT)mn, idx[3 * t + 1] - (UINT)mn, idx[3 * t + 2] - (UINT)mn);
         /* triangulos agrupados por el hueso de su primer vertice */
         int bl[512]; int nb = 0;
         UINT nt = p->ic / 3;
@@ -2507,6 +2550,7 @@ static void exp_run(IDXGISwapChain *sc)
     }
 out:
     if (fp) fclose(fp);
+    if (fs) { fclose(fs); if (npie) vr_log("EXPORTAR: piel (huesos y pesos) -> %s", spath); }
     if (npie) { vr_log("EXPORTAR: LISTO -> %s (%d piezas, %u triangulos)", path, npie, ntri_all); Beep(900, 80); Beep(1300, 80); Beep(1700, 150); }
     else { vr_log("EXPORTAR: no se exporto nada"); Beep(400, 300); }
     exp_release();
@@ -7742,7 +7786,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E59b: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E60: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
