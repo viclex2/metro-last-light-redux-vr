@@ -1220,22 +1220,26 @@ static volatile LONG g_lhand_ok = 0, g_lhand_req = 0, g_lhand_hold = 0, g_lh_n =
 static float g_lhand_G[4][4], g_lhand_C0[4][4]; static int g_lhand_cal = 0;
 #define LH_N 8
 typedef struct { void *r; int have[2]; float d[2][CAM_BYTES / 4]; } LhCam;
-static LhCam g_lh[LH_N]; static int g_lh_next = 0;
+static LhCam g_lh[2][LH_N]; static int g_lh_next[2] = { 0, 0 };   /* (E58b) juego 0 = mano izq, 1 = cargador en la mano */
+static __thread int t_lh_set = 0;
+static float g_lmag_G[4][4]; static volatile LONG g_lmag_ok = 0;
 static SRWLOCK g_lh_lock = SRWLOCK_INIT;
-static void lh_store(void *r, int twin, const float *d)
+static void lh_store(int set, void *r, int twin, const float *d)
 {
     AcquireSRWLockExclusive(&g_lh_lock);
     int k = -1;
-    for (int i = 0; i < LH_N; i++) if (g_lh[i].r == r) { k = i; break; }
-    if (k < 0) { k = g_lh_next; g_lh_next = (g_lh_next + 1) % LH_N; g_lh[k].r = r; g_lh[k].have[0] = g_lh[k].have[1] = 0; }
-    memcpy(g_lh[k].d[twin], d, CAM_BYTES); g_lh[k].have[twin] = 1;
+    LhCam *L = g_lh[set];
+    for (int i = 0; i < LH_N; i++) if (L[i].r == r) { k = i; break; }
+    if (k < 0) { k = g_lh_next[set]; g_lh_next[set] = (g_lh_next[set] + 1) % LH_N; L[k].r = r; L[k].have[0] = L[k].have[1] = 0; }
+    memcpy(L[k].d[twin], d, CAM_BYTES); L[k].have[twin] = 1;
     ReleaseSRWLockExclusive(&g_lh_lock);
 }
-static int lh_get(void *r, int twin, float *out)
+static int lh_get(int set, void *r, int twin, float *out)
 {
     int ok = 0;
     AcquireSRWLockShared(&g_lh_lock);
-    for (int i = 0; i < LH_N; i++) if (g_lh[i].r == r && g_lh[i].have[twin]) { memcpy(out, g_lh[i].d[twin], CAM_BYTES); ok = 1; break; }
+    LhCam *L = g_lh[set & 1];
+    for (int i = 0; i < LH_N; i++) if (L[i].r == r && L[i].have[twin]) { memcpy(out, L[i].d[twin], CAM_BYTES); ok = 1; break; }
     ReleaseSRWLockShared(&g_lh_lock);
     return ok;
 }
@@ -1331,7 +1335,12 @@ modo:;
                     for (int r = 0; r < 3; r++) HL[r][3] -= t[r];
                     if (inv4(HL, HLi)) {
                         memcpy(gl, f, CAM_BYTES);
-                        if (apply_view_yaw_cam(gl, HL, HLi)) { lh_store(res, t_eye == 1, gl); InterlockedIncrement(&g_lh_n); }
+                        if (apply_view_yaw_cam(gl, HL, HLi)) { lh_store(0, res, t_eye == 1, gl); InterlockedIncrement(&g_lh_n); }
+                    }
+                    if (g_lmag_ok) {   /* (E58b) camara para el cargador que llevas en la mano izq */
+                        mul4(g_lmag_G, Hc, HL);
+                        for (int r = 0; r < 3; r++) HL[r][3] -= t[r];
+                        if (inv4(HL, HLi)) { memcpy(gl, f, CAM_BYTES); if (apply_view_yaw_cam(gl, HL, HLi)) lh_store(1, res, t_eye == 1, gl); }
                     }
                 }
                 if (cfg_mano && g_hand_ok) {
@@ -2685,21 +2694,6 @@ static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_
 static volatile ULONGLONG g_bul_tshot = 0;
 static RecSlot g_bul_slot[4][NBUL]; static volatile LONG g_bul_si[NBUL]; static UINT g_bul_slw[4][NBUL];
 static ID3D11Buffer *g_bul_buf[NBUL];
-/* (E58) cargador en la palma: cuanto hay que mover el cargador (en el modelo) para que su punta derecha caiga en la palma de la
- * mano izq tal como la pinta su camara (la mano esta donde calibraste el mando izq: C0 izq; el arma, en C0 der). */
-static int mag_hand_delta(float *dm)
-{
-    if (!cfg_pegar || !g_hand_C0ok) return 0;
-    float Ri[4][4]; if (!inv4((const float (*)[4])g_hand_C0cur, Ri)) return 0;
-    float q[3]; for (int i = 0; i < 3; i++) q[i] = Ri[i][0] * g_lhand_C0[0][3] + Ri[i][1] * g_lhand_C0[1][3] + Ri[i][2] * g_lhand_C0[2][3] + Ri[i][3];
-    /* mando der (ejes del juego) -> modelo: restar (0.116, -0.036, -0.010); punta derecha del cargador lleno ~ (0.018, 0.007, 0.099) */
-    static const float off[3] = { 0.116f, -0.036f, -0.010f }, grip[3] = { 0.018f, 0.007f, 0.099f };
-    float adj[3] = { cfg_cmano_x * 0.01f, cfg_cmano_y * 0.01f, cfg_cmano_z * 0.01f };
-    for (int i = 0; i < 3; i++) dm[i] = q[i] - off[i] + adj[i] - grip[i];
-    static ULONGLONG tl = 0; ULONGLONG now = GetTickCount64();
-    if (now - tl > 3000) { tl = now; vr_log("PEGAR: cargador a la palma movido x=%.0f y=%.0f z=%.0f cm (mando izq calibrado en x=%.0f y=%.0f z=%.0f cm del der)", dm[0] * 100, dm[1] * 100, dm[2] * 100, q[0] * 100, q[1] * 100, q[2] * 100); }
-    return 1;
-}
 static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
 {
     if (!g_pal_ok) return 0;
@@ -3996,9 +3990,10 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     }
     if (act || g_mag_state == 1) g_libre_busy = 1; else if (!grip) g_libre_busy = 0;
     /* (E58) donde se pega la mano (ejes del mando der, OpenVR: x der, y arriba, z atras) */
-    if (act == 2) { g_snap_pt[0] = Z_LEVER[0]; g_snap_pt[1] = Z_LEVER[1]; g_snap_pt[2] = Z_LEVER[2] + g_lever_s; g_snap_on = 1; }
-    else if (act == 5) { g_snap_pt[0] = Z_COVER[0]; g_snap_pt[1] = Z_COVER[1] - (g_cov_max - g_cov_off) * 1.5f; g_snap_pt[2] = Z_COVER[2]; g_snap_on = 1; }
-    else if (act == 3) { g_snap_pt[0] = Z_MAG_L[0] + 0.03f + g_mag_off; g_snap_pt[1] = Z_MAG[1]; g_snap_pt[2] = Z_MAG[2]; g_snap_on = 1; }
+    /* (E58b) se queda donde la tenias al agarrar (lp0, que es donde la veias tocando la pieza) y solo se mueve con la pieza */
+    if (act == 2) { g_snap_pt[0] = lp0[0]; g_snap_pt[1] = lp0[1]; g_snap_pt[2] = lp0[2] + g_lever_s; g_snap_on = 1; }
+    else if (act == 5) { g_snap_pt[0] = lp0[0]; g_snap_pt[1] = lp0[1] - (g_cov_max - g_cov_off) * 1.5f; g_snap_pt[2] = lp0[2]; g_snap_on = 1; }
+    else if (act == 3) { g_snap_pt[0] = lp0[0] + g_mag_off; g_snap_pt[1] = lp0[1]; g_snap_pt[2] = lp0[2]; g_snap_on = 1; }
     else g_snap_on = 0;
 }
 static void reload_update(const OvrPose *rp)
@@ -4481,6 +4476,17 @@ static void lhand_update(const OvrPose *rp)
     }
     memcpy(g_lhand_G, G, sizeof(G));
     g_lhand_ok = 1;
+    /* (E58b) CARGADOR EN LA MANO: se pinta como si tu mando izq fuera el der sujetandolo, movido para que su punta quede donde
+     * tendrias el mando izq al empezar a meterlo (asi al engancharlo al carril no da saltos):
+     * G_cargador = A_izq * T(ajuste - punta) * C0_der^-1   (punta = (0.15, -0.03, 0.09) en ejes del juego del mando der) */
+    if (cfg_pegar && g_mag_state == 1 && g_hand_C0ok) {
+        float Ri[4][4], T[4][4], AT[4][4];
+        if (inv4((const float (*)[4])g_hand_C0cur, Ri)) {
+            memset(T, 0, sizeof(T)); for (int i = 0; i < 4; i++) T[i][i] = 1.0f;
+            T[0][3] = -(0.15f) + cfg_cmano_x * 0.01f; T[1][3] = 0.03f + cfg_cmano_y * 0.01f; T[2][3] = -0.09f + cfg_cmano_z * 0.01f;
+            mul4(A, T, AT); mul4(AT, Ri, g_lmag_G); g_lmag_ok = 1;
+        } else g_lmag_ok = 0;
+    } else g_lmag_ok = 0;
 }
 /* Lee el visor y deja preparada g_headH. Devuelve 1 si ha cambiado algo. */
 static int head_update(void)
@@ -6744,7 +6750,7 @@ static int lh_bind(ID3D11DeviceContext *c, int twin)
     __attribute__((aligned(16))) float d[CAM_BYTES / 4];
     int found = 0, mark[2][14]; memset(mark, 0, sizeof(mark));
     for (int st = 0; st < 2; st++) for (int i = 0; i < 14; i++)
-        if (t_lh_orig[st][i] && lh_get(t_lh_orig[st][i], twin, d)) { mark[st][i] = 1; found = 1; }
+        if (t_lh_orig[st][i] && lh_get(t_lh_set, t_lh_orig[st][i], twin, d)) { mark[st][i] = 1; found = 1; }
     if (!found) { InterlockedIncrement(&g_lh_nocam); return 0; }
     if (!g_lh_buf[twin]) {
         D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd));
@@ -7013,7 +7019,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
     }
     /* (E39) el cargador: fuera = no se pinta en el arma; en la mano izq (cogido de la cadera) = se pinta con la camara de esa mano
      * (4 = en el arma Y en la mano, si aun no se habia sacado el del arma) */
-    t_bul = 0;
+    t_bul = 0; t_lh_set = 0;
     if (g_nmag && g_wpn_ic && mag_is(g_wpn_ic, g_wpn_si, ic, si)) {
         int out = cfg_recarga_manual && g_out_ic == g_wpn_ic && g_out_si == g_wpn_si;
         LONG ws = cfg_libre ? g_ws : 0; int rep = 0;
@@ -7025,14 +7031,13 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
                 rep = g_bul[k].ok && g_pal_ok && (g_mag_state == 1 || ws == 4 || ws == 5 || (ws == 0 && g_mag_full));
                 if (rep) {
                     t_bul = k + 1; t_bul_d[0] = t_bul_d[1] = t_bul_d[2] = 0;
-                    if (g_mag_state == 1) mag_hand_delta(t_bul_d);   /* (E58) las balas van con el cargador a la palma */
                     if (ws == 4) {   /* por el carril: lo mismo que se mueve la carcasa (hueso 15, en sus ejes) */
                         int mb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) rail_vec15(mb[0], g_mag_off, 0.0f, NULL, t_bul_d);
                     }
                 }
             }
         }
-        if (cfg_recarga_manual && g_mag_state == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); return out ? 3 : 4; }
+        if (cfg_recarga_manual && g_mag_state == 1 && lh_active()) { InterlockedIncrement(&g_mag_hand_n); if (g_lmag_ok) t_lh_set = 1; return out ? 3 : 4; }
         if (out && !(rep && ws == 4)) { InterlockedIncrement(&g_mag_hid_n); InterlockedIncrement(&g_pc_hidden); return 1; }
         if (rep) return 0;
     }
@@ -7054,11 +7059,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         if (nmb && cfg_libre && g_pal_ok) {
             int hand = cfg_recarga_manual && g_mag_state == 1;
             if (ws == 4 || ws == 5 || hand) fix = mag_pose_vec(mb[0], 21, 0.0f, fv);
-            float dm[3];
-            if (fix && hand && mag_hand_delta(dm)) {   /* (E58) en la palma */
-                const float *b = g_pal + (mb[0] + cfg_huesos_desfase) * 4;
-                for (int j = 0; j < 3; j++) fv[j] += b[j] * dm[0] + b[4 + j] * dm[1] + b[8 + j] * dm[2];
-            }
+
             else if (ws == 0 && g_mag_full) { LONG n = g_mag_full_n; if (n > 30) n = 30; if (n < 0) n = 0; fix = mag_pose_vec(mb[0], 21, (30 - n) / 30.0f, fv); }
             if (fix) InterlockedIncrement(&g_mag_fix_n);
         }
@@ -7069,7 +7070,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         } else if (fix && t_bmn < 3) { t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = fv[a]; t_bmn++; }
         {   int cb[2]; float co = g_cov_off;   /* (E51) tapa */
             if (cfg_libre && co > 0.0005f && t_bmn < 3 && bone_list(ic, si, 3, cb, 2)) { t_bm[t_bmn] = cb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_cov_ax[a] * co; t_bmn++; } }
-        if (nmb && cfg_recarga_manual && g_mag_state == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; }
+        if (nmb && cfg_recarga_manual && g_mag_state == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; if (g_lmag_ok) t_lh_set = 1; }
         if (t_bhn || t_blh || t_bmn) { InterlockedIncrement(&g_pc_drawn); return 5; }
     }
     if (cfg_brazos) for (int i = 0; i < g_nhide; i++)
@@ -7619,7 +7620,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E58: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E58b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

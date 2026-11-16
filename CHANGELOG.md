@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E58b — Cargador en la mano y mano pegada, de otra forma (pruebas)
+
+- E58 probada (16/11): el cargador salía lejos de la palma y al revés; la mano pegada a la palanca se movía bien pero quedaba lejos de la palanca. Causa: supuse que el arma está "recta" respecto al mando, y no lo está (en tu calibración el cañón va casi a lo largo del mando, hacia abajo).
+- **Cargador en la mano**: ahora tiene su propia cámara. Se pinta como si tu mando izquierdo fuera el derecho sujetándolo, colocado donde lo tendrías al empezar a meterlo por el carril. Así, al acercarlo al arma con el mando paralelo al derecho, queda alineado con el carril y no da saltos al engancharse. Ajuste fino en `metro_vr_config.txt`: `cargador_mano_x/y/z` (cm, ejes del mando).
+- **Mano pegada**: se queda exactamente donde la tenías al agarrar (donde la veías tocando la pieza) y desde ahí solo se mueve con la pieza.
+
 ## E58 — Cargador en la palma y mano pegada a la pieza (pruebas)
 
 - E57 probada (16/11): "mucho mejor" con el carril a la derecha.
