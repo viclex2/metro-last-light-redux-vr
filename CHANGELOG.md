@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E64 — La mano agarra la palanca de verdad (pruebas)
+
+- Al tirar de la palanca, la mano que tira se pinta **pegada a la palanca** y se mueve con ella:
+  - **Mano derecha** (arma en la izquierda): con la **animación del propio juego** tirando de la palanca (de cogerla a tirar del todo, según cuánto tires).
+  - **Mano izquierda** (arma en la derecha): su postura de sujetar el arma, corrida hasta la palanca con los dedos enganchados delante del pomo. Se puede afinar en la config: `palanca_izq_dy=2.5` (más = más arriba) y `palanca_izq_dz=-9.5` (más negativo = más hacia atrás), en cm.
+- `palanca_mano=0` lo apaga.
+
 ## E63 — El cargador ya no se engancha al carril desde lejos (pruebas)
 
 - Se enganchaba con la mano hasta a 37 cm del arma: las medidas del carril iban a la escala del `.obj`, que sale 1,33 veces grande (el cargador mide 18 cm, no 24). Ahora solo se engancha cuando la punta ya está en la boca del carril (le faltan 12 cm para entrar) y con menos holgura (6 cm).

@@ -258,6 +258,10 @@ static volatile LONG g_holder = 0, g_rgrip = 0, g_rfree_on = 0, g_tw_reset = 0, 
 static float g_hold_K[4][4], g_rfree_G[4][4];
 /* (E62) quien hace la recarga: 1 = la izq (el arma en la der), 2 = la der (el arma en la izq, como en la animacion del juego) */
 static volatile LONG g_lw = 1, g_lg = 2, g_mag_hand = 1, g_libre_reset = 0;
+/* (E64) postura de mano puesta por el mod (0 = izq, 1 = der): g_hp_on = hay filas de huesos nuevas; g_hp_gun = esa mano se pinta con la
+ * camara del ARMA (va pegada a una pieza del arma, p. ej. la palanca) */
+static volatile LONG g_hp_on[2] = { 0, 0 }, g_hp_gun[2] = { 0, 0 }, g_hp_n[2] = { 0, 0 };
+static int cfg_palanca_mano = 1; static float cfg_pal_izq_dy = 2.5f, cfg_pal_izq_dz = -9.5f;
 static float g_apal[1024]; static volatile LONG g_apal_ok = 0;
 static __thread int t_rW = 0;   /* (E62) cargador en la mano DER: se pinta movido con g_rW / g_rT15 */              /* cajon de huesos de los brazos (CPU, 2 fotogramas tarde) */
 static float g_rX[12], g_rT15[12], g_rW[12]; static volatile LONG g_rmag_ok = 0, g_rmag_n = 0, g_rgp_n = 0;
@@ -496,6 +500,9 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "dos_manos_ejes"))   cfg_dos_manos_ejes = v;   /* (E34) */
     else if (!strcmp(s, "arma_libre"))       cfg_arma_libre = v;       /* (E61) */
     else if (!strcmp(s, "carril_cm"))        cfg_carril_cm = fv;       /* (E63) */
+    else if (!strcmp(s, "palanca_mano"))     cfg_palanca_mano = v;     /* (E64) */
+    else if (!strcmp(s, "palanca_izq_dy"))   cfg_pal_izq_dy = fv;      /* (E64) cm */
+    else if (!strcmp(s, "palanca_izq_dz"))   cfg_pal_izq_dz = fv;      /* (E64) cm */
     else if (!strcmp(s, "carril_hueco_cm"))  cfg_carril_hueco_cm = fv; /* (E63) */
     else if (!strcmp(s, "huesos_hueco"))     cfg_huesos_hueco = v;     /* (E43) */
     else if (!strcmp(s, "huesos_desfase"))   cfg_huesos_desfase = v;   /* (E43) */
@@ -2963,7 +2970,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present_in(IDXGISwapChain *sc, UINT sync, UI
     g_frames_rec = g_frames;
     if (g_rec_on || g_rec_fp) rec_flush(sc);   /* (E46) */
     if (cfg_palanca) { pal_flush(sc); bul_flush(sc); }   /* (E50) (E56) */
-    apal_flush(sc); rmag_update();   /* (E62) */
+    apal_flush(sc); rmag_update(); hp_update();   /* (E62) (E64) */
     LONG n = InterlockedIncrement(&g_frames);
     if (n <= 10)
         vr_log("Present #%ld (sync=%u flags=0x%X) Map=%ld Map_cb=%ld UpdSub=%ld",
@@ -4629,6 +4636,7 @@ static void hand_update(const OvrPose *rp)
     else g_dos_manos = 0;
     mul4(A, C0i, G);
     holder_update(rp, Araw, C0, (const float (*)[4])C0i, G);   /* (E61) el arma puede ir en la mano izq */
+    if (g_hp_gun[1] && g_rfree_on) memcpy(g_rfree_G, G, sizeof(G));   /* (E64) la der en la palanca: con el arma */
     memcpy(g_hand_G, G, sizeof(G));
     g_hand_ok = 1;
 }
@@ -4685,10 +4693,10 @@ static void lhand_update(const OvrPose *rp)
     }
     /* (E32/E34) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya la pone en el guardamanos con la
      * animacion, asi que se le da la MISMA G que al arma. Se decide en hand_update (twohand_apply), que va antes. */
-    if ((g_dos_manos || g_holder == 1 || g_mag_state == 2) && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));   /* (E61) la izq lleva el arma */   /* (E36) metiendo el cargador: con el arma */
+    if ((g_dos_manos || g_holder == 1 || g_mag_state == 2 || g_hp_gun[0]) && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));   /* (E64) pegada a la palanca */   /* (E61) la izq lleva el arma */   /* (E36) metiendo el cargador: con el arma */
     /* (E58) MANO PEGADA A LA PIEZA: mientras agarras la palanca, la tapa o el cargador, la mano va con el arma y con la palma en la
      * pieza: en el espacio del juego (antes de G) se lleva la mano desde donde la calibraste (C0 izq) hasta la pieza (C0 der * punto) */
-    if (cfg_pegar && g_snap_on && g_hand_ok && g_hand_C0ok && !g_lhand_hold) {
+    if (cfg_pegar && g_snap_on && !g_hp_gun[0] && g_hand_ok && g_hand_C0ok && !g_lhand_hold) {
         const float (*Cr)[4] = (const float (*)[4])g_hand_C0cur;
         float q[3] = { g_snap_pt[0], g_snap_pt[1], -g_snap_pt[2] }, Pv[3], T[4][4], G2[4][4];
         for (int i = 0; i < 3; i++) Pv[i] = Cr[i][0] * q[0] + Cr[i][1] * q[1] + Cr[i][2] * q[2] + Cr[i][3];
@@ -7288,6 +7296,105 @@ static const float GRIP_ARM[GRIP_NB][12] = {
     { 0.53020f, 0.52090f, -0.66900f, -0.00800f, -0.25100f, 0.85010f, 0.46300f, -0.09480f, 0.80990f, -0.07750f, 0.58140f, -0.29500f },
     { 0.55020f, 0.61860f, -0.56090f, -0.01490f, -0.23500f, 0.75920f, 0.60690f, -0.09750f, 0.80130f, -0.20210f, 0.56310f, -0.29060f }
 };
+/* (E64) la mano DER tirando de la palanca en la animacion del juego (grabacion E46 n.8): al cogerla y con la palanca atras del todo */
+static const float LEV_M21_0[12] = { 0.98940f, -0.14300f, 0.02350f, 0.12890f, 0.14500f, 0.97860f, -0.14620f, -0.12030f, -0.00210f, 0.14800f, 0.98900f, 0.42680f };
+static const float LEV_ARM_0[GRIP_NB][12] = {
+    { 0.68190f, -0.37960f, 0.62530f, -0.01080f, 0.51190f, 0.85820f, -0.03730f, -0.09260f, -0.52250f, 0.34550f, 0.77950f, -0.01780f },
+    { -0.76890f, -0.05850f, -0.63670f, -0.50920f, 0.20470f, -0.96590f, -0.15840f, -0.05020f, -0.60570f, -0.25210f, 0.75470f, 0.04190f },
+    { -0.76890f, -0.05850f, -0.63670f, -0.50920f, 0.20470f, -0.96590f, -0.15840f, -0.05020f, -0.60570f, -0.25210f, 0.75470f, 0.04190f },
+    { -0.42940f, 0.17310f, -0.88640f, -0.18170f, 0.03510f, -0.97750f, -0.20790f, -0.19350f, -0.90240f, -0.12040f, 0.41370f, -0.17920f },
+    { -0.35360f, -0.33340f, -0.87400f, -0.13740f, -0.38360f, -0.80050f, 0.46050f, -0.57190f, -0.85310f, 0.49810f, 0.15510f, -0.14000f },
+    { -0.54870f, 0.03860f, -0.83510f, -0.32000f, -0.81490f, 0.19850f, 0.54460f, -0.97410f, 0.18680f, 0.97930f, -0.07750f, 0.85110f },
+    { -0.45130f, 0.24340f, -0.85860f, -0.21980f, -0.52370f, 0.70680f, 0.47560f, -0.67770f, 0.72260f, 0.66420f, -0.19150f, 1.36390f },
+    { -0.48460f, 0.04850f, -0.87340f, -0.26240f, -0.68090f, -0.64770f, 0.34180f, -0.83940f, -0.54910f, 0.76040f, 0.34690f, 0.11630f },
+    { -0.26740f, 0.36120f, -0.89330f, -0.05690f, -0.92330f, 0.16930f, 0.34480f, -1.06620f, 0.27580f, 0.91700f, 0.28820f, 0.89460f },
+    { 0.03270f, 0.40350f, -0.91440f, 0.23520f, -0.57880f, 0.75350f, 0.31180f, -0.71770f, 0.81480f, 0.51900f, 0.25820f, 1.40750f },
+    { -0.62760f, 0.28460f, -0.72460f, -0.39730f, -0.65920f, -0.68940f, 0.30020f, -0.82060f, -0.41410f, 0.66610f, 0.62030f, 0.23380f },
+    { -0.26500f, 0.61250f, -0.74470f, -0.05680f, -0.95650f, -0.06920f, 0.28340f, -1.09640f, 0.12200f, 0.78740f, 0.60420f, 0.73590f },
+    { 0.22420f, 0.61570f, -0.75540f, 0.41250f, -0.76540f, 0.59110f, 0.25450f, -0.89670f, 0.60320f, 0.52110f, 0.60380f, 1.19070f },
+    { -0.40720f, 0.46870f, -0.78390f, -0.19840f, -0.88550f, -0.41270f, 0.21330f, -1.02760f, -0.22350f, 0.78100f, 0.58310f, 0.40620f },
+    { -0.07890f, 0.62740f, -0.77470f, 0.10940f, -0.99090f, 0.03540f, 0.12960f, -1.12270f, 0.10870f, 0.77790f, 0.61890f, 0.71650f },
+    { 0.28350f, 0.61660f, -0.73450f, 0.45420f, -0.87230f, 0.48390f, 0.06960f, -0.99930f, 0.39830f, 0.62100f, 0.67510f, 0.98860f },
+    { -0.67130f, -0.70930f, 0.21490f, -0.43610f, -0.37780f, 0.57690f, 0.72410f, -0.51660f, -0.63760f, 0.40490f, -0.65530f, 0.02620f },
+    { -0.74590f, -0.59880f, -0.29150f, -0.49430f, -0.31920f, -0.06280f, 0.94560f, -0.47490f, -0.58460f, 0.79840f, -0.14430f, 0.07100f },
+    { -0.80390f, -0.16070f, -0.57260f, -0.53690f, -0.33200f, -0.67760f, 0.65620f, -0.48940f, -0.49350f, 0.71770f, 0.49130f, 0.14230f },
+    { -0.66920f, -0.28380f, -0.68670f, -0.43030f, -0.02460f, -0.91520f, 0.40220f, -0.24550f, -0.74260f, 0.28610f, 0.60550f, -0.05990f },
+    { -0.18990f, -0.67930f, 0.70890f, -0.16670f, 0.38730f, 0.61160f, 0.68990f, -0.11840f, -0.90220f, 0.40560f, 0.14690f, -0.08240f },
+    { -0.18610f, -0.70050f, 0.68900f, -0.16530f, 0.38580f, 0.59280f, 0.70690f, -0.11850f, -0.90360f, 0.39730f, 0.16000f, -0.08260f },
+    { -0.18780f, -0.69060f, 0.69840f, -0.16590f, 0.38650f, 0.60170f, 0.69890f, -0.11850f, -0.90290f, 0.40130f, 0.15390f, -0.08250f },
+    { 0.31630f, 0.07480f, 0.94570f, 0.02320f, -0.19060f, 0.98160f, -0.01390f, -0.10350f, -0.92930f, -0.17580f, 0.32470f, 0.03160f },
+    { 0.10430f, -0.32590f, -0.93960f, 0.13600f, 0.42550f, 0.86860f, -0.25400f, -0.43780f, 0.89890f, -0.37330f, 0.22930f, -0.41190f },
+    { 0.12480f, -0.32630f, -0.93700f, 0.11850f, 0.63800f, 0.74960f, -0.17610f, -0.62800f, 0.75980f, -0.57580f, 0.30180f, -0.30910f },
+    { -0.11780f, -0.25360f, -0.96010f, 0.33450f, 0.41570f, 0.86540f, -0.27960f, -0.42050f, 0.90180f, -0.43210f, 0.00350f, -0.39920f },
+    { 0.22200f, -0.41700f, -0.88140f, 0.01140f, -0.04460f, 0.89870f, -0.43640f, -0.05040f, 0.97400f, 0.13610f, 0.18090f, -0.47350f },
+    { 0.49200f, -0.28190f, -0.82370f, -0.24400f, -0.62200f, 0.54820f, -0.55910f, 0.49540f, 0.60910f, 0.78740f, 0.09430f, -0.12220f },
+    { 0.55110f, -0.19370f, -0.81170f, -0.29910f, -0.73800f, 0.34100f, -0.58240f, 0.60270f, 0.38960f, 0.91990f, 0.04500f, 0.09480f },
+    { 0.25370f, -0.40540f, -0.87820f, -0.01550f, -0.53530f, 0.69730f, -0.47660f, 0.38740f, 0.80560f, 0.59110f, -0.04010f, -0.31380f },
+    { 0.44970f, -0.23470f, -0.86180f, -0.20000f, -0.83320f, 0.23740f, -0.49940f, 0.66760f, 0.32180f, 0.94260f, -0.08880f, 0.14350f },
+    { 0.42560f, -0.02080f, -0.90470f, -0.17030f, -0.82040f, -0.43070f, -0.37610f, 0.63550f, -0.38180f, 0.90220f, -0.20040f, 0.82670f },
+    { 0.11630f, -0.23110f, -0.96590f, 0.10930f, -0.88640f, 0.41460f, -0.20590f, 0.69630f, 0.44800f, 0.88020f, -0.15670f, 0.00960f },
+    { 0.11030f, 0.14050f, -0.98390f, 0.11630f, -0.74900f, -0.63900f, -0.17520f, 0.56380f, -0.65340f, 0.75620f, 0.03480f, 1.03980f },
+    { -0.07290f, -0.09010f, -0.99330f, 0.28620f, 0.38560f, -0.92100f, 0.05530f, -0.53160f, -0.91980f, -0.37900f, 0.10190f, 1.26710f },
+    { -0.34730f, -0.15090f, -0.92550f, 0.52810f, -0.87810f, 0.39880f, 0.26440f, 0.69310f, 0.32920f, 0.90450f, -0.27100f, 0.11640f },
+    { -0.13140f, -0.39560f, -0.90900f, 0.32460f, -0.43030f, -0.80330f, 0.41180f, 0.26580f, -0.89310f, 0.44530f, -0.06470f, 1.25460f },
+    { 0.14120f, -0.19960f, -0.96960f, 0.06970f, 0.85560f, -0.46800f, 0.22090f, -0.95060f, -0.49790f, -0.86090f, 0.10470f, 0.84810f },
+    { -0.31820f, 0.30710f, -0.89690f, 0.48180f, 0.26860f, 0.93650f, 0.22540f, -0.31000f, 0.90920f, -0.16920f, -0.38050f, -0.41050f },
+    { -0.31860f, 0.22080f, -0.92180f, 0.48150f, 0.28230f, 0.95050f, 0.13010f, -0.32070f, 0.90490f, -0.21880f, -0.36510f, -0.40750f },
+    { -0.32030f, 0.13270f, -0.93800f, 0.48220f, 0.29570f, 0.95470f, 0.03410f, -0.33130f, 0.90000f, -0.26650f, -0.34500f, -0.40400f },
+    { -0.11280f, -0.08970f, -0.98960f, 0.31500f, -0.12940f, 0.98880f, -0.07490f, 0.00850f, 0.98520f, 0.11960f, -0.12310f, -0.46930f },
+    { 0.67550f, 0.26460f, -0.68820f, -0.02930f, -0.07640f, 0.95350f, 0.29160f, -0.12740f, 0.73330f, -0.14440f, 0.66440f, -0.28030f },
+    { 0.66530f, 0.16740f, -0.72760f, -0.02490f, -0.09660f, 0.98560f, 0.13850f, -0.12270f, 0.74030f, -0.02190f, 0.67190f, -0.28430f },
+    { 0.66980f, 0.21360f, -0.71120f, -0.02690f, -0.08690f, 0.97370f, 0.21060f, -0.12500f, 0.73740f, -0.07920f, 0.67080f, -0.28250f }
+};
+static const float LEV_M21_1[12] = { 0.99310f, -0.11680f, 0.00420f, 0.12800f, 0.11680f, 0.99310f, -0.00620f, -0.11920f, -0.00340f, 0.00670f, 1.00000f, 0.36850f };
+static const float LEV_ARM_1[GRIP_NB][12] = {
+    { 0.68190f, -0.37950f, 0.62530f, -0.01080f, 0.51190f, 0.85820f, -0.03730f, -0.09260f, -0.52250f, 0.34550f, 0.77950f, -0.01780f },
+    { -0.75320f, -0.08260f, -0.65250f, -0.50180f, 0.13800f, -0.98980f, -0.03400f, -0.08690f, -0.64310f, -0.11570f, 0.75700f, -0.03460f },
+    { -0.75320f, -0.08260f, -0.65250f, -0.50180f, 0.13800f, -0.98980f, -0.03400f, -0.08690f, -0.64310f, -0.11570f, 0.75700f, -0.03460f },
+    { -0.41430f, 0.14650f, -0.89830f, -0.17520f, -0.08050f, -0.98900f, -0.12420f, -0.26840f, -0.90660f, 0.02080f, 0.42150f, -0.22720f },
+    { -0.35140f, -0.36410f, -0.86250f, -0.14240f, -0.48990f, -0.71360f, 0.50080f, -0.63860f, -0.79780f, 0.59850f, 0.07230f, -0.13460f },
+    { -0.57500f, 0.02920f, -0.81770f, -0.35190f, -0.76570f, 0.33280f, 0.55030f, -0.89280f, 0.28820f, 0.94250f, -0.16900f, 0.89930f },
+    { -0.47740f, 0.25350f, -0.84130f, -0.25110f, -0.40500f, 0.78630f, 0.46670f, -0.53010f, 0.77980f, 0.56350f, -0.27270f, 1.36750f },
+    { -0.49560f, 0.01800f, -0.86840f, -0.27910f, -0.73810f, -0.53570f, 0.41020f, -0.86410f, -0.45780f, 0.84420f, 0.27880f, 0.15410f },
+    { -0.29830f, 0.35180f, -0.88730f, -0.09230f, -0.86800f, 0.28660f, 0.40540f, -0.98480f, 0.39690f, 0.89110f, 0.21990f, 0.96030f },
+    { 0.00330f, 0.41710f, -0.90890f, 0.20180f, -0.45940f, 0.80790f, 0.36910f, -0.57570f, 0.88820f, 0.41630f, 0.19430f, 1.42500f },
+    { -0.64000f, 0.25420f, -0.72510f, -0.41520f, -0.69390f, -0.59640f, 0.40340f, -0.82540f, -0.32990f, 0.76140f, 0.55810f, 0.26520f },
+    { -0.29450f, 0.59800f, -0.74540f, -0.09060f, -0.92250f, 0.02570f, 0.38500f, -1.03710f, 0.24940f, 0.80110f, 0.54410f, 0.80740f },
+    { 0.19260f, 0.62450f, -0.75690f, 0.37720f, -0.67890f, 0.64180f, 0.35670f, -0.78800f, 0.70850f, 0.44520f, 0.54760f, 1.23890f },
+    { -0.42930f, 0.44440f, -0.78630f, -0.22510f, -0.89700f, -0.31130f, 0.31380f, -1.01140f, -0.10530f, 0.84000f, 0.53230f, 0.46870f },
+    { -0.10930f, 0.61610f, -0.78010f, 0.07500f, -0.96340f, 0.12750f, 0.23570f, -1.07010f, 0.24460f, 0.77730f, 0.57960f, 0.79510f },
+    { 0.25190f, 0.62080f, -0.74240f, 0.41900f, -0.81510f, 0.54970f, 0.18310f, -0.91900f, 0.52180f, 0.55900f, 0.64440f, 1.05390f },
+    { -0.70700f, -0.70220f, 0.08410f, -0.46980f, -0.49310f, 0.57470f, 0.65300f, -0.59120f, -0.50690f, 0.42030f, -0.75260f, 0.08480f },
+    { -0.77530f, -0.52290f, -0.35430f, -0.52240f, -0.43550f, 0.03630f, 0.89940f, -0.54960f, -0.45740f, 0.85160f, -0.25590f, 0.12700f },
+    { -0.82260f, -0.09380f, -0.56080f, -0.55670f, -0.43440f, -0.53290f, 0.72620f, -0.55270f, -0.36700f, 0.84100f, 0.39760f, 0.19830f },
+    { -0.65810f, -0.31460f, -0.68400f, -0.42700f, -0.11070f, -0.85820f, 0.50130f, -0.29660f, -0.74470f, 0.40570f, 0.52990f, -0.10660f },
+    { -0.16310f, -0.66680f, 0.72710f, -0.16220f, 0.42580f, 0.61720f, 0.66160f, -0.11110f, -0.89000f, 0.41760f, 0.18330f, -0.08080f },
+    { -0.16040f, -0.68210f, 0.71350f, -0.16120f, 0.42480f, 0.60480f, 0.67370f, -0.11120f, -0.89100f, 0.41110f, 0.19270f, -0.08090f },
+    { -0.16170f, -0.67490f, 0.71990f, -0.16160f, 0.42530f, 0.61070f, 0.66800f, -0.11110f, -0.89050f, 0.41420f, 0.18830f, -0.08080f },
+    { 0.31630f, 0.07480f, 0.94570f, 0.02320f, -0.19060f, 0.98160f, -0.01390f, -0.10350f, -0.92930f, -0.17580f, 0.32470f, 0.03160f },
+    { 0.12580f, -0.35570f, -0.92610f, 0.11050f, 0.60380f, 0.76810f, -0.21310f, -0.59870f, 0.78720f, -0.53240f, 0.31140f, -0.43230f },
+    { 0.11770f, -0.35210f, -0.92850f, 0.11770f, 0.77160f, 0.62100f, -0.13760f, -0.75250f, 0.62510f, -0.70030f, 0.34480f, -0.30590f },
+    { -0.11180f, -0.28180f, -0.95290f, 0.32230f, 0.57980f, 0.76030f, -0.29280f, -0.56570f, 0.80710f, -0.58520f, 0.07840f, -0.43480f },
+    { 0.22760f, -0.43540f, -0.87100f, 0.00220f, 0.22380f, 0.89390f, -0.38840f, -0.28950f, 0.94770f, -0.10660f, 0.30090f, -0.56250f },
+    { 0.48840f, -0.31130f, -0.81520f, -0.24460f, -0.37430f, 0.76910f, -0.51800f, 0.27760f, 0.78820f, 0.55810f, 0.25920f, -0.40620f },
+    { 0.55350f, -0.22520f, -0.80180f, -0.30560f, -0.55000f, 0.62410f, -0.55490f, 0.44470f, 0.62540f, 0.74820f, 0.22160f, -0.24290f },
+    { 0.26710f, -0.40670f, -0.87360f, -0.03140f, -0.27950f, 0.83490f, -0.47420f, 0.16200f, 0.92220f, 0.37080f, 0.10930f, -0.53170f },
+    { 0.45130f, -0.24900f, -0.85690f, -0.20500f, -0.67320f, 0.53540f, -0.51010f, 0.53300f, 0.58580f, 0.80710f, 0.07400f, -0.21340f },
+    { 0.43600f, -0.04960f, -0.89860f, -0.18420f, -0.89950f, -0.05530f, -0.43340f, 0.73550f, -0.02820f, 0.99720f, -0.06870f, 0.38950f },
+    { 0.15440f, -0.23560f, -0.95950f, 0.07120f, -0.68520f, 0.67410f, -0.27580f, 0.52140f, 0.71180f, 0.70000f, -0.05730f, -0.33980f },
+    { 0.15110f, 0.16130f, -0.97530f, 0.07580f, -0.94820f, -0.25530f, -0.18910f, 0.76410f, -0.27950f, 0.95330f, 0.11440f, 0.58880f },
+    { -0.08010f, -0.03580f, -0.99610f, 0.29270f, -0.13920f, -0.98920f, 0.04670f, -0.03030f, -0.98700f, 0.14240f, 0.07430f, 1.24730f },
+    { -0.27500f, -0.11730f, -0.95430f, 0.45860f, -0.72550f, 0.67660f, 0.12590f, 0.56190f, 0.63080f, 0.72700f, -0.27120f, -0.26840f },
+    { -0.17580f, -0.31430f, -0.93290f, 0.36450f, -0.77530f, -0.53980f, 0.32800f, 0.59920f, -0.60660f, 0.78090f, -0.14880f, 0.88780f },
+    { 0.04470f, -0.25480f, -0.96600f, 0.15590f, 0.47140f, -0.84710f, 0.24530f, -0.59480f, -0.88080f, -0.46630f, 0.08220f, 1.11980f },
+    { -0.50860f, 0.32850f, -0.79590f, 0.62550f, 0.31590f, 0.93110f, 0.18240f, -0.36370f, 0.80100f, -0.15870f, -0.57730f, -0.43350f },
+    { -0.50860f, 0.19390f, -0.83890f, 0.62450f, 0.33990f, 0.94040f, 0.01130f, -0.38260f, 0.79110f, -0.27940f, -0.54420f, -0.42660f },
+    { -0.51220f, 0.05400f, -0.85710f, 0.62640f, 0.36240f, 0.91840f, -0.15870f, -0.40050f, 0.77870f, -0.39190f, -0.49000f, -0.41760f },
+    { -0.06080f, -0.14540f, -0.98750f, 0.26480f, 0.10780f, 0.98260f, -0.15130f, -0.19680f, 0.99230f, -0.11560f, -0.04410f, -0.58660f },
+    { 0.82320f, 0.27190f, -0.49840f, -0.05890f, -0.16370f, 0.95430f, 0.25010f, -0.11080f, 0.54360f, -0.12430f, 0.83010f, -0.24750f },
+    { 0.81340f, 0.20480f, -0.54440f, -0.05510f, -0.18500f, 0.97840f, 0.09180f, -0.10570f, 0.55140f, 0.02600f, 0.83380f, -0.25210f },
+    { 0.81780f, 0.23710f, -0.52440f, -0.05680f, -0.17480f, 0.97050f, 0.16620f, -0.10820f, 0.54830f, -0.04420f, 0.83510f, -0.25010f }
+};
 
 static __thread int t_grip = 0; static __thread ID3D11Buffer *t_gp_orig = NULL;
 static ID3D11Buffer *g_gp_buf = NULL, *g_gp_rows = NULL; static UINT g_gp_w = 0; static volatile LONG g_gp_n = 0;
@@ -7332,10 +7439,46 @@ static void rmag_update(void)
     memcpy(g_rX, X, sizeof(X)); memcpy(g_rT15, T15, sizeof(T15)); memcpy(g_rW, W, sizeof(W));
     g_rmag_ok = 1;
 }
-static ID3D11Buffer *g_rg_buf = NULL, *g_rg_rows = NULL; static UINT g_rg_w = 0; static __thread ID3D11Buffer *t_rg_orig = NULL;
-static int rgrip_bind(ID3D11DeviceContext *c)
+/* (E64) FILAS DE HUESOS DE LAS MANOS que pone el mod, cada fotograma (en el Present):
+ *  - mano der con el cargador (E62): X * postura grabada
+ *  - mano der tirando de la palanca: la animacion del juego (al cogerla -> atras del todo, segun el recorrido), pegada al arma de ahora
+ *  - mano izq tirando de la palanca: su postura de ahora (la del guardamanos) corrida hasta la palanca (palanca_izq_dy/dz cm, ejes del
+ *    armazon) + el recorrido. Las dos se pintan con la camara del ARMA: asi van pegadas a la palanca. */
+static float g_hp_rows[2][GRIP_NB * 12];
+static void hp_update(void)
 {
-    if (g_mag_state != 1 || g_mag_hand != 2 || !g_rmag_ok) return 0;
+    LONG on[2] = { 0, 0 }, gun[2] = { 0, 0 };
+    if (g_rmag_ok && g_mag_state == 1 && g_mag_hand == 2) {
+        for (int k = 0; k < GRIP_NB; k++) m34mul(g_rX, GRIP_ARM[k], g_hp_rows[1] + k * 12);
+        on[1] = 1;
+    }
+    if (cfg_palanca_mano && g_lever_on && g_pal_ok && g_apal_ok) {
+        float f = g_lever_s / g_lever_max; if (f < 0) f = 0; if (f > 1) f = 1;
+        float N[12]; memcpy(N, g_pal + (21 + cfg_huesos_desfase) * 4, sizeof(N));
+        if (g_lw == 2) {
+            float i0[12], i1[12], X0[12], X1[12], a[12], b[12];
+            m34inv(LEV_M21_0, i0); m34inv(LEV_M21_1, i1); m34mul(N, i0, X0); m34mul(N, i1, X1);
+            for (int k = 0; k < GRIP_NB; k++) {
+                m34mul(X0, LEV_ARM_0[k], a); m34mul(X1, LEV_ARM_1[k], b);
+                float *o = g_hp_rows[1] + k * 12; for (int q = 0; q < 12; q++) o[q] = a[q] + (b[q] - a[q]) * f;
+            }
+            on[1] = 1; gun[1] = 1;
+        } else {
+            float lv[3] = { g_lever_ax[0] * g_lever_s, g_lever_ax[1] * g_lever_s + cfg_pal_izq_dy * 0.01f, g_lever_ax[2] * g_lever_s + cfg_pal_izq_dz * 0.01f }, d[3];
+            for (int i = 0; i < 3; i++) d[i] = N[4 * i] * lv[0] + N[4 * i + 1] * lv[1] + N[4 * i + 2] * lv[2];
+            for (int k = 0; k < GRIP_NB; k++) {
+                float *o = g_hp_rows[0] + k * 12; memcpy(o, g_apal + (GRIP_K[k] + cfg_huesos_desfase) * 4, 48);
+                for (int i = 0; i < 3; i++) o[4 * i + 3] += d[i];
+            }
+            on[0] = 1; gun[0] = 1;
+        }
+    }
+    for (int h = 0; h < 2; h++) { g_hp_gun[h] = gun[h]; g_hp_on[h] = on[h]; }
+}
+static ID3D11Buffer *g_rg_buf = NULL, *g_rg_rows = NULL; static UINT g_rg_w = 0; static __thread ID3D11Buffer *t_rg_orig = NULL;
+static int hp_bind(ID3D11DeviceContext *c, int h)
+{
+    if (h < 0 || h > 1 || !g_hp_on[h]) return 0;
     ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
     if (!o) return 0;
     D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
@@ -7353,17 +7496,16 @@ static int rgrip_bind(ID3D11DeviceContext *c)
     ID3D11Device_Release(dev);
     if (!g_rg_buf || !g_rg_rows) { ID3D11Buffer_Release(o); return 0; }
     static __thread float tmp[GRIP_NB * 12];
-    float X[12]; memcpy(X, g_rX, sizeof(X));
-    for (int k = 0; k < GRIP_NB; k++) m34mul(X, GRIP_ARM[k], tmp + k * 12);
+    memcpy(tmp, g_hp_rows[h], sizeof(tmp));
     ID3D11DeviceContext_CopyResource(c, (ID3D11Resource *)g_rg_buf, (ID3D11Resource *)o);
     ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_rg_rows, 0, NULL, tmp, 0, 0);
     D3D11_BOX bx = { 0, 0, 0, GRIP_NB * 3 * 16, 1, 1 };
     ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)g_rg_buf, 0, (UINT)(GRIP_K[0] + cfg_huesos_desfase) * 16, 0, 0, (ID3D11Resource *)g_rg_rows, 0, &bx);
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &g_rg_buf);
-    t_rg_orig = o; InterlockedIncrement(&g_rgp_n);
+    t_rg_orig = o; InterlockedIncrement(&g_rgp_n); InterlockedIncrement(&g_hp_n[h]);
     return 1;
 }
-static void rgrip_unbind(ID3D11DeviceContext *c)
+static void hp_unbind(ID3D11DeviceContext *c)
 {
     if (!t_rg_orig) return;
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, cfg_huesos_hueco, 1, &t_rg_orig);
@@ -7511,7 +7653,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
             g_arm_seen = GetTickCount64();
             if (i == g_show) break;
             if (isl_is_big(ic, si)) {   /* (E29) la pieza grande: se apunta su buffer para buscar islas */
-                if (g_holder == 1) apal_capture(c);   /* (E62) mano der de ahora (para la postura del cargador) */
+                if (cfg_palanca) apal_capture(c);   /* (E62) (E64) brazos de ahora (para las posturas de las manos) */
                 if (g_isl_state == 0 && InterlockedCompareExchange(&g_isl_state, 1, 0) == 0) {
                     ID3D11Buffer *b = NULL; DXGI_FORMAT f = DXGI_FORMAT_UNKNOWN; UINT o = 0;
                     ID3D11DeviceContext_IAGetIndexBuffer(c, &b, &f, &o);
@@ -7543,32 +7685,32 @@ static __thread int t_in_draw = 0;                   /* una version puede llamar
 #define ISL_DRAW(c, ic, si, CALL) do { int nr_ = isl_nranges(), lh_ = 0, rh_ = 0, rf_ = g_rfree_on != 0;           \
         for (int r_ = 0; r_ < nr_; r_++) { UINT s_, n_; int k_ = isl_range(r_, ic, si, &s_, &n_);               \
             if (k_ == 1) { if (rf_) rh_ = 1; else TW_DRAW(c, CALL); } else if (k_ == 2) lh_ = 1; }               \
-        if (rh_) { int rg_ = rgrip_bind(c); t_lh_set = 2;                                                       \
+        if (rh_) { int rg_ = hp_bind(c, 1); t_lh_set = 2;                                                       \
             if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
                 if (tw2_ == 2) { RH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); RH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
                 else if (tw2_ == 1) { tw_swap(c); RH_RANGES(c, ic, si, CALL); tw_end(c, 1); }                    \
                 else { RH_RANGES(c, ic, si, CALL); }                                                             \
                 lh_unbind(c); }                                                                                  \
             else { lh_unbind(c); RH_RANGES(c, ic, si, TW_DRAW(c, CALL)); }                                       \
-            if (rg_) rgrip_unbind(c); t_lh_set = 0; }                                                            \
-        if (lh_) { t_gp_kind = 0; int gp_ = grip_bind(c);                                                                     \
+            if (rg_) hp_unbind(c); t_lh_set = 0; }                                                            \
+        if (lh_) { t_gp_kind = 0; int gp_ = hp_bind(c, 0);                                                                     \
             if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                         \
                 if (tw2_ == 2) { LH_RANGES(c, ic, si, CALL); lh_bind(c, 1); tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 2); } \
                 else if (tw2_ == 1) { tw_swap(c); LH_RANGES(c, ic, si, CALL); tw_end(c, 1); }                    \
                 else { LH_RANGES(c, ic, si, CALL); }                                                             \
                 lh_unbind(c); }                                                                                  \
             else { lh_unbind(c); LH_RANGES(c, ic, si, TW_DRAW(c, CALL)); }                                       \
-            if (gp_) grip_unbind(c); }                                                                           \
+            if (gp_) hp_unbind(c); }                                                                           \
     } while (0)
 /* (E33) una pieza entera (el reloj) con la camara de la mano izq, igual que ISL_DRAW pero sin trozos */
-#define LH_WHOLE(c, CALL) do { t_gp_kind = 1; int gpw_ = (t_grip && GetTickCount64() - g_gp_hand_t < 300) ? grip_bind(c) : 0;                                         \
+#define LH_WHOLE(c, CALL) do { t_gp_kind = 1; int gpw_ = t_grip ? hp_bind(c, 0) : 0;                                         \
         if (lh_bind(c, 0)) { int tw2_ = tw_begin(c);                                                            \
             if (tw2_ == 2) { CALL; lh_bind(c, 1); tw_swap(c); CALL; tw_end(c, 2); }                             \
             else if (tw2_ == 1) { tw_swap(c); CALL; tw_end(c, 1); }                                             \
             else { CALL; }                                                                                      \
             lh_unbind(c); }                                                                                     \
         else { lh_unbind(c); TW_DRAW(c, CALL); }                                                                \
-        if (gpw_) grip_unbind(c); } while (0)
+        if (gpw_) hp_unbind(c); } while (0)
 /* (E43) la pieza grande del arma con huesos encogidos (t_bh) y, si toca, el cargador en la mano izq (solo sus huesos, t_bk) */
 #define BONE_DRAW(c, CALL) do {                                                                                   \
         if ((t_bhn || t_bmn) && bone_bind(c, 0)) { TW_DRAW(c, CALL); bone_unbind(c); } else TW_DRAW(c, CALL);  \
@@ -8066,7 +8208,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E63: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E64: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
