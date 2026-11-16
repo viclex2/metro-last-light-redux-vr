@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E61 — Arma libre: la izquierda también puede llevar el arma (pruebas)
+
+- Con el arma en la derecha, agarra el arma con la izquierda (agarre izq, como siempre) y **pulsa el agarre derecho**: la derecha la suelta y el arma se queda en la **izquierda**, tal cual la tenías. La mano derecha queda libre y sigue a su mando.
+- Para devolverla: lleva la derecha a la empuñadura y pulsa su agarre, o simplemente suelta el agarre izquierdo (el arma vuelve sola a la derecha, sin salto).
+- El agarre derecho ya no hace zoom de apuntar (`arma_libre=0` en la config deja todo como antes).
+- Log: `ARMA LIBRE: …`.
+
 ## E60 — Exportar la mano con su esqueleto (pruebas)
 
 - **Re Pág** sigue sacando el `.obj` de siempre y además ahora saca `%TEMP%\metro_vr_piel_<arma>.txt`: todos los vértices con sus **4 huesos y 4 pesos**, los triángulos y el **cajón de huesos** del juego en ese mismo instante (de cada pieza: arma, cargador, balas y brazos).
