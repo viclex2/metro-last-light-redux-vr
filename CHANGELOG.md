@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E58 — Cargador en la palma y mano pegada a la pieza (pruebas)
+
+- E57 probada (16/11): "mucho mejor" con el carril a la derecha.
+- **Cargador en la palma**: el cargador nuevo (con sus balas) se pinta con su punta derecha en la palma de la mano izquierda y en la misma orientación que el carril del arma, listo para meterlo. Si no queda bien, se ajusta sin compilar en `metro_vr_config.txt`: `cargador_mano_x`, `cargador_mano_y`, `cargador_mano_z` (cm; x = derecha, y = arriba, z = hacia delante del arma).
+- **Mano pegada**: mientras agarras la palanca, la tapa o el cargador para sacarlo, la mano izquierda deja de seguir al mando y se queda con la palma en la pieza, moviéndose con ella (como en Pavlov). Al soltar, vuelve al mando.
+- `pegar=0` en `metro_vr_config.txt` lo apaga todo.
+
 ## E57 — El cargador entra por la derecha y sale por la derecha (pruebas)
 
 - E56c probada (16/11): **las balas del cargador nuevo ya se ven**.

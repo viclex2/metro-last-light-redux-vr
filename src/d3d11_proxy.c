@@ -196,6 +196,9 @@ static float g_hand_rel[4][4];               /* mando derecho respecto al centro
 static float g_hand_G[4][4];                 /* lo que se mueve el arma: mano_ahora * mano_calibrada^-1 */
 static int g_hand_cal = 0;                   /* 1 = ya hay calibracion */
 static float g_hand_C0[4][4];                /* postura de la mano "con el arma en reposo" */
+static float g_hand_C0cur[4][4]; static volatile LONG g_hand_C0ok = 0;   /* (E58) la calibracion que se usa ahora (la del arma, si tiene) */
+static volatile LONG g_snap_on = 0; static float g_snap_pt[3];          /* (E58) mano izq pegada a una pieza: punto en ejes del mando der (OpenVR) */
+static volatile LONG g_snap_n = 0;
 static volatile LONG g_hand_req = 0, g_hand_n = 0, g_hand_cam = 0;
 /* (E28) agarre POR ARMA (la solucion de D-Rey86: cada arma tiene su propio "punto de agarre"). Cada arma recuerda
  * su propia calibracion de la mano; si no tiene, se usa la general. El arma se reconoce por su pieza mas grande. */
@@ -227,6 +230,8 @@ static int cfg_huesos_desfase = 1;   /* (E44) el cajon empieza con una fila vaci
 static int cfg_dos_manos_ejes = 1;
 static int cfg_libre = 1;            /* (E51) recarga libre */
 static int cfg_palanca = 1;          /* (E50) palanca de carga con la mano izq + sin amartillar no dispara */
+static int cfg_pegar = 1;            /* (E58) cargador en la palma y mano pegada a la pieza que agarras */
+static int cfg_cmano_x = 0, cfg_cmano_y = 0, cfg_cmano_z = 0;   /* (E58) ajuste del cargador en la mano (cm, ejes del arma: x der, y arriba, z adelante) */
 static int cfg_balas_foto = 1;       /* (E56) foto de las balas del cargador */
 static int cfg_palanca_cm = 20;      /* (E50) la mano izq a menos de esto del mando der = coger la palanca */
 static int cfg_recarga_real = 1;     /* (E48) meter: virtual +0x12E0; sacar: +0xEC0(0) */     /* (E44) 1 = al meter el cargador, las balas se ponen directamente (sin la animacion de recargar) */
@@ -483,6 +488,10 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "palanca"))          cfg_palanca = v;          /* (E50) */
     else if (!strcmp(s, "palanca_cm"))       cfg_palanca_cm = v;       /* (E50) */
     else if (!strcmp(s, "balas_foto"))       cfg_balas_foto = v;       /* (E56) */
+    else if (!strcmp(s, "pegar"))            cfg_pegar = v;            /* (E58) */
+    else if (!strcmp(s, "cargador_mano_x"))  cfg_cmano_x = v;          /* (E58) */
+    else if (!strcmp(s, "cargador_mano_y"))  cfg_cmano_y = v;
+    else if (!strcmp(s, "cargador_mano_z"))  cfg_cmano_z = v;
     else if (!strcmp(s, "recarga_libre"))    cfg_libre = v;            /* (E51) */
     else if (!strcmp(s, "recarga_manual"))   cfg_recarga_manual = v;   /* (E36) */
     else if (!strcmp(s, "recarga_ms"))       cfg_recarga_ms = v;       /* (E36) */
@@ -2676,6 +2685,21 @@ static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_
 static volatile ULONGLONG g_bul_tshot = 0;
 static RecSlot g_bul_slot[4][NBUL]; static volatile LONG g_bul_si[NBUL]; static UINT g_bul_slw[4][NBUL];
 static ID3D11Buffer *g_bul_buf[NBUL];
+/* (E58) cargador en la palma: cuanto hay que mover el cargador (en el modelo) para que su punta derecha caiga en la palma de la
+ * mano izq tal como la pinta su camara (la mano esta donde calibraste el mando izq: C0 izq; el arma, en C0 der). */
+static int mag_hand_delta(float *dm)
+{
+    if (!cfg_pegar || !g_hand_C0ok) return 0;
+    float Ri[4][4]; if (!inv4((const float (*)[4])g_hand_C0cur, Ri)) return 0;
+    float q[3]; for (int i = 0; i < 3; i++) q[i] = Ri[i][0] * g_lhand_C0[0][3] + Ri[i][1] * g_lhand_C0[1][3] + Ri[i][2] * g_lhand_C0[2][3] + Ri[i][3];
+    /* mando der (ejes del juego) -> modelo: restar (0.116, -0.036, -0.010); punta derecha del cargador lleno ~ (0.018, 0.007, 0.099) */
+    static const float off[3] = { 0.116f, -0.036f, -0.010f }, grip[3] = { 0.018f, 0.007f, 0.099f };
+    float adj[3] = { cfg_cmano_x * 0.01f, cfg_cmano_y * 0.01f, cfg_cmano_z * 0.01f };
+    for (int i = 0; i < 3; i++) dm[i] = q[i] - off[i] + adj[i] - grip[i];
+    static ULONGLONG tl = 0; ULONGLONG now = GetTickCount64();
+    if (now - tl > 3000) { tl = now; vr_log("PEGAR: cargador a la palma movido x=%.0f y=%.0f z=%.0f cm (mando izq calibrado en x=%.0f y=%.0f z=%.0f cm del der)", dm[0] * 100, dm[1] * 100, dm[2] * 100, q[0] * 100, q[1] * 100, q[2] * 100); }
+    return 1;
+}
 static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
 {
     if (!g_pal_ok) return 0;
@@ -3971,6 +3995,11 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         else g_mag_off = s_f;
     }
     if (act || g_mag_state == 1) g_libre_busy = 1; else if (!grip) g_libre_busy = 0;
+    /* (E58) donde se pega la mano (ejes del mando der, OpenVR: x der, y arriba, z atras) */
+    if (act == 2) { g_snap_pt[0] = Z_LEVER[0]; g_snap_pt[1] = Z_LEVER[1]; g_snap_pt[2] = Z_LEVER[2] + g_lever_s; g_snap_on = 1; }
+    else if (act == 5) { g_snap_pt[0] = Z_COVER[0]; g_snap_pt[1] = Z_COVER[1] - (g_cov_max - g_cov_off) * 1.5f; g_snap_pt[2] = Z_COVER[2]; g_snap_on = 1; }
+    else if (act == 3) { g_snap_pt[0] = Z_MAG_L[0] + 0.03f + g_mag_off; g_snap_pt[1] = Z_MAG[1]; g_snap_pt[2] = Z_MAG[2]; g_snap_on = 1; }
+    else g_snap_on = 0;
 }
 static void reload_update(const OvrPose *rp)
 {
@@ -4378,6 +4407,7 @@ static void hand_update(const OvrPose *rp)
         int k = g_wpn_ic ? wcal_find(g_wpn_ic, g_wpn_si) : -1;
         if (k >= 0) C0 = (const float (*)[4])g_wcal[k].C0;
     }
+    memcpy(g_hand_C0cur, C0, sizeof(g_hand_C0cur)); g_hand_C0ok = 1;   /* (E58) */
     if (!inv4(C0, C0i)) { g_hand_ok = 0; return; }
     if (cfg_dos_manos) twohand_apply(rp, A, (const float (*)[4])C0i);   /* (E34) agarre a dos manos */
     else g_dos_manos = 0;
@@ -4439,6 +4469,16 @@ static void lhand_update(const OvrPose *rp)
     /* (E32/E34) AGARRE A DOS MANOS: la mano izq pasa de su mando al arma. El juego ya la pone en el guardamanos con la
      * animacion, asi que se le da la MISMA G que al arma. Se decide en hand_update (twohand_apply), que va antes. */
     if ((g_dos_manos || g_mag_state == 2) && g_hand_ok && !g_lhand_hold) memcpy(G, g_hand_G, sizeof(G));   /* (E36) metiendo el cargador: con el arma */
+    /* (E58) MANO PEGADA A LA PIEZA: mientras agarras la palanca, la tapa o el cargador, la mano va con el arma y con la palma en la
+     * pieza: en el espacio del juego (antes de G) se lleva la mano desde donde la calibraste (C0 izq) hasta la pieza (C0 der * punto) */
+    if (cfg_pegar && g_snap_on && g_hand_ok && g_hand_C0ok && !g_lhand_hold) {
+        const float (*Cr)[4] = (const float (*)[4])g_hand_C0cur;
+        float q[3] = { g_snap_pt[0], g_snap_pt[1], -g_snap_pt[2] }, Pv[3], T[4][4], G2[4][4];
+        for (int i = 0; i < 3; i++) Pv[i] = Cr[i][0] * q[0] + Cr[i][1] * q[1] + Cr[i][2] * q[2] + Cr[i][3];
+        memset(T, 0, sizeof(T)); for (int i = 0; i < 4; i++) T[i][i] = 1.0f;
+        for (int i = 0; i < 3; i++) T[i][3] = Pv[i] - g_lhand_C0[i][3];
+        mul4(g_hand_G, T, G2); memcpy(G, G2, sizeof(G)); InterlockedIncrement(&g_snap_n);
+    }
     memcpy(g_lhand_G, G, sizeof(G));
     g_lhand_ok = 1;
 }
@@ -6985,6 +7025,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
                 rep = g_bul[k].ok && g_pal_ok && (g_mag_state == 1 || ws == 4 || ws == 5 || (ws == 0 && g_mag_full));
                 if (rep) {
                     t_bul = k + 1; t_bul_d[0] = t_bul_d[1] = t_bul_d[2] = 0;
+                    if (g_mag_state == 1) mag_hand_delta(t_bul_d);   /* (E58) las balas van con el cargador a la palma */
                     if (ws == 4) {   /* por el carril: lo mismo que se mueve la carcasa (hueso 15, en sus ejes) */
                         int mb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) rail_vec15(mb[0], g_mag_off, 0.0f, NULL, t_bul_d);
                     }
@@ -7013,6 +7054,11 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         if (nmb && cfg_libre && g_pal_ok) {
             int hand = cfg_recarga_manual && g_mag_state == 1;
             if (ws == 4 || ws == 5 || hand) fix = mag_pose_vec(mb[0], 21, 0.0f, fv);
+            float dm[3];
+            if (fix && hand && mag_hand_delta(dm)) {   /* (E58) en la palma */
+                const float *b = g_pal + (mb[0] + cfg_huesos_desfase) * 4;
+                for (int j = 0; j < 3; j++) fv[j] += b[j] * dm[0] + b[4 + j] * dm[1] + b[8 + j] * dm[2];
+            }
             else if (ws == 0 && g_mag_full) { LONG n = g_mag_full_n; if (n > 30) n = 30; if (n < 0) n = 0; fix = mag_pose_vec(mb[0], 21, (30 - n) / 30.0f, fv); }
             if (fix) InterlockedIncrement(&g_mag_fix_n);
         }
@@ -7573,7 +7619,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E57: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E58: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
