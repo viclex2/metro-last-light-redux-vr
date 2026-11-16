@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E55 — El cargador nuevo se ve con balas en la mano (pruebas)
+
+- Al coger un cargador de la cadera, el juego ya lo llena (sin disparar: el gatillo sigue bloqueado hasta meterlo, cerrar la tapa y, si estaba vacía, tirar de la palanca). Así las balas se ven en la mano y al meterlo.
+- Si sueltas el cargador en el aire o se cae del carril, las balas vuelven a la reserva (la de la recámara se queda).
+
 ## E54 — El cargador nuevo se pinta en su sitio (pruebas)
 
 - El cargador de la metralleta se desliza por dentro del arma según las balas que le quedan, pero el juego solo lo recoloca al disparar. Al meter uno nuevo se quedaba donde estaba el viejo (a medias). Ahora el mod lo pone en su sitio (lleno a la izquierda del todo) en la mano, al meterlo y después de meterlo, hasta el primer disparo, cuando el juego vuelve a encargarse.

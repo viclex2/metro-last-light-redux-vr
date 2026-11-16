@@ -3930,10 +3930,11 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     /* cargador nuevo de cualquier cadera; se engancha al carril si la mano esta a la izquierda del arma, a su altura */
     if (g_mag_state == 0 && grip && !prev_grip && act == 0 && g_ws == 3 && (dhip_l < cfg_cadera_cm * 0.01f || dhip_r < cfg_cadera_cm * 0.01f)) {
         g_mag_state = 1; haptic(1, 3000); vr_log("LIBRE: cargador nuevo cogido de la cadera %s", dhip_l < dhip_r ? "izquierda" : "derecha");
+        if (g_pw) InterlockedExchange(&g_load_req, 2);   /* (E55) el juego lo llena ya: asi se ve con balas en la mano */
     }
     if (g_mag_state == 1) {
         float s = MAG_SEAT_X - lp[0];
-        if (!grip) { g_mag_state = 0; vr_log("LIBRE: cargador nuevo soltado"); }
+        if (!grip) { g_mag_state = 0; vr_log("LIBRE: cargador nuevo soltado"); if (g_pw) InterlockedExchange(&g_expel_req, 1); }   /* (E55) se devuelven las balas */
         else if (g_ws == 3 && s > -0.02f && s < 0.14f && fabsf(lp[1] - Z_MAG[1]) < 0.09f && fabsf(lp[2] - Z_MAG[2]) < 0.10f) {
             g_mag_state = 0; act = 4; s_f = s < 0.12f ? (s > 0 ? s : 0) : 0.12f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(1, 2000);
         }
@@ -3942,7 +3943,7 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         float s = MAG_SEAT_X - lp[0]; if (s < 0) s = 0; if (s > 0.14f) s = 0.14f;
         s_f = s_f * 0.6f + s * 0.4f;
         if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; ws_set(5, "cargador metido (falta la tapa)"); haptic(1, 3500); act = 0; }
-        else if (!grip || s > 0.16f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; }
+        else if (!grip || s > 0.16f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
         else g_mag_off = s_f;
     }
     if (act || g_mag_state == 1) g_libre_busy = 1; else if (!grip) g_libre_busy = 0;
@@ -4086,7 +4087,12 @@ static void load_tick(void)
 {
     void *w = g_pw;
     if (!g_load_req || !w || g_mode != 1) return;
-    if (g_pw_ic != g_wpn_ic || g_pw_si != g_wpn_si || !is_player_wpn(w)) { InterlockedExchange(&g_load_req, 0); InterlockedExchange(&g_reload_req, 1); vr_log("RECARGA: no se sabe que arma es -> recarga normal"); return; }
+    LONG early = g_load_req == 2;   /* (E55) cargador nuevo cogido de la cadera: se carga ya para que se vea con balas */
+    if (g_pw_ic != g_wpn_ic || g_pw_si != g_wpn_si || !is_player_wpn(w)) {
+        InterlockedExchange(&g_load_req, 0);
+        if (!early) { InterlockedExchange(&g_reload_req, 1); vr_log("RECARGA: no se sabe que arma es -> recarga normal"); }
+        return;
+    }
     InterlockedExchange(&g_load_req, 0);
     void **vt = *(void ***)w;
     typedef int (*PFN_Get)(void *); typedef int (*PFN_Load)(void *, int, int);
@@ -4103,7 +4109,8 @@ static void load_tick(void)
         if (cfg_palanca && before == 0) { int lb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 2, lb, 2)) { InterlockedExchange(&g_need_rack, 1); vr_log("PALANCA: arma vacia recargada -> hay que tirar de la palanca para disparar"); } }
     }
     InterlockedIncrement(&g_load_n);
-    vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)%s", before, after, after == before ? " NO HA CAMBIADO (sin balas en la reserva?)" : "");
+    if (early) vr_log("RECARGA: cargador nuevo en la mano -> balas %d -> %d (para que se vea lleno; no dispara hasta meterlo)", before, after);
+    else vr_log("RECARGA DE VERDAD: cargador metido -> balas %d -> %d (sin animacion)%s", before, after, after == before ? " (ya estaba cargado desde la mano)" : "");
 }
 /* (E38) cada paso del jugador (hilo del juego, ~100/s): si B esta pedido y sabemos cual es el arma que se ve, al momento */
 static void expel_tick(void)
@@ -7407,7 +7414,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E54: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E55: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
