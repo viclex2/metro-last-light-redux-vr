@@ -2811,6 +2811,7 @@ static void pal_capture(ID3D11DeviceContext *c)
 }
 static void bul_flush(IDXGISwapChain *sc);
 static void rmag_update(void);   /* (E62) */
+static void hp_update(void);     /* (E64) */
 static void pal_flush(IDXGISwapChain *sc)
 {
     LONG fr = g_frames_rec; int best = -1;
