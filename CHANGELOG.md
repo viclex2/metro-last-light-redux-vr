@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E54 — El cargador nuevo se pinta en su sitio (pruebas)
+
+- El cargador de la metralleta se desliza por dentro del arma según las balas que le quedan, pero el juego solo lo recoloca al disparar. Al meter uno nuevo se quedaba donde estaba el viejo (a medias). Ahora el mod lo pone en su sitio (lleno a la izquierda del todo) en la mano, al meterlo y después de meterlo, hasta el primer disparo, cuando el juego vuelve a encargarse.
+- Posiciones sacadas de las grabaciones de la E46 (relativo al armazón, hueso 21): lleno x=0,0048, vacío x=0,1631.
+- E53 probada (16/11): recargas completas; la bala de la recámara se queda (`balas 1 -> 31`).
+
 ## E53 — Recarga libre: arreglos tras la prueba de la E52 (pruebas)
 
 - Mientras la mano izquierda usa una pieza (cargador, palanca o tapa) ya no se agarra el arma a dos manos: antes, al meter el cargador, el arma se giraba hacia la mano izquierda (de ahí que "bailara"). Para volver a agarrar a dos manos hay que soltar el agarre y apretarlo otra vez.

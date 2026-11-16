@@ -2658,6 +2658,26 @@ static void rec_flush(IDXGISwapChain *sc)
 #define PAL_RING 4
 static RecSlot g_pal_slot[PAL_RING]; static volatile LONG g_pal_i = 0, g_pal_frame = -1;
 static float g_pal[1024]; static volatile LONG g_pal_ok = 0;
+/* (E54) posicion del cargador segun las balas. El cargador de la metralleta se desliza por dentro del arma al gastar balas
+ * (grabaciones E46, relativo al hueso 21 = armazon): lleno (0.0048, 0.0073, 0), vacio (0.1631, 0.0085, -0.0004).
+ * El juego solo lo recoloca al disparar: tras meter uno nuevo se quedaba donde estaba el viejo. Con g_mag_full el mod lo
+ * pone en su sitio (segun las balas metidas) hasta el siguiente disparo; en la mano y metiendolo, siempre lleno. */
+static volatile LONG g_mag_full = 0, g_mag_full_n = 0, g_mag_fix_n = 0;
+static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
+{
+    if (!g_pal_ok) return 0;
+    int r15 = (mbone + cfg_huesos_desfase) * 4, r21 = (fbone + cfg_huesos_desfase) * 4;
+    if (r15 + 12 > 1024 || r21 + 12 > 1024) return 0;
+    const float *a = g_pal + r21, *b = g_pal + r15;
+    static const float F[3] = { 0.0048f, 0.0073f, 0.0f }, E[3] = { 0.1631f, 0.0085f, -0.0004f };
+    if (frac < 0) frac = 0; if (frac > 1) frac = 1;
+    float d[3] = { b[3] - a[3], b[7] - a[7], b[11] - a[11] }, rel[3], dt[3], D[3];
+    for (int j = 0; j < 3; j++) rel[j] = a[j] * d[0] + a[4 + j] * d[1] + a[8 + j] * d[2];      /* R21^T (t15 - t21) */
+    for (int j = 0; j < 3; j++) dt[j] = F[j] + (E[j] - F[j]) * frac - rel[j];
+    for (int i = 0; i < 3; i++) D[i] = a[4 * i] * dt[0] + a[4 * i + 1] * dt[1] + a[4 * i + 2] * dt[2];   /* R21 dt */
+    for (int j = 0; j < 3; j++) v[j] = b[j] * D[0] + b[4 + j] * D[1] + b[8 + j] * D[2];          /* en ejes del hueso 15 */
+    return 1;
+}
 static ID3D11Buffer *g_bmove = NULL;
 static volatile float g_lever_s = 0.0f;   /* recorrido actual de la palanca (m) */
 static volatile LONG g_lever_on = 0, g_need_rack = 0, g_rack_n = 0, g_fire_blocked = 0;
@@ -4048,7 +4068,7 @@ static void expel_do(void *w)
     int mid = ((PFN_Get)vt[0xEC8 / 8])(w);
     int chamber = mid == 1 && before > 1;   /* (E53) la bala de la recamara se queda en el arma (como en un arma de verdad) */
     if (mid > 0 && !chamber) ((PFN_Set)vt[0x1350 / 8])(w, 0);
-    InterlockedIncrement(&g_expel_n);
+    InterlockedIncrement(&g_expel_n); g_mag_full = 0;
     vr_log("RECARGA: cargador expulsado (tenia %d balas, quedan %d tras sacar: %s)", before, mid,
            before == 0 ? "estaba vacio" : chamber ? "las del cargador vuelven a la reserva, 1 sigue en la recamara" : mid == 0 ? "vuelven a la reserva" : "se pierden");
 }
@@ -4079,6 +4099,7 @@ static void load_tick(void)
     if (after != before) {   /* (E50) que el juego repinte el cargador (lo que hace despues de recargar) y hay que amartillar */
         typedef void (*PFN_Upd)(void *, int);
         ((PFN_Upd)vt[0x10D0 / 8])(w, after); ((PFN_Upd)vt[0x10D8 / 8])(w, after);
+        if (cfg_libre) { g_mag_full_n = after; g_mag_full = 1; }   /* (E54) pintar el cargador en su sitio hasta el siguiente disparo */
         if (cfg_palanca && before == 0) { int lb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 2, lb, 2)) { InterlockedExchange(&g_need_rack, 1); vr_log("PALANCA: arma vacia recargada -> hay que tirar de la palanca para disparar"); } }
     }
     InterlockedIncrement(&g_load_n);
@@ -4144,6 +4165,7 @@ static PFN_SetAmmo g_setammo_tramp = NULL;
 static volatile LONG g_setammo_log = 0;
 static void *setammo_hook(void *w, int n, char ch)
 {
+    if (w && w == g_pw && g_mag_full && n < g_mag_full_n) { g_mag_full = 0; vr_log("RECARGA: primer disparo tras meter el cargador -> el juego vuelve a colocar el cargador (%d balas)", n); }
     if (w && w == g_pw && g_setammo_log < 60) {
         InterlockedIncrement(&g_setammo_log);
         BYTE *base = (BYTE *)GetModuleHandleA(NULL);
@@ -6733,6 +6755,7 @@ static int bone_bind(ID3D11DeviceContext *c, int keep)
         /* (E50) huesos movidos: su matriz (leida hace 2 fotogramas) + un desplazamiento en sus propios ejes */
         for (int k = 0; k < t_bmn && g_pal_ok; k++) {
             UINT row = (UINT)(t_bm[k] + cfg_huesos_desfase); if ((row + 3) * 16 > W || row + 3 > 256) continue;
+            { int shr = 0; for (int q = 0; q < t_bhn; q++) if (t_bh[q] == t_bm[k]) shr = 1; if (shr) continue; }   /* (E54) encogido: no reaparece */
             float m[12]; memcpy(m, g_pal + row * 4, sizeof(m));
             for (int i = 0; i < 3; i++) m[4 * i + 3] += m[4 * i] * t_bmv[k][0] + m[4 * i + 1] * t_bmv[k][1] + m[4 * i + 2] * t_bmv[k][2];
             if (!g_bmove) {
@@ -6753,6 +6776,16 @@ static int bone_bind(ID3D11DeviceContext *c, int keep)
             UINT r = (UINT)(t_bk[k] + cfg_huesos_desfase) * 16; if (r + 48 > W) continue;
             D3D11_BOX bx = { r, 0, 0, r + 48, 1, 1 };
             ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, r, 0, 0, (ID3D11Resource *)o, 0, &bx);
+        }
+        /* (E54) el cargador en la mano tambien se pinta en su sitio (lleno) */
+        for (int k = 0; k < t_bmn && g_pal_ok && g_bmove; k++) {
+            int kept = 0; for (int q = 0; q < t_bkn; q++) if (t_bk[q] == t_bm[k]) kept = 1; if (!kept) continue;
+            UINT row = (UINT)(t_bm[k] + cfg_huesos_desfase); if ((row + 3) * 16 > W || row + 3 > 256) continue;
+            float m[12]; memcpy(m, g_pal + row * 4, sizeof(m));
+            for (int i = 0; i < 3; i++) m[4 * i + 3] += m[4 * i] * t_bmv[k][0] + m[4 * i + 1] * t_bmv[k][1] + m[4 * i + 2] * t_bmv[k][2];
+            ID3D11DeviceContext_UpdateSubresource(c, (ID3D11Resource *)g_bmove, 0, NULL, m, 0, 0);
+            D3D11_BOX bx = { 0, 0, 0, 48, 1, 1 };
+            ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)cp, 0, row * 16, 0, 0, (ID3D11Resource *)g_bmove, 0, &bx);
         }
     }
     ((PFN_SetCBs)TW_CALL(c, VSSetConstantBuffers, hk_VSSetCB, g_orig_VSSetCB))(c, slot, 1, &cp);
@@ -6812,10 +6845,17 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         int out = cfg_recarga_manual && g_out_ic == ic && g_out_si == si;
         LONG ws = cfg_libre ? g_ws : 0;
         if (out && !(ws == 1 || ws == 2 || ws == 4)) for (int k = 0; k < nmb && t_bhn < 8; k++) t_bh[t_bhn++] = mb[k];
+        float fv[3] = { 0, 0, 0 }; int fix = 0;   /* (E54) cargador en su sitio segun las balas */
+        if (nmb && cfg_libre && g_pal_ok) {
+            int hand = cfg_recarga_manual && g_mag_state == 1;
+            if (ws == 4 || ws == 5 || hand) fix = mag_pose_vec(mb[0], 21, 0.0f, fv);
+            else if (ws == 0 && g_mag_full) { LONG n = g_mag_full_n; if (n > 30) n = 30; if (n < 0) n = 0; fix = mag_pose_vec(mb[0], 21, (30 - n) / 30.0f, fv); }
+            if (fix) InterlockedIncrement(&g_mag_fix_n);
+        }
         if (nmb && (ws == 1 || ws == 2 || ws == 4) && t_bmn < 3) {   /* (E51) cargador por el carril / cayendo */
             float so = g_mag_off, dr = g_mag_drop;
-            t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_rail_model[a] * so; t_bmv[t_bmn][1] -= dr; t_bmn++;
-        }
+            t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_rail_model[a] * so + fv[a]; t_bmv[t_bmn][1] -= dr; t_bmn++;
+        } else if (fix && t_bmn < 3) { t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = fv[a]; t_bmn++; }
         {   int cb[2]; float co = g_cov_off;   /* (E51) tapa */
             if (cfg_libre && co > 0.0005f && t_bmn < 3 && bone_list(ic, si, 3, cb, 2)) { t_bm[t_bmn] = cb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_cov_ax[a] * co; t_bmn++; } }
         if (nmb && cfg_recarga_manual && g_mag_state == 1 && lh_active()) { for (int k = 0; k < nmb; k++) t_bk[k] = mb[k]; t_bkn = nmb; t_blh = 1; }
@@ -7129,7 +7169,7 @@ static void pieces_frame(void)
         if (cic == pic && csi == psi) cnt++; else { pic = cic; psi = csi; cnt = 0; }
         if (cic && cnt == 15 && (cic != g_wpn_ic || csi != g_wpn_si)) {
             g_wpn_ic = cic; g_wpn_si = csi;
-            g_ws = 0; g_cov_off = 0; g_mag_off = 0; g_out_ic = 0;   /* (E51) arma nueva: cargador puesto */
+            g_ws = 0; g_cov_off = 0; g_mag_off = 0; g_out_ic = 0; g_mag_full = 0;   /* (E51) arma nueva: cargador puesto */
             vr_log("ARMA: ahora %u/%u -> calibracion %s", cic, csi, wcal_find(cic, csi) >= 0 ? "PROPIA"
                    : "general (para darle la suya: mano donde ves la empunadura y mantener 1,5 s el clic del stick derecho)");
             int nm = mag_count(cic, csi);
@@ -7367,7 +7407,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E53: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E54: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
