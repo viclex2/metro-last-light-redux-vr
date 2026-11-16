@@ -2,6 +2,10 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E56b — Las balas del cargador nuevo se ven, arreglo (pruebas)
+
+- La E56 no llegó a hacer ninguna foto (sin línea `BALAS: foto`). Sospecha: el cajón de huesos de las balas es mayor de 4 KB y se descartaba sin avisar. Ahora acepta hasta 64 KB y el log dice qué pasa (`BALAS: disparos=… fotos_intentadas=… fotos=… puestas=…`).
+
 ## E56 — Las balas del cargador nuevo se ven (pruebas)
 
 - El juego solo repinta las balas del cargador al disparar. Ahora el mod hace una "foto" de las balas justo después de un disparo con el cargador lleno (se guarda en `%TEMP%\metro_vr_balas_<pieza>.bin`, así sirve para las siguientes partidas) y la pone cuando el cargador está en la mano, mientras lo metes por el carril, con la tapa abierta y recién metido, hasta el primer disparo.

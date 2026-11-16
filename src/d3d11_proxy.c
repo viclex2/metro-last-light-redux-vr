@@ -2669,9 +2669,10 @@ static volatile LONG g_mag_full = 0, g_mag_full_n = 0, g_mag_fix_n = 0;
  * de balas justo despues de un disparo con el cargador casi lleno y se vuelve a poner (pegada al armazon, hueso 21) cuando
  * el cargador nuevo esta en la mano, metiendose o recien metido. La foto se guarda en %TEMP%\metro_vr_balas_<ic>_<si>.bin */
 #define NBUL 2
-typedef struct { UINT ic, si, w; LONG n; int ok, tried; float f21[12]; float d[1024]; } BulSnap;
+#define BULMAX 16384   /* floats (64 KB, lo maximo de un cajon) */
+typedef struct { UINT ic, si, w; LONG n; int ok, tried; float f21[12]; float d[BULMAX]; } BulSnap;
 static BulSnap g_bul[NBUL];
-static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_n = 0;
+static volatile LONG g_bul_want = 0, g_bul_best = 0, g_bul_rep_n = 0, g_bul_cap_n = 0, g_bul_shots = 0, g_bul_try = 0, g_bul_dlog = 0;
 static RecSlot g_bul_slot[4][NBUL]; static volatile LONG g_bul_si[NBUL]; static UINT g_bul_slw[4][NBUL];
 static ID3D11Buffer *g_bul_buf[NBUL];
 static int mag_pose_vec(int mbone, int fbone, float frac, float *v)
@@ -4185,6 +4186,7 @@ static volatile LONG g_setammo_log = 0;
 static void *setammo_hook(void *w, int n, char ch)
 {
     if (w && w == g_pw && (BYTE *)__builtin_return_address(0) == (BYTE *)GetModuleHandleA(NULL) + 0x2BF6A7) {   /* (E56) disparo */
+        InterlockedIncrement(&g_bul_shots);
         if (n >= 28 && n >= g_bul_best) { g_bul_best = n; g_bul_want = 4; } else g_bul_want = 0;
     }
     if (w && w == g_pw && g_mag_full && n < g_mag_full_n) { g_mag_full = 0; vr_log("RECARGA: primer disparo tras meter el cargador -> el juego vuelve a colocar el cargador (%d balas)", n); }
@@ -6831,7 +6833,7 @@ static int bul_find(UINT ic, UINT si, int make)
     for (int k = 0; k < NBUL; k++) if (!g_bul[k].ic) {
         g_bul[k].ic = ic; g_bul[k].si = si;
         char p[MAX_PATH]; bul_file(p, ic, si); FILE *f = fopen(p, "rb");
-        if (f) { BulSnap t; if (fread(&t, sizeof(t), 1, f) == 1 && t.ic == ic && t.si == si && t.w && t.w <= 4096) { t.tried = 1; g_bul[k] = t; g_bul[k].ok = 1; g_bul_best = t.n;
+        static BulSnap t; if (f) { if (fread(&t, sizeof(t), 1, f) == 1 && t.ic == ic && t.si == si && t.w && t.w <= BULMAX * 4) { t.tried = 1; g_bul[k] = t; g_bul[k].ok = 1; g_bul_best = t.n;
                  vr_log("BALAS: foto cargada de %s (%ld balas, %u bytes)", p, (long)t.n, t.w); } fclose(f); }
         return k;
     }
@@ -6840,16 +6842,18 @@ static int bul_find(UINT ic, UINT si, int make)
 static void bul_capture(ID3D11DeviceContext *c, int k)
 {
     ID3D11Buffer *o = NULL; ID3D11DeviceContext_VSGetConstantBuffers(c, cfg_huesos_hueco, 1, &o);
-    if (!o) return;
+    InterlockedIncrement(&g_bul_try);
+    if (!o) { if (InterlockedIncrement(&g_bul_dlog) < 6) vr_log("BALAS: la pieza %u/%u no tiene cajon de huesos en el hueco %d", g_bul[k].ic, g_bul[k].si, cfg_huesos_hueco); return; }
     D3D11_BUFFER_DESC d; ID3D11Buffer_GetDesc(o, &d);
+    if (InterlockedIncrement(&g_bul_dlog) < 6) vr_log("BALAS: haciendo foto de la pieza %u/%u (cajon de %u bytes)", g_bul[k].ic, g_bul[k].si, d.ByteWidth);
     int i = InterlockedIncrement(&g_bul_si[k]) & 3; RecSlot *s = &g_bul_slot[i][k];
     if (InterlockedCompareExchange(&s->busy, 1, 0) != 0) { ID3D11Buffer_Release(o); return; }
     if (!s->st) {
         ID3D11Device *dev = NULL; ID3D11DeviceContext_GetDevice(c, &dev);
-        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = 4096; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (dev) { D3D11_BUFFER_DESC bd; memset(&bd, 0, sizeof(bd)); bd.ByteWidth = BULMAX * 4; bd.Usage = D3D11_USAGE_STAGING; bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
                    ID3D11Device_CreateBuffer(dev, &bd, NULL, &s->st); ID3D11Device_Release(dev); }
     }
-    if (s->st && d.ByteWidth <= 4096) {
+    if (s->st && d.ByteWidth <= BULMAX * 4) {
         D3D11_BOX bx = { 0, 0, 0, d.ByteWidth, 1, 1 };
         ID3D11DeviceContext_CopySubresourceRegion(c, (ID3D11Resource *)s->st, 0, 0, 0, 0, (ID3D11Resource *)o, 0, &bx);
         g_bul_slw[i][k] = d.ByteWidth; s->stamp = g_frames_rec; s->busy = 2;
@@ -6864,10 +6868,13 @@ static void bul_flush(IDXGISwapChain *sc)
         RecSlot *s = &g_bul_slot[i][k];
         if (s->busy != 2 || fr - s->stamp < 2) continue;
         ID3D11Device *dv = NULL; ID3D11DeviceContext *ctx = NULL;
+        if (!g_pal_ok && InterlockedIncrement(&g_bul_dlog) < 10) vr_log("BALAS: foto descartada (aun no se conocen los huesos del arma)");
         if (g_pal_ok && SUCCEEDED(IDXGISwapChain_GetDevice(sc, &IID_ID3D11Device, (void **)&dv)) && dv) {
             ID3D11Device_GetImmediateContext(dv, &ctx);
             D3D11_MAPPED_SUBRESOURCE ms;
-            if (ctx && SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s->st, 0, D3D11_MAP_READ, 0, &ms)) && ms.pData) {
+            HRESULT mh = ctx ? ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s->st, 0, D3D11_MAP_READ, 0, &ms) : E_FAIL;
+            if (FAILED(mh) && InterlockedIncrement(&g_bul_dlog) < 10) vr_log("BALAS: no se pudo leer la foto (0x%08lX)", (unsigned long)mh);
+            if (SUCCEEDED(mh) && ms.pData) {
                 BulSnap *b = &g_bul[k]; UINT w = g_bul_slw[i][k];
                 memcpy(b->d, ms.pData, w); b->w = w; b->n = g_bul_best; b->ok = 1; b->tried = 1;
                 memcpy(b->f21, g_pal + (21 + cfg_huesos_desfase) * 4, sizeof(b->f21));
@@ -6901,7 +6908,7 @@ static int bul_bind(ID3D11DeviceContext *c)
     if (!g_bul_buf[k]) { ID3D11Buffer_Release(o); return 0; }
     /* A = M21(ahora) * inversa(M21 de la foto) + desplazamiento del carril */
     const float *n = g_pal + (21 + cfg_huesos_desfase) * 4, *f = b->f21;
-    float AR[3][3], At[3], tmp[1024];
+    float AR[3][3], At[3]; static __thread float *tmp = NULL; if (!tmp) tmp = (float *)malloc(BULMAX * 4); if (!tmp) { ID3D11Buffer_Release(o); return 0; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) AR[i][j] = n[4 * i] * f[4 * j] + n[4 * i + 1] * f[4 * j + 1] + n[4 * i + 2] * f[4 * j + 2];
     for (int i = 0; i < 3; i++) At[i] = n[4 * i + 3] - (AR[i][0] * f[3] + AR[i][1] * f[7] + AR[i][2] * f[11]) + t_bul_d[i];
     memcpy(tmp, b->d, W);
@@ -7276,6 +7283,7 @@ static void pieces_frame(void)
         static ULONGLONG t0 = 0; ULONGLONG now = GetTickCount64();
         if (now - t0 > 2000) {
             t0 = now;
+            if (g_mode == 1 && cfg_balas_foto) vr_log("BALAS: disparos=%ld fotos_intentadas=%ld fotos=%ld foto_lista=%d/%d puestas=%ld", (long)g_bul_shots, (long)g_bul_try, (long)g_bul_cap_n, g_bul[0].ok, g_bul[1].ok, (long)InterlockedExchange(&g_bul_rep_n, 0));
             if (g_mode == 1) vr_log("MANO IZQ: mando=%ld calibrada=%d calibrando=%ld dos_manos=%ld (boton=%ld giro=%.1f grados) recarga=%ld (auto_bloqueadas=%ld/%ld cargadores=%ld expulsados=%ld fuera=%d oculto=%ld en_mano=%ld huesos=%ld/%ld/%ld balas?=%ld arma=%s palanca=%.1fcm amartillar=%ld amartilladas=%ld gatillo_bloqueado=%ld) | camaras=%ld dibujos=%ld sin_camara=%ld | islas=%ld reloj=%ld",
                                     (long)g_lhand_ok, g_lhand_cal, (long)g_lhand_hold, (long)g_dos_manos, (long)g_lgrip, g_tw_deg10 / 10.0, (long)g_mag_state, (long)InterlockedExchange(&g_ar_blocked, 0), (long)InterlockedExchange(&g_ar2_blocked, 0), (long)g_mag_ins, (long)g_expel_n, g_out_ic != 0,
                                     (long)InterlockedExchange(&g_mag_hid_n, 0), (long)InterlockedExchange(&g_mag_hand_n, 0),
@@ -7550,7 +7558,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E56: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E56b: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
