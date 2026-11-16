@@ -3844,7 +3844,16 @@ static volatile LONG g_ws = 0;
 static volatile float g_mag_off = 0.0f, g_mag_drop = 0.0f, g_cov_off = 0.0f;
 static volatile LONG g_eject_now = 0;   /* B toque: que caiga ya */
 static volatile LONG g_libre_busy = 0;  /* (E53) la mano izq esta usando una pieza: no agarra el arma a dos manos hasta soltar el agarre */
-static const float g_rail_model[3] = { -1.0f, 0.0f, 0.0f };   /* (E52) el cargador sale por la izquierda del arma (modelo -X), de la geometria */
+static const float g_rail_model[3] = { -1.0f, 0.0f, 0.0f };   /* (E52, ya no se usa para pintar) */
+/* (E57) el cargador entra por la DERECHA y se desliza a la izquierda hasta el tope; sale por la derecha (lo dijo el usuario,
+ * y cuadra con las grabaciones: al gastar balas el hueso 15 va hacia +X del armazon). Carril = +X del hueso 21, en el modelo. */
+static void rail_vec15(int mb, float so, float dr, float *v15, float *dmodel)
+{
+    const float *a = g_pal + (21 + cfg_huesos_desfase) * 4, *b = g_pal + (mb + cfg_huesos_desfase) * 4;
+    float D[3] = { a[0] * so, a[4] * so - dr, a[8] * so };
+    if (dmodel) memcpy(dmodel, D, sizeof(D));
+    if (v15) for (int j = 0; j < 3; j++) v15[j] = b[j] * D[0] + b[4 + j] * D[1] + b[8 + j] * D[2];
+}
 static const float g_cov_ax[3] = { 0.0f, 1.0f, 0.0f }, g_cov_max = 0.013f;
 static int libre_has(void) { int b[2]; return cfg_libre && cfg_recarga_manual && g_wpn_ic && bone_list(g_wpn_ic, g_wpn_si, 1, b, 2) > 0; }
 static void ws_set(LONG s, const char *why)
@@ -3865,7 +3874,8 @@ static float dot3(const float *a, const float *b) { return a[0] * b[0] + a[1] * 
  * la palanca el usuario en la prueba de la E51 (x=+14, y=-4, z=-2 cm): modelo -> mando = (x, y, -z) + (0.116, -0.036, 0.010).
  * El cargador sale por la IZQUIERDA (modelo -X): su carril hacia fuera es -X del mando. */
 static const float Z_LEVER[3] = { 0.14f, -0.04f, -0.02f }, Z_MAG[3] = { -0.03f, -0.03f, -0.09f }, Z_COVER[3] = { 0.116f, -0.02f, -0.12f };
-static const float MAG_SEAT_X = -0.11f;   /* x de la mano que sujeta el cargador por su punta cuando esta metido */
+static const float MAG_SEAT_X = 0.15f;    /* (E57) x de la mano que empuja el cargador por su punta derecha cuando esta metido */
+static const float Z_MAG_L[3] = { -0.10f, -0.03f, -0.09f };   /* (E57) punta izquierda del cargador: ahi se le da la palmada */
 static float dist3(const float *a, const float *b) { float d[3] = { a[0] - b[0], a[1] - b[1], a[2] - b[2] }; return sqrtf(dot3(d, d)); }
 static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R, int grip, int prev_grip, float dgun, float dhip_l, float dhip_r)
 {
@@ -3893,9 +3903,9 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         g_mag_off += 0.5f * dt; g_mag_drop = 4.9f * t * t;
         if (t > 0.6f) { g_mag_off = 0; g_mag_drop = 0; ws_set(3, "cayo"); }
     }
-    /* palmadas (sin agarre): echar el cargador empujandolo hacia la izquierda, cerrar la tapa hacia abajo */
+    /* palmadas (sin agarre): echar el cargador dandole en su punta izquierda hacia la derecha, cerrar la tapa hacia abajo */
     if (!grip && act == 0 && now - t_ins > 1500) {
-        if (g_ws == 0 && dm < 0.09f && vel[0] < -1.0f) {
+        if (g_ws == 0 && dist3(lp, Z_MAG_L) < 0.09f && vel[0] > 1.0f) {
             InterlockedExchange(&g_expel_req, 1); g_cov_off = g_cov_max; g_mag_off = 0.03f; t_fall = now; ws_set(2, "palmada al cargador"); haptic(1, 3000); haptic(2, 2000);
         } else if (g_ws == 5 && dc < 0.09f && vel[1] < -0.8f) {
             g_cov_off = 0; t_ins = now; ws_set(0, "palmada a la tapa"); haptic(1, 3000); InterlockedExchange(&g_load_req, g_pw ? 1 : 0); if (!g_pw) InterlockedExchange(&g_reload_req, 1);
@@ -3927,8 +3937,8 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         if (pull > smax) smax = pull;
         g_lever_s = pull;
         break; }
-    case 3: {   /* sacar el cargador hacia la izquierda; a 5 cm sale solo y cae */
-        float s = x0 - lp[0]; if (s < 0) s = 0; if (s > 0.12f) s = 0.12f;
+    case 3: {   /* sacar el cargador hacia la derecha; a 5 cm sale solo y cae */
+        float s = lp[0] - x0; if (s < 0) s = 0; if (s > 0.12f) s = 0.12f;
         g_mag_off = g_mag_off * 0.5f + s * 0.5f;
         if (s >= 0.05f) { InterlockedExchange(&g_expel_req, 1); t_fall = now; ws_set(2, "sacado del carril"); haptic(1, 3000); act = 0; break; }
         if (!grip) { g_mag_off = 0; ws_set(5, "soltado a medio sacar"); act = 0; }
@@ -3947,17 +3957,17 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         if (g_pw) InterlockedExchange(&g_load_req, 2);   /* (E55) el juego lo llena ya: asi se ve con balas en la mano */
     }
     if (g_mag_state == 1) {
-        float s = MAG_SEAT_X - lp[0];
+        float s = lp[0] - MAG_SEAT_X;
         if (!grip) { g_mag_state = 0; vr_log("LIBRE: cargador nuevo soltado"); if (g_pw) InterlockedExchange(&g_expel_req, 1); }   /* (E55) se devuelven las balas */
-        else if (g_ws == 3 && s > -0.02f && s < 0.14f && fabsf(lp[1] - Z_MAG[1]) < 0.09f && fabsf(lp[2] - Z_MAG[2]) < 0.10f) {
-            g_mag_state = 0; act = 4; s_f = s < 0.12f ? (s > 0 ? s : 0) : 0.12f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(1, 2000);
+        else if (g_ws == 3 && s > -0.02f && s < 0.22f && fabsf(lp[1] - Z_MAG[1]) < 0.09f && fabsf(lp[2] - Z_MAG[2]) < 0.10f) {
+            g_mag_state = 0; act = 4; s_f = s < 0.22f ? (s > 0 ? s : 0) : 0.22f; g_mag_off = s_f; ws_set(4, "cargador en el carril"); haptic(1, 2000);
         }
     }
     if (act == 4) {
-        float s = MAG_SEAT_X - lp[0]; if (s < 0) s = 0; if (s > 0.14f) s = 0.14f;
+        float s = lp[0] - MAG_SEAT_X; if (s < 0) s = 0; if (s > 0.24f) s = 0.24f;
         s_f = s_f * 0.6f + s * 0.4f;
-        if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; ws_set(5, "cargador metido (falta la tapa)"); haptic(1, 3500); act = 0; }
-        else if (!grip || s > 0.16f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
+        if (s_f <= 0.025f) { g_mag_off = 0; g_cov_off = g_cov_max; t_ins = now; vr_log("LIBRE: encajado con la mano en x=%.0f y=%.0f z=%.0f cm", lp[0] * 100, lp[1] * 100, lp[2] * 100); ws_set(5, "cargador metido (falta la tapa)"); haptic(1, 3500); act = 0; }
+        else if (!grip || lp[0] - MAG_SEAT_X > 0.27f) { t_fall = now; ws_set(2, "soltado en el carril: se cae"); act = 0; if (g_pw) InterlockedExchange(&g_expel_req, 1); }
         else g_mag_off = s_f;
     }
     if (act || g_mag_state == 1) g_libre_busy = 1; else if (!grip) g_libre_busy = 0;
@@ -6976,8 +6986,7 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
                 if (rep) {
                     t_bul = k + 1; t_bul_d[0] = t_bul_d[1] = t_bul_d[2] = 0;
                     if (ws == 4) {   /* por el carril: lo mismo que se mueve la carcasa (hueso 15, en sus ejes) */
-                        int mb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) { const float *m = g_pal + (mb[0] + cfg_huesos_desfase) * 4; float so = g_mag_off;
-                            for (int i = 0; i < 3; i++) t_bul_d[i] = (m[4 * i] * g_rail_model[0] + m[4 * i + 1] * g_rail_model[1] + m[4 * i + 2] * g_rail_model[2]) * so; }
+                        int mb[2]; if (bone_list(g_wpn_ic, g_wpn_si, 1, mb, 2)) rail_vec15(mb[0], g_mag_off, 0.0f, NULL, t_bul_d);
                     }
                 }
             }
@@ -7009,7 +7018,8 @@ static int piece_skip(ID3D11DeviceContext *c, UINT ic, UINT si)
         }
         if (nmb && (ws == 1 || ws == 2 || ws == 4) && t_bmn < 3) {   /* (E51) cargador por el carril / cayendo */
             float so = g_mag_off, dr = g_mag_drop;
-            t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_rail_model[a] * so + fv[a]; t_bmv[t_bmn][1] -= dr; t_bmn++;
+            float rv[3] = { 0, 0, 0 }; if (g_pal_ok) rail_vec15(mb[0], so, dr, rv, NULL);   /* (E57) carril hacia la derecha y caida hacia abajo, en el modelo */
+            t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = rv[a] + fv[a]; t_bmn++;
         } else if (fix && t_bmn < 3) { t_bm[t_bmn] = mb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = fv[a]; t_bmn++; }
         {   int cb[2]; float co = g_cov_off;   /* (E51) tapa */
             if (cfg_libre && co > 0.0005f && t_bmn < 3 && bone_list(ic, si, 3, cb, 2)) { t_bm[t_bmn] = cb[0]; for (int a = 0; a < 3; a++) t_bmv[t_bmn][a] = g_cov_ax[a] * co; t_bmn++; } }
@@ -7563,7 +7573,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E56c: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E57: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",

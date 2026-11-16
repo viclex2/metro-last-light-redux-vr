@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E57 — El cargador entra por la derecha y sale por la derecha (pruebas)
+
+- E56c probada (16/11): **las balas del cargador nuevo ya se ven**.
+- El carril estaba al revés. Ahora, como en el arma de verdad: el cargador se mete por la **derecha** y se desliza hacia la izquierda hasta el tope; para sacarlo, palmada en su **punta izquierda** (moviendo la mano hacia la derecha) o agárralo y tira hacia la derecha. Al caer, sale por la derecha.
+- El carril ahora se calcula con los ejes del propio armazón (hueso 21), y la caída va hacia abajo de verdad.
+- El log apunta dónde estaba la mano al encajar (`LIBRE: encajado con la mano en …`) para afinar.
+
 ## E56c — Foto de las balas: otra forma de pillar el momento (pruebas)
 
 - E56b probada: 65 disparos contados pero ninguna foto intentada. La foto solo se intentaba en un fotograma exacto y nunca coincidía. Ahora se intenta durante 40-400 ms tras cada disparo y vale la última. Más datos en el log (`piezas_de_balas_vistas`).
