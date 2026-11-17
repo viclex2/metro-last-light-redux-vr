@@ -2,6 +2,12 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E69 — Cajas en vez de bolas, y red de seguridad (pruebas)
+
+- Cada pieza (palanca, tapa, cargador) es ahora una **caja** con sus medidas reales sacadas del modelo del arma, no un punto con una bola alrededor. Coges la pieza si tu palma está a menos de `zona_cm` (5) de su caja.
+- **Red de seguridad**: con la E68 no se podía tocar nada, señal de que la medida de dónde está el arma salía mal. Ahora el mod comprueba la medida contra el sitio donde se ha cogido la palanca de verdad tantas veces (unos 14 cm a la derecha del mando der). Si no cuadra, usa las zonas de antes (las de la E67) y lo apunta en el log.
+- Log cada 3 s: `GEO: OK (cajas)` o `GEO: NO CUADRA -> zonas de antes`, con dónde cree que está la palanca y la palma. Con eso se arregla la medida en la siguiente.
+
 ## E68 — Agarrar solo donde está la pieza, y el cargador entra cuando llega al arma (pruebas)
 
 - **Zonas de agarre de verdad**: antes eran bolas de 7-11 cm puestas a ojo alrededor del mando (por eso, con el arma en la izq, al coger la empuñadura con la der se ponía a sacar el cargador). Ahora el mod sabe dónde está de verdad cada pieza (la bola de la palanca, la tapa, el cargador entero) y dónde está tu palma, medido en el propio arma. Coges una pieza si tu palma está a menos de `zona_cm` (6) de ella. Cerca de la empuñadura no se coge ninguna pieza (es para coger el arma).
