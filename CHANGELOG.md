@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E65 — Palanca con la derecha y carril más fácil de atinar (pruebas)
+
+- **Palanca con la derecha**: al pulsar el agarre derecho cerca de la palanca, el mod creía que querías volver a coger la empuñadura (lo hacía hasta a 18 cm) y te devolvía el arma. Ahora, si el agarre se pulsa cerca de una pieza (palanca, tapa, cargador), es para la pieza. Para volver a coger la empuñadura hay que estar a menos de 9 cm (`retomar_cm=9`). Las zonas de las piezas son 3 cm más grandes para la mano derecha.
+- **Cargador con la derecha**: la derecha lo encaja más abajo que la izquierda (log: con la mano a y=-11 cm). La ventana del carril va ahora a su altura y es más ancha (`carril_hueco_cm=8`), y se engancha más cerca (`carril_cm=8`).
+
 ## E64b — Mano izquierda bien puesta en la palanca (pruebas)
 
 - Revisado con imágenes del arma y la mano: con la E64 la mano izquierda se quedaba en la tapa del carril, por delante de la palanca. Ahora los dedos quedan justo delante del pomo de la palanca, enganchándolo (`palanca_izq_dz=-13`).
