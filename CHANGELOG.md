@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E66 — Echar el cargador: sale entero por el carril (pruebas)
+
+- Con palmada: el cargador ya no se mueve unos milímetros y cae a mitad del carril; sale deslizando por todo el carril (18 cm) y cae al salir.
+- Agarrándolo: va pegado a la mano (sin retraso) todo el recorrido y solo cae cuando sale del todo.
+
 ## E65 — Palanca con la derecha y carril más fácil de atinar (pruebas)
 
 - **Palanca con la derecha**: al pulsar el agarre derecho cerca de la palanca, el mod creía que querías volver a coger la empuñadura (lo hacía hasta a 18 cm) y te devolvía el arma. Ahora, si el agarre se pulsa cerca de una pieza (palanca, tapa, cargador), es para la pieza. Para volver a coger la empuñadura hay que estar a menos de 9 cm (`retomar_cm=9`). Las zonas de las piezas son 3 cm más grandes para la mano derecha.

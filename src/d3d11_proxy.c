@@ -4051,9 +4051,13 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         if (h && h != hover) haptic(g_lw, 900);
         hover = h; }
     if (g_ws == 2) {   /* cayendo */
-        float t = (now - t_fall) / 1000.0f;
-        g_mag_off += 0.5f * dt; g_mag_drop = 4.9f * t * t;
-        if (t > 0.6f) { g_mag_off = 0; g_mag_drop = 0; ws_set(3, "cayo"); }
+        /* (E66) primero sale ENTERO por el carril (antes caia a mitad) y luego cae */
+        if (g_mag_off < MAG_RAIL_LEN) { g_mag_off += 1.2f * dt; g_mag_drop = 0; t_fall = now; }
+        else {
+            float t = (now - t_fall) / 1000.0f;
+            g_mag_off += 0.3f * dt; g_mag_drop = 4.9f * t * t;
+            if (t > 0.5f) { g_mag_off = 0; g_mag_drop = 0; ws_set(3, "cayo"); }
+        }
     }
     /* palmadas (sin agarre): echar el cargador dandole en su punta izquierda hacia la derecha, cerrar la tapa hacia abajo */
     if (!grip && act == 0 && now - t_ins > 1500) {
@@ -4090,9 +4094,9 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         g_lever_s = pull;
         break; }
     case 3: {   /* sacar el cargador hacia la derecha; a 5 cm sale solo y cae */
-        float s = lp[0] - x0; if (s < 0) s = 0; if (s > 0.12f) s = 0.12f;
-        g_mag_off = g_mag_off * 0.5f + s * 0.5f;
-        if (s >= 0.05f) { InterlockedExchange(&g_expel_req, 1); t_fall = now; ws_set(2, "sacado del carril"); haptic(g_lw, 3000); act = 0; break; }
+        float s = lp[0] - x0; if (s < 0) s = 0; if (s > MAG_RAIL_LEN) s = MAG_RAIL_LEN;
+        g_mag_off = s;   /* (E66) pegado a la mano, sin retraso, todo el recorrido */
+        if (s >= MAG_RAIL_LEN - 0.01f) { InterlockedExchange(&g_expel_req, 1); t_fall = now; ws_set(2, "sacado del carril"); haptic(g_lw, 3000); act = 0; break; }
         if (!grip) { g_mag_off = 0; ws_set(5, "soltado a medio sacar"); act = 0; }
         break; }
     case 5: {   /* bajar la tapa: 2 cm de mano hacia abajo */
@@ -8217,7 +8221,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E65: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E66: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
