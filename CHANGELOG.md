@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E67 — Manos relajadas cuando no cogen nada (pruebas)
+
+- La mano que no está cogiendo nada (ni el arma, ni el cargador, ni la palanca, ni con el botón de agarre pulsado) pone los dedos **sueltos y relajados**, en vez de quedarse en la postura de agarrar el arma.
+- La postura sale de la propia animación del juego (el momento en que la mano está más abierta) con un poco de curva, así que se ve natural. Vale para las dos manos.
+- Al pulsar el agarre la mano se cierra (vuelve a la postura del juego).
+- `manos_relajadas=0` lo apaga.
+
 ## E66 — Echar el cargador: sale entero por el carril (pruebas)
 
 - Con palmada: el cargador ya no se mueve unos milímetros y cae a mitad del carril; sale deslizando por todo el carril (18 cm) y cae al salir.
