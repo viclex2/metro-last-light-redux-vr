@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E68 — Agarrar solo donde está la pieza, y el cargador entra cuando llega al arma (pruebas)
+
+- **Zonas de agarre de verdad**: antes eran bolas de 7-11 cm puestas a ojo alrededor del mando (por eso, con el arma en la izq, al coger la empuñadura con la der se ponía a sacar el cargador). Ahora el mod sabe dónde está de verdad cada pieza (la bola de la palanca, la tapa, el cargador entero) y dónde está tu palma, medido en el propio arma. Coges una pieza si tu palma está a menos de `zona_cm` (6) de ella. Cerca de la empuñadura no se coge ninguna pieza (es para coger el arma).
+- **El cargador ya no se adelanta**: solo se engancha cuando la **punta** del cargador que ves en la mano llega a la boca del carril (lado der del arma), a menos de `boca_cm` (3) fuera de línea y con menos de `boca_grados` (35) de torcido. Después sigue a la punta de verdad (no a la mano) y, si lo vuelves a sacar, sigue en la mano en vez de caerse.
+- Al cambiar el arma de mano, el agarre que ya tenías pulsado no cuenta como coger una pieza.
+- Log: `GEO: W = …`, `GEO: cargador a X cm de la boca (fuera de línea, torcido)` y en cada agarre `palma en el arma x y z cm`.
+
 ## E67 — Manos relajadas cuando no cogen nada (pruebas)
 
 - La mano que no está cogiendo nada (ni el arma, ni el cargador, ni la palanca, ni con el botón de agarre pulsado) pone los dedos **sueltos y relajados**, en vez de quedarse en la postura de agarrar el arma.
