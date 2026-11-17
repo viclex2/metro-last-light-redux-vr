@@ -250,7 +250,7 @@ static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo 
 static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
 static float cfg_dos_manos_cm = 12.0f;
 static float cfg_carril_cm = 8.0f, cfg_carril_hueco_cm = 8.0f, cfg_retomar_cm = 9.0f;   /* (E65) */
-static float cfg_zona_cm = 6.0f, cfg_boca_cm = 3.0f, cfg_boca_grados = 35.0f;      /* (E68) */
+static float cfg_zona_cm = 5.0f, cfg_boca_cm = 3.0f, cfg_boca_grados = 35.0f;      /* (E68) */
 static volatile LONG g_libre_claim = 0;   /* (E63) cuanto le falta al cargador para entrar del todo cuando se engancha; holgura arriba/abajo/delante/atras */   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
 static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
 /* (E61) ARMA LIBRE: el arma la lleva la mano que la agarra. 0 = la der (como siempre), 1 = la izq (G = mando_izq * K).
@@ -4068,6 +4068,27 @@ static void geo_to21(const float Gx[4][4], const float *pm, float *o)
 }
 /* punto en ejes del armazon (de la postura del juego) -> modelo de ahora */
 static void geo_21m(const float *p21, float *o) { geo_xf((const float (*)[4])g_geo_M21, p21, o); }
+/* (E69) CAJAS en vez de bolas: cada pieza es una caja con sus medidas de verdad (en ejes del armazon, que van con el arma) */
+static const float BOX_LEVER[2][3] = { { -0.003f, -0.009f, 0.012f }, { 0.040f, 0.012f, 0.076f } };
+static const float BOX_COVER[2][3] = { { -0.029f, -0.014f, 0.073f }, { 0.024f, 0.024f, 0.144f } };
+static const float BOX_MAG[2][3]   = { { -0.160f, -0.005f, 0.077f }, { 0.017f, 0.019f, 0.113f } };
+static float geo_box(const float *p, const float b[2][3])
+{
+    float d2 = 0; for (int i = 0; i < 3; i++) { float d = p[i] < b[0][i] ? b[0][i] - p[i] : p[i] > b[1][i] ? p[i] - b[1][i] : 0; d2 += d * d; }
+    return sqrtf(d2);
+}
+/* (E69) comprobacion: donde cae la palanca en ejes del mando der segun la medida, contra donde se ha cogido de verdad
+ * tantas veces (E51/E52: x 11..17, y -4, z -5..0 cm; Z_LEVER). Si no cuadra, la medida esta mal: se usan las zonas de antes. */
+static float g_geo_chk[3]; static volatile LONG g_geo_bad = 0;
+static int geo_check(void)
+{
+    float Ci[4][4], c[3] = { 0.018f, 0.0f, 0.04f }, m[3], v[3], l[3];
+    if (!g_hand_C0ok || !inv4((const float (*)[4])g_hand_C0cur, Ci)) return 0;
+    geo_21m(c, m); geo_xf((const float (*)[4])g_wW, m, v); geo_xf((const float (*)[4])Ci, v, l);
+    g_geo_chk[0] = l[0]; g_geo_chk[1] = l[1]; g_geo_chk[2] = -l[2];
+    float z[3] = { 0.14f, -0.04f, -0.02f };
+    return dist3(g_geo_chk, z) < 0.12f;
+}
 static float geo_seg(const float *p, const float *a, const float *b)
 {
     float ab[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, ap[3] = { p[0] - a[0], p[1] - a[1], p[2] - a[2] };
@@ -4120,7 +4141,8 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
     float P[3] = { 0, 0, 0 }, Pv[3] = { 0, 0, 0 }, tip[3] = { 0, 0, 0 }, ax[3] = { 1, 0, 0 }, ma[3], mb[3];
     int geo = 0, tipok = 0;
     for (int i = 0; i < 3; i++) { ma[i] = GEO_TIP15[i] + GEO_FULL15[i]; mb[i] = GEO_BACK15[i] + GEO_FULL15[i]; }
-    if (geo_frame()) {
+    int gchk = 0;
+    if (geo_frame() && (gchk = geo_check()) != 0) {
         const float (*Gx)[4] = NULL;
         if (g_lw == 2 && g_rfree_on) Gx = (const float (*)[4])g_rfree_G;
         else if (g_lw == 1 && g_lfree_ok) Gx = (const float (*)[4])g_lfree_G;
@@ -4132,13 +4154,19 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         tipok = geo_mag_inhand(g_mag_hand, tip, ax);
         InterlockedIncrement(&g_geo_n);
     } else had_P = 0;
+    {   static ULONGLONG t_glog = 0;
+        if (now - t_glog > 3000) { t_glog = now;
+            vr_log("GEO: %s; palanca segun la medida en x=%.0f y=%.0f z=%.0f cm del mando der (de verdad ~14 -4 -2); palma %.1f %.1f %.1f cm; W fila0 %.3f %.3f %.3f %.3f",
+                   !g_wW_ok ? "sin W" : !g_pal_ok ? "sin huesos" : gchk ? "OK (cajas)" : "NO CUADRA -> zonas de antes",
+                   g_geo_chk[0] * 100, g_geo_chk[1] * 100, g_geo_chk[2] * 100, P[0] * 100, P[1] * 100, P[2] * 100,
+                   g_wW[0][0], g_wW[0][1], g_wW[0][2], g_wW[0][3]); } }
     float dl = dist3(lp, Z_LEVER), dm = dist3(lp, Z_MAG), dc = dist3(lp, Z_COVER);
     /* (E65) la mano der llega a las piezas desde otro sitio (log E64b: palanca cogida a 9 cm, encajado con y=-11): zonas algo mas grandes */
     float rz = g_lw == 2 ? 0.03f : 0.0f;
     int in_lever = dl < 0.07f + rz, in_mag = (g_ws == 0 || g_ws == 5) && dm < 0.08f + rz, in_cover = g_ws == 5 && dc < 0.07f + rz;
     if (geo) {   /* (E68) distancias de verdad de la palma a cada pieza (antes eran bolas de 7-11 cm puestas a ojo alrededor del mando) */
         float z = cfg_zona_cm * 0.01f;
-        dl = dist3(P, GEO_KNOB); dc = dist3(P, GEO_COVER); dm = geo_seg(P, ma, mb);
+        dl = geo_box(P, BOX_LEVER); dc = geo_box(P, BOX_COVER); dm = geo_box(P, BOX_MAG);   /* (E69) distancia de la palma a la CAJA de cada pieza */
         in_lever = dl < z; in_mag = (g_ws == 0 || g_ws == 5) && dm < z; in_cover = g_ws == 5 && dc < z;
         if (g_lw == 2 && dist3(P, GEO_PALM_R) < 0.07f) in_lever = in_mag = in_cover = 0;   /* en la empunadura: es para coger el arma */
     }
@@ -8455,7 +8483,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E68: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E69: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
