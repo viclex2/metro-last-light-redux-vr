@@ -2,6 +2,13 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E71 — El arma al hombro y agarrar solo cerca (pruebas)
+
+- **Arma al hombro derecho**: el arma solo va en la mano mientras **mantienes el agarre** (como en Pavlov/H3VR). Si la sueltas y la otra mano no la tiene, se cuelga del hombro derecho (cañón hacia arriba) y tienes las dos manos libres. Para cogerla: agarre con cualquier mano cerca de ella (`agarrar_arma_cm`, 15). Colgada no dispara. `hombro=0` = como antes.
+- **La mano izq ya no coge el arma desde lejos**: solo si aprietas el agarre con la mano a menos de 15 cm de su sitio en el guardamanos.
+- **Metralleta: cargadores solo en la cadera DERECHA** (`cadera_izq_libre=1` para volver a tener las dos).
+- Log: `HOMBRO: …` y `MANO IZQ: agarre a X cm del guardamanos`.
+
 ## E70 — Arreglada la medida de dónde está el arma (pruebas)
 
 - El log de la E68 lo dejó claro: el mod medía el arma con la vista del **mundo** (que gira con la cabeza y está a unos 100 m del origen), pero las piezas del arma ya vienen colocadas respecto a la cara. Por eso la palma salía a "50 metros" de la palanca y no se podía tocar nada. Ahora se mide en el espacio bueno. Comprobado con tu calibración: la palanca cae a unos 6 cm a la derecha del mando der, que cuadra con donde la cogías.
