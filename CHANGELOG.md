@@ -2,6 +2,11 @@
 
 Las versiones van por letra (hito) y número. La más nueva, arriba.
 
+## E70 — Arreglada la medida de dónde está el arma (pruebas)
+
+- El log de la E68 lo dejó claro: el mod medía el arma con la vista del **mundo** (que gira con la cabeza y está a unos 100 m del origen), pero las piezas del arma ya vienen colocadas respecto a la cara. Por eso la palma salía a "50 metros" de la palanca y no se podía tocar nada. Ahora se mide en el espacio bueno. Comprobado con tu calibración: la palanca cae a unos 6 cm a la derecha del mando der, que cuadra con donde la cogías.
+- Siguen las cajas y la red de seguridad de la E69.
+
 ## E69 — Cajas en vez de bolas, y red de seguridad (pruebas)
 
 - Cada pieza (palanca, tapa, cargador) es ahora una **caja** con sus medidas reales sacadas del modelo del arma, no un punto con una bola alrededor. Coges la pieza si tu palma está a menos de `zona_cm` (5) de su caja.

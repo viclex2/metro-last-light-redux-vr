@@ -1362,8 +1362,9 @@ modo:;
                 float t[3] = { g_eyepos[e][0] * cfg_ipdscale, g_eyepos[e][1] * cfg_ipdscale, g_eyepos[e][2] * cfg_ipdscale };
                 if (eye_in_H()) for (int r = 0; r < 3; r++) Hc[r][3] += t[r];   /* (E27) H ya traia el ojo: se quita (va abajo) */
                 {   /* (E68) W = Hc * V (la vista del arma tal como la manda el juego) */
-                    float V4[4][4] = { { f[0], f[1], f[2], f[3] }, { f[4], f[5], f[6], f[7] }, { f[8], f[9], f[10], f[11] }, { 0, 0, 0, 1 } };
-                    mul4(Hc, V4, g_wW); g_wW_ok = 1;
+                    /* (E70) el log de la E68 lo dejo claro: V es la vista del MUNDO (gira con la cabeza, 100 m de traslacion), pero
+                     * los huesos del arma ya vienen en la vista (canon a 0,46 m delante): W = Hc, sin V */
+                    memcpy(g_wW, Hc, sizeof(g_wW)); g_wW_ok = 1;
                     if (InterlockedIncrement(&g_wW_log) % 4000 == 1)
                         vr_log("GEO: W = %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f", g_wW[0][0], g_wW[0][1], g_wW[0][2], g_wW[0][3],
                                g_wW[1][0], g_wW[1][1], g_wW[1][2], g_wW[1][3], g_wW[2][0], g_wW[2][1], g_wW[2][2], g_wW[2][3]);
@@ -8483,7 +8484,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E69: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E70: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
