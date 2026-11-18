@@ -250,6 +250,8 @@ static volatile LONG g_lgrip = 0;    /* (E34) boton de agarre izq pulsado (solo 
 static volatile LONG g_tw_deg10 = 0; /* (E34) cuanto gira ahora el arma la mano izq, en decimas de grado (chivato) */
 static float cfg_dos_manos_cm = 12.0f;
 static float cfg_carril_cm = 8.0f, cfg_carril_hueco_cm = 8.0f, cfg_retomar_cm = 9.0f;   /* (E65) */
+static int cfg_hombro = 1, cfg_cadera_izq_libre = 0;   /* (E71) arma al hombro der si no la agarras; con la metralleta no hay cargadores en la cadera izq */
+static float cfg_agarrar_arma_cm = 15.0f;            /* (E71) la izq solo coge el arma si aprietas el agarre a menos de esto de su sitio */
 static float cfg_zona_cm = 5.0f, cfg_boca_cm = 3.0f, cfg_boca_grados = 35.0f;      /* (E68) */
 static volatile LONG g_libre_claim = 0;   /* (E63) cuanto le falta al cargador para entrar del todo cuando se engancha; holgura arriba/abajo/delante/atras */   /* (E32) a cuantos cm se engancha (se suelta a 1,8 veces eso) */
 static volatile LONG g_dos_manos = 0;    /* (E32) 1 = ahora mismo la mano izq va con el arma */
@@ -508,6 +510,9 @@ static void cfg_apply_line(char *s)
     else if (!strcmp(s, "palanca_izq_dz"))   cfg_pal_izq_dz = fv;      /* (E64) cm */
     else if (!strcmp(s, "carril_hueco_cm"))  cfg_carril_hueco_cm = fv; /* (E63) */
     else if (!strcmp(s, "retomar_cm"))       cfg_retomar_cm = fv;      /* (E65) */
+    else if (!strcmp(s, "hombro"))           cfg_hombro = v;           /* (E71) */
+    else if (!strcmp(s, "cadera_izq_libre")) cfg_cadera_izq_libre = v; /* (E71) */
+    else if (!strcmp(s, "agarrar_arma_cm"))  cfg_agarrar_arma_cm = fv;  /* (E71) */
     else if (!strcmp(s, "zona_cm"))          cfg_zona_cm = fv;         /* (E68) palma a menos de esto de la pieza = se coge */
     else if (!strcmp(s, "boca_cm"))          cfg_boca_cm = fv;         /* (E68) punta del cargador fuera de linea con el carril, maximo */
     else if (!strcmp(s, "boca_grados"))      cfg_boca_grados = fv;     /* (E68) cargador torcido respecto al carril, maximo */
@@ -4241,7 +4246,7 @@ static void libre_update(const OvrPose *rp, const OvrMat34 *L, const OvrMat34 *R
         break; }
     }
     /* cargador nuevo de cualquier cadera; se engancha al carril si la mano esta a la izquierda del arma, a su altura */
-    if (g_mag_state == 0 && grip && !prev_grip && act == 0 && g_ws == 3 && (dhip_l < cfg_cadera_cm * 0.01f || dhip_r < cfg_cadera_cm * 0.01f)) {
+    if (g_mag_state == 0 && grip && !prev_grip && act == 0 && g_ws == 3 && ((cfg_cadera_izq_libre && dhip_l < cfg_cadera_cm * 0.01f) || dhip_r < cfg_cadera_cm * 0.01f)) {   /* (E71) con esta arma, solo la cadera DER */
         g_mag_state = 1; g_mag_hand = g_lw; haptic(g_lw, 3000); vr_log("LIBRE: cargador nuevo cogido de la cadera %s con la mano %s", dhip_l < dhip_r ? "izquierda" : "derecha", g_lw == 2 ? "DER" : "izq");
         if (g_pw) InterlockedExchange(&g_load_req, 2);   /* (E55) el juego lo llena ya: asi se ve con balas en la mano */
     }
@@ -4292,6 +4297,7 @@ static void reload_update(const OvrPose *rp)
     static int prev_grip = 0, buzz = 0, prev_rg = 0; static ULONGLONG t_ins = 0;
     if (g_mode != 1) g_pw = NULL;   /* (E38) menus / cargas: el arma puede dejar de existir */
     if (!cfg_recarga_manual || g_mode != 1 || !p_RoleIdx || !rp[0].valid) { g_mag_state = 0; prev_grip = 0; return; }
+    if (g_holder == 2) { prev_grip = g_lgrip != 0; prev_rg = g_rgrip != 0; return; }   /* (E71) arma en el hombro: nada que recargar */
     uint32_t li = p_RoleIdx(1), ri = p_RoleIdx(2);
     int grip = g_lgrip != 0;
     if (li >= 16 || !rp[li].valid) { prev_grip = grip; return; }
@@ -4614,7 +4620,20 @@ static void twohand_apply(const OvrPose *rp, float A[4][4], const float C0i[4][4
     float L[4][4]; int lok = ctrl_rel(rp, 1, &last_li, L);
     int want = 0; float dist = -1.0f;
     if (lok && !g_lhand_hold) {
-        if (cfg_dos_manos == 1) want = g_lgrip != 0 && g_mag_state != 1 && !g_lever_on && !g_libre_busy;   /* (E36) con el cargador en la mano no se agarra el arma */
+        if (cfg_dos_manos == 1) {
+            want = g_lgrip != 0 && g_mag_state != 1 && !g_lever_on && !g_libre_busy;   /* (E36) con el cargador en la mano no se agarra el arma */
+            /* (E71) solo si APRIETAS el agarre con la mano cerca de su sitio en el arma (antes: en cualquier sitio) */
+            static int prev_lg = 0; int edge = g_lgrip && !prev_lg; prev_lg = g_lgrip != 0;
+            if (want && !grab) {
+                float G0[4][4], T[4][4]; mul4(A, C0i, G0); mul4(G0, g_lhand_C0, T);
+                float dx = L[0][3] - T[0][3], dy = L[1][3] - T[1][3], dz = L[2][3] - T[2][3];
+                dist = sqrtf(dx * dx + dy * dy + dz * dz);
+                if (!edge || dist > cfg_agarrar_arma_cm * 0.01f) {
+                    if (edge) vr_log("MANO IZQ: agarre a %.0f cm del guardamanos: no coge el arma (hace falta menos de %.0f)", dist * 100.0f, cfg_agarrar_arma_cm);
+                    want = 0;
+                }
+            }
+        }
         else if (cfg_dos_manos == 2) want = 1;
         else if (cfg_dos_manos == 3) {   /* (E32) automatico: mando izq cerca del sitio de agarre (G * C0_izq) */
             float G0[4][4], T[4][4]; mul4(A, C0i, G0); mul4(G0, g_lhand_C0, T);
@@ -4711,7 +4730,64 @@ static void holder_update(const OvrPose *rp, const float Araw[4][4], const float
     float Gr[4][4]; memcpy(Gr, G, sizeof(Gr));                  /* el arma si la llevara la der */
     mul4(Araw, C0i, g_rfree_G);                                   /* la mano der "suelta": donde esta su mando */
     if (!cfg_arma_libre) { g_holder = 0; g_rfree_on = 0; memcpy(Glast, G, sizeof(Glast)); have_last = 1; return; }
-    if (g_holder == 0) {
+    /* (E71) EL ARMA AL HOMBRO DER: si ninguna mano la agarra, se queda colgada del hombro (canon hacia arriba) */
+    float Gsh[4][4]; int shok = 0;
+    if (cfg_hombro && rp[0].valid) {
+        const OvrMat34 *H = &rp[0].mat;
+        float fx = -H->m[0][2], fz = -H->m[2][2], fl = sqrtf(fx * fx + fz * fz);
+        if (fl < 1e-3f) { fx = 0; fz = -1; fl = 1; }
+        fx /= fl; fz /= fl;
+        float rx = -fz, rz = fx;
+        /* mando "de mentira" en el hombro: X = derecha, Y = abajo (el canon va por -Y del mando: queda hacia arriba), Z = X x Y */
+        float M[3][4] = { { rx, 0, rz, H->m[0][3] + rx * 0.20f - fx * 0.05f },
+                          { 0, -1, 0, H->m[1][3] - 0.30f },
+                          { rz, 0, -rx, H->m[2][3] + rz * 0.20f - fz * 0.05f } };
+        /* rel = cabeza^-1 * M, a ejes del juego (como en hand_update) */
+        float d[3] = { M[0][3] - H->m[0][3], M[1][3] - H->m[1][3], M[2][3] - H->m[2][3] }, R[3][3], t[3], Ash[4][4];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) R[i][j] = H->m[0][i] * M[0][j] + H->m[1][i] * M[1][j] + H->m[2][i] * M[2][j];
+            t[i] = H->m[0][i] * d[0] + H->m[1][i] * d[1] + H->m[2][i] * d[2];
+        }
+        memset(Ash, 0, sizeof(Ash)); Ash[3][3] = 1.0f;
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ash[i][j] = R[i][j] * ((i == 2) != (j == 2) ? -1.0f : 1.0f);
+        Ash[0][3] = t[0]; Ash[1][3] = t[1]; Ash[2][3] = -t[2];
+        mul4(Ash, C0i, Gsh); shok = 1;
+    }
+    if (!shok && g_holder == 2) g_holder = 0;
+    int go_sh = 0;   /* pasar al hombro */
+    if (shok && g_holder == 2) {
+        /* cogerla del hombro: el agarre de una mano cerca de la empunadura (donde iria el mando der si la llevara) */
+        float P[4][4]; mul4(Gsh, C0, P);
+        float dx = Araw[0][3] - P[0][3], dy = Araw[1][3] - P[1][3], dz = Araw[2][3] - P[2][3], dr = sqrtf(dx * dx + dy * dy + dz * dz);
+        float dl = 9.0f;
+        if (lok) { float ex = L[0][3] - P[0][3], ey = L[1][3] - P[1][3], ez = L[2][3] - P[2][3]; dl = sqrtf(ex * ex + ey * ey + ez * ez); }
+        static LONG prev_lg2 = 0; LONG lg_edge = g_lgrip && !prev_lg2; prev_lg2 = g_lgrip;
+        if (rg_edge && dr < cfg_agarrar_arma_cm * 0.01f) {
+            g_holder = 0; g_tw_reset = 1; t_bl = now; memcpy(Gfrom, Gsh, sizeof(Gfrom));
+            vr_log("HOMBRO: la mano DER coge el arma del hombro (a %.0f cm)", dr * 100.0f);
+        } else if (lg_edge && dl < cfg_agarrar_arma_cm * 0.01f) {
+            float Li[4][4];
+            if (inv4(L, Li)) { mul4(Li, Gsh, g_hold_K); g_holder = 1; vr_log("HOMBRO: la mano IZQ coge el arma del hombro (a %.0f cm)", dl * 100.0f); }
+        } else if (rg_edge || lg_edge) vr_log("HOMBRO: agarre lejos del arma (der a %.0f cm, izq a %.0f cm; hace falta menos de %.0f)", dr * 100.0f, dl * 100.0f, cfg_agarrar_arma_cm);
+    } else if (shok && g_holder == 0 && !g_rgrip) {
+        /* la der la suelta: si la izq la tiene agarrada (dos manos) se la queda la izq; si no, al hombro */
+        if (lok && g_dos_manos) {
+            float Li[4][4];
+            if (inv4(L, Li)) { mul4(Li, G, g_hold_K); g_holder = 1; vr_log("ARMA LIBRE: sueltas la der y la izq se queda el arma"); }
+        } else go_sh = 1;
+    } else if (shok && g_holder == 1 && !g_lgrip) go_sh = 1;
+    if (go_sh) {
+        g_holder = 2; t_bl = now; memcpy(Gfrom, have_last ? Glast : G, sizeof(Gfrom));
+        vr_log("HOMBRO: el arma vuelve al hombro der (ninguna mano la agarra)");
+    }
+    if (g_holder == 2) {
+        g_rfree_on = 1; g_dos_manos = 0;
+        if (t_bl && now - t_bl < 250) { float s = (now - t_bl) / 250.0f; s = s * s * (3 - 2 * s); float B[4][4]; blend4(Gfrom, Gsh, s, B); memcpy(G, B, sizeof(B)); }
+        else { t_bl = 0; memcpy(G, Gsh, sizeof(Gsh)); }
+        memcpy(Glast, G, sizeof(Glast)); have_last = 1;
+        return;
+    }
+    if (g_holder == 0 && !cfg_hombro) {
         if (lok && g_dos_manos && rg_edge) {
             float Li[4][4];
             if (inv4(L, Li)) {
@@ -4719,10 +4795,10 @@ static void holder_update(const OvrPose *rp, const float Araw[4][4], const float
                 vr_log("ARMA LIBRE: la mano IZQ se queda el arma (has soltado la der con su agarre)");
             }
         }
-    } else {
+    } else if (g_holder == 1) {
         int back = 0; const char *why = "";
         if (!lok) { back = 1; why = "no se ve el mando izq"; }
-        else if (!g_lgrip) { back = 1; why = "has soltado el agarre izq: vuelve a la der"; }
+        else if (!g_lgrip && !cfg_hombro) { back = 1; why = "has soltado el agarre izq: vuelve a la der"; }
         else if (rg_edge && !g_libre_busy && !g_libre_claim && g_mag_state == 0) {   /* (E62) si el agarre der ha cogido una pieza del arma (recarga), no cuenta */
             float Gl[4][4], P[4][4]; mul4(L, g_hold_K, Gl); mul4(Gl, C0, P);   /* donde iria el mando der si cogiera la empunadura */
             float dx = Araw[0][3] - P[0][3], dy = Araw[1][3] - P[1][3], dz = Araw[2][3] - P[2][3], dd = sqrtf(dx * dx + dy * dy + dz * dz);
@@ -5348,6 +5424,7 @@ static void mandos_step(float dt)
         if (trig && !ptrig && cfg_palanca && g_need_rack) { InterlockedIncrement(&g_fire_blocked); haptic(2, 800); }
         int libre_block = cfg_libre && libre_has() && g_ws != 0;
         if (trig && !ptrig && libre_block) { InterlockedIncrement(&g_fire_blocked); haptic(2, 800); }
+        if (g_holder == 2) libre_block = 1;   /* (E71) arma colgada del hombro: no dispara */
         out_set(O_FIRE, trig && !(cfg_palanca && g_need_rack) && !libre_block);
         ptrig = trig; }
     g_rgrip = rok && BTN(R, 2);                                       /* (E61) agarre der = soltar / coger el arma */
@@ -8484,7 +8561,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
             seed_files(tmp);   /* (E35) */
             char exe[MAX_PATH] = {0};
             GetModuleFileNameA(NULL, exe, MAX_PATH);
-            vr_log("=== HITO E70: d3d11 proxy cargada por: %s ===", exe);
+            vr_log("=== HITO E71: d3d11 proxy cargada por: %s ===", exe);
             vr_log("linterna=%d linterna_grados=%.0f (con F9 se agranda el FOV del juego; la camara del juego no se toca)", cfg_linterna, (double)cfg_linterna_deg);
             hook_clocks();
             vr_log("interruptores: hook_map=%d hook_updatesub=%d hook_present=%d hilo_resumen=%d leer_camara=%d",
